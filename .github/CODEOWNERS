@@ -1,0 +1,5 @@
+# Review the contract, toolchain, C ABI and gate. Optimisers can change the
+# candidate and its witnesses under the fixed CI obligations.
+* @kmilner
+/lean/TamarinRuntime/Candidates/*.lean
+/lean/Tamarin/Candidates/*.lean

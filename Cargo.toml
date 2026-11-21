@@ -1,0 +1,10 @@
+[package]
+name = "tamarin-algebra-sys"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "GPL-3.0"
+repository = "https://github.com/kmilner/tamarin-algebra"
+description = "Native build and linkage for Tamarin's Lean equational solver"
+links = "tamarin_algebra"
+publish = false

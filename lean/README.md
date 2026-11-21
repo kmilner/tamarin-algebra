@@ -7,7 +7,7 @@ correctness and completion contracts. Today, native-only mode completes some ful
 The acceptance criterion is mathematical soundness and completeness on the original query under Tamarin’s theory assumptions.
 Maude comparisons check compatibility and expose discrepancies. Where a concrete witness proves
 Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
-both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
+both the reachable trace and the false universal lemma. [Theory](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/native_backend.rs)
 
 Native-only batch proofs and the `variants` command fall back to general Lean implementations for all four Maude commands.
 Unification and directional matching operate modulo the declared free/C/AC symbols.
@@ -22,7 +22,7 @@ drivers retry unfinished stages while the budget and result fit the numeric inte
 The native link supports host builds on x86_64 GNU Linux. Use elan/Lake, a C toolchain and GNU `ar`,
 `nm` and `objcopy`. The package pins the Lean version. [Toolchain](lean-toolchain)
 
-From the repository root, build and run a proof that needs a witness shared across two substitution
+From the tamarin-rs repository root, build and run a proof that needs a witness shared across two substitution
 images.
 
 ```sh
@@ -34,13 +34,13 @@ Set `TAM_RS_NATIVE_REFERENCE=1` with `--algebra-backend=native-only` to route or
 unification, matching, reduction and variants directly to their references. This setting
 also applies to derived first-match and existence queries. A protocol regression combines
 user-defined AC, subterm and ground-result equations, pairing and DH exponent cancellation.
-[Theory](../crates/tamarin-prover/tests/fixtures/native_mixed_subterms.spthy)
+[Theory](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/fixtures/native_mixed_subterms.spthy)
 
 Rust callers can also invoke the four references without a session through
 `unify_modulo_attributes`, `match_modulo_attributes`, `reduction_for_convergent_theory`
 and `variants_for_convergent_theory`. The matcher takes the pattern on the left,
 the subject on the right and an explicit predicate selecting bindable pattern variables.
-[Rust API](../crates/tamarin-term/src/lean_unification.rs)
+[Rust API](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification.rs)
 
 | Backend | Behavior |
 | --- | --- |
@@ -52,8 +52,8 @@ A native-only failure is shared across session handles. Batch checks the session
 output. Library callers that recover from algebra errors must likewise call
 `MaudeHandle::check_backend_status` before using their results. Native-only requires
 `TAM_RS_NO_LEAN_UNIFY`, `TAM_RS_VERIFY_LEAN_UNIFY` and `TAM_RS_VERIFY_REDUCE_NF` to be unset.
-[Backend selection](../crates/tamarin-term/src/algebra_backend.rs) ·
-[No-Maude CLI tests](../crates/tamarin-prover/tests/native_backend.rs)
+[Backend selection](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/algebra_backend.rs) ·
+[No-Maude CLI tests](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/native_backend.rs)
 
 ## What an implementation must prove
 
@@ -61,7 +61,7 @@ The acceptance target is `MaudeOperations.Reference sig rules` for the module Ta
 The upstream Haskell and Rust adapters issue the same four algebra commands. Installation probes
 and module initialization are separate. Rules and enabled builtins determine the active theory,
 including DH, bilinear pairing, multiset, natural numbers, XOR and user-declared free or AC symbols.
-[Whole-module contract](Tamarin/MaudeOperations.lean) · [Reference assembly](Tamarin/FoldingNarrowing.lean#L161) · [Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) · [Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Module printer](../crates/tamarin-term/src/maude_print.rs#L344) · [Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) · [Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
+[Whole-module contract](Tamarin/MaudeOperations.lean) · [Reference assembly](Tamarin/FoldingNarrowing.lean#L161) · [Upstream command builders](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/lib/term/src/Term/Maude/Process.hs#L194) · [Rust adapter](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_proc.rs) · [Module printer](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_print.rs#L344) · [Active equations](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_sig.rs#L285) · [Upstream signature](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/lib/term/src/Term/Maude/Signature.hs#L187)
 
 The basis B consists of the declared free, binary commutative (C) and associative-commutative (AC)
 symbols. Pure AC preserves multiplicities and has no unit. The command domain includes arity-correct
@@ -74,7 +74,7 @@ itself modulo AC even though it has no Tamarin sort. A `Msg` variable cannot bin
 | `unify` | A finite family of sort-respecting substitutions that solve the whole conjunction modulo B. Every solution, including a nonground one, factors through one answer using one substitution on all query variables. A complete empty family proves impossibility. | [Unification](Tamarin/Unification.lean) · [Whole-problem contract](Tamarin/WholeContract.lean) · [Maude unification](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/unify.cc) |
 | `match` | All assignments to the bindable pattern variables, up to B on their images. The subject and any pattern variables frozen by the caller stay rigid. A Boolean query asks whether an assignment exists. | [Matching](Tamarin/Matching.lean) · [Maude pattern and subject search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/match.cc#L42-L127) |
 | `reduce` | A reachable, irreducible result for the input, including open terms, using the active rewrite equations modulo B. On a convergent, sort-preserving presentation, all normal forms agree modulo B. | [Rewriting](Tamarin/Rewriting.lean) · [Maude reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/execute.cc#L245-L269) |
-| `get variants` | A finite covering family of normalized substitutions and values. A single further substitution explains every binding and position in a packed query modulo B, without another reduction. Rust retains the bindings and must be able to recover the values by substituting and reducing. | [Reconstruction](Tamarin/VariantReconstruction.lean) · [Packed rule queries](../crates/tamarin-theory/src/tools/rule_variants.rs#L125) · [Rust reply parser](../crates/tamarin-term/src/maude_parse.rs#L218-L250) · [Maude initialization](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L215-L295) · [Printed rows and incomplete search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/getVariants.cc#L119-L174) |
+| `get variants` | A finite covering family of normalized substitutions and values. A single further substitution explains every binding and position in a packed query modulo B, without another reduction. Rust retains the bindings and must be able to recover the values by substituting and reducing. | [Reconstruction](Tamarin/VariantReconstruction.lean) · [Packed rule queries](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-theory/src/tools/rule_variants.rs#L125) · [Rust reply parser](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_parse.rs#L218-L250) · [Maude initialization](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L215-L295) · [Printed rows and incomplete search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/getVariants.cc#L119-L174) |
 
 Maude reduces the initial variant and narrows with executable equations marked `[variant]`.
 Tamarin marks every emitted equation this way, so reduction and variants share one table.
@@ -86,13 +86,13 @@ User tables receive no general coherence completion in the printer. With the bar
 The Lean contract requires this solution. Lean proves that adding the remainder rule preserves
 every contextual rewrite and the full variant contract. It also exposes every such rewrite at
 the whole root of a well-sorted AC product. Comparisons with Maude variant enumeration assume coherence of the actual emitted table.
-[Conservative equation extensions](Tamarin/ACEquationExtensions.lean) · [Maude’s explicit coherence requirement](https://maude.lcc.uma.es/maude31-manual-html/maude-manualch21.html) · [Pinned Maude probe](Tests/check_maude_operations.py) · [Active tables](../crates/tamarin-term/src/maude_sig.rs#L285) · [Equation emission](../crates/tamarin-term/src/maude_print.rs#L511)
+[Conservative equation extensions](Tamarin/ACEquationExtensions.lean) · [Maude’s explicit coherence requirement](https://maude.lcc.uma.es/maude31-manual-html/maude-manualch21.html) · [Pinned Maude probe](Tests/check_maude_operations.py) · [Active tables](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_sig.rs#L285) · [Equation emission](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_print.rs#L511)
 
 Tamarin uses plain `get variants`, which permits redundant answers. Tamarin requires convergent user theories with the
 finite variant property and leaves these conditions unchecked. The total reference must establish
 completion on its full domain. A bounded export must establish completion on its advertised domain
 and distinguish exhaustion, interruption and unsupported input from a complete answer.
-[Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) · [Equation printer](../crates/tamarin-term/src/maude_print.rs#L511-L523) · [Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143)
+[Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) · [Equation printer](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_print.rs#L511-L523) · [Tamarin's theory assumptions](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/manual/src/004_cryptographic-messages.md#L129-L143)
 
 **For a table solver optimization**, change the two candidate files. The runtime imports the
 implementation and CI imports its proof witnesses. The fixed CI root checks the actual exports,
@@ -136,7 +136,7 @@ the row structure, symbol identities, arities and image sorts and gives each ans
 own fresh witnesses. Lean proves that the resulting family covers substitutions containing
 additional symbols from the caller’s signature and that removing Nat witnesses is sound for
 modules without Nat. The exhaustive search can be expensive for large answer families.
-[Packet contract](Tamarin/TotalUnifyPacket.lean) · [Signature extension](Tamarin/SignatureExtension.lean) · [Sort restriction](Tamarin/UnavailableSort.lean) · [Rust decoder](../crates/tamarin-term/src/lean_unification/whole/total.rs)
+[Packet contract](Tamarin/TotalUnifyPacket.lean) · [Signature extension](Tamarin/SignatureExtension.lean) · [Sort restriction](Tamarin/UnavailableSort.lean) · [Rust decoder](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification/whole/total.rs)
 
 The general matcher adds the IDs of bindable pattern variables to the same packet. It
 returns literal subject-variable IDs on the right side of a binding. For reduction and
@@ -170,9 +170,9 @@ homogeneous solver through the operand export. It reserves names locally from th
 pending terms and accumulated bindings, including witnesses confined to another variable’s image.
 [Rigid-step worklist proof](Tamarin/ResidualRigidWorklist.lean) · [Variable-step contract](Tamarin/ResidualVariable.lean) · [Lazy binding refinement](Tamarin/ResidualVariableWorklist.lean) ·
 [Residual action contract](Tamarin/Residual.lean) · [Worklist semantics](Tamarin/ResidualSearch.lean) ·
-[Rust encoder](../crates/tamarin-term/src/lean_unification/whole.rs) ·
+[Rust encoder](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification/whole.rs) ·
 [Fixed graph wire format](TamarinWire.lean) · [Flat-row proof](Tamarin/WholeLayout.lean) ·
-[C bridge](../crates/tamarin-term/native/lean_unification.c)
+[C bridge](../native/lean_unification.c)
 
 Rust retains full term identities and concrete caller names. For witness-bearing answers, every
 occurrence of a slot in an answer must receive the same fresh name. Distinct live slots must receive
@@ -182,7 +182,7 @@ identity outside the original domain and allows identical projected answers to b
 slot numbers. Rust’s substitution adapter checks that a uniform index shift fits, using gaps in the
 caller’s scope when necessary. The whole-problem export takes no freshness argument.
 [Caller freshening theorem](Tamarin/CallerFreshening.lean) ·
-[Rust allocator](../crates/tamarin-term/src/subst_vfresh.rs)
+[Rust allocator](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/subst_vfresh.rs)
 
 In native-only ordinary unification, Rust proposes a substitution θ and residual equations. Composing θ
 with any residual solution must solve the original equations. Every original solution ρ must
@@ -218,7 +218,7 @@ CI compares proof runs against Maude because branch order and redundant instance
 Tamarin’s proof search even when two answer sets cover the same solutions.
 [Reference encoding](Tamarin/TermEncoding.lean) ·
 [Fresh substitution representation](Tamarin/FreshSubstitution.lean) ·
-[Proof comparisons](../crates/tamarin-prover/tests/lean_unification.rs)
+[Proof comparisons](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/lean_unification.rs)
 
 ## Coverage and remaining work
 
@@ -240,7 +240,7 @@ A table-wide certificate applies to every arity-correct input, including kind-le
 first admitted class defines nullary free symbols by ground terms built from constructors. Multiple
 definitions of one symbol must agree modulo C/AC, every right side must preserve the declared sort,
 and every active rule must qualify. The checked Rust path can encode declared nullary symbols in rules. It still
-defers tables containing query-local literal names in rule buckets. [Class and normalizer](Tamarin/ConstantDefinitions.lean) · [Public regression](../crates/tamarin-term/tests/native_backend/checked_reduction.rs)
+defers tables containing query-local literal names in rule buckets. [Class and normalizer](Tamarin/ConstantDefinitions.lean) · [Public regression](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/native_backend/checked_reduction.rs)
 
 For destructor tables, every left side has a defined free head over constructor patterns.
 All rules with the same head return a subterm at a common path through free constructors.
@@ -269,7 +269,7 @@ lose completeness. Lean rejects witnessed ambiguity and verifies unique reconstr
 each accepted reference row. Raw library handles opened with `start_with_backend` retain the
 certificate-only default for untrusted equations.
 [Table classifier](Tamarin/CertifiedTable.lean) · [Promotion contract](Tamarin/CertifiedTableWire.lean)
-[Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
+[Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/native_backend/checked_variants.rs)
 
 For a canonical table, it suffices to give each operator a bound on **one** normalization
 path when its arguments are already normal. These bounds compose for the whole query,
@@ -315,7 +315,7 @@ Arbitrary user extensions require a whole-table argument. For example, the two r
 in isolation. Together, reducing `f(sⁿ(a))` to `f(a)` consumes every occurrence of `s`.
 The uniform path bound implied by any finite family fails on the single query `f(x)`.
 Lean proves this failure, and the Maude probe requests only the first six variants.
-[Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143) ·
+[Tamarin's theory assumptions](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/manual/src/004_cryptographic-messages.md#L129-L143) ·
 [Counterexample](Tests/VariantCompositionLimit.lean) · [Bounded Maude probe](Tests/check_maude_operations.py)
 
 **Retiring older paths.** At `cd3d2f0`, the four general operations and their wire and semantic
@@ -328,13 +328,13 @@ Ordinary unification and narrowing now use the same Lean sort check on the origi
 The separate natural-sum sort-profile packet has been retired. Native-only preserves the empty
 identity binding for reflexive kind-level sums. Independent unification components keep their
 own solver so a conjunction with few answers can finish without enumerating partitions across
-components. [Sort checks](Tamarin/NarrowingClash.lean) · [General packet regression](Tests/TotalUnifyPacket.lean) · [Public regressions](../crates/tamarin-term/tests/native_backend.rs)
+components. [Sort checks](Tamarin/NarrowingClash.lean) · [General packet regression](Tests/TotalUnifyPacket.lean) · [Public regressions](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/native_backend.rs)
 
 The default native-only path treats a Rust factoring failure as a proposed clash. Lean replays free
 decomposition, sort checks, variable elimination, and occurs checks on the equations
 before factoring. A confirmed clash rules out solutions in the caller's full signature.
 An inconclusive replay leaves the original query available to the general solver.
-[Refutation contract](Tamarin/TotalUnifyWire.lean) · [Checked replay](Tamarin/FactorRefutation.lean) · [Unfactored Maude comparison](../crates/tamarin-term/src/lean_unification_integration_tests.rs)
+[Refutation contract](Tamarin/TotalUnifyWire.lean) · [Checked replay](Tamarin/FactorRefutation.lean) · [Unfactored Maude comparison](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification_integration_tests.rs)
 
 The atom case of `X + a = Y + b` now takes its completeness and freshness proof from the
 general compound-offset theorem. The dependent allocation path for `X + Y = Z + A[X]` still
@@ -426,7 +426,7 @@ The generated set has bounded term size and answer multiplicity. Separate regres
 exercise larger families. Matching three distinct variables against eight distinct AC factors
 returns all 5,796 substitutions. With two variables and 64 distinct factors, existence
 succeeds without collecting the exponentially large family.
-[Public regressions](../crates/tamarin-term/tests/native_backend/paged_bag_matches.rs)
+[Public regressions](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/native_backend/paged_bag_matches.rs)
 
 The test checks that wrapping a term in hash wraps its normal form in the same hash.
 This follows from the [free constructor reduction theorem](Tamarin/ConstructorReduction.lean).
@@ -447,7 +447,7 @@ rows. For example, a normalized input `m = merge(a,c)` makes `merge(m,a)` reduce
 `merge(a,c)`. With only the bare marker equations Maude 3.5.1 omits this variant.
 Adding the equivalent proper-subproduct equations makes Maude agree with the independent
 multiplicity model and the native rows. This difference applies to experimental native-only
-answers. [Variant comparisons](../crates/tamarin-term/src/lean_variant_frontier_tests.rs)
+answers. [Variant comparisons](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_variant_frontier_tests.rs)
 
 The DH generator uses the expression language of the power proofs and Rust’s full builtin
 DH signature. It exercises all four public operations, including both sides of seven DH
@@ -468,7 +468,7 @@ when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
 separately exercise ordering and proof search.
 [Lean generator and expectations](Tests/NativeCoverage.lean) ·
-[Public API check](../crates/tamarin-term/tests/spec_coverage.rs)
+[Public API check](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/spec_coverage.rs)
 
 ### Native algorithms and protocol regressions
 
@@ -477,25 +477,25 @@ separately exercise ordering and proof search.
   caller variable order, images use the caller's canonical C/AC term order, and identity
   bindings are explicit. This can select a different valid substitution from upstream when
   a source is ambiguous. Duplicating or reordering solutions preserves this choice.
-  [Order contract](Tamarin/MatchOrder.lean) · [Source selection](../tamarin-prover/lib/theory/src/Theory/Constraint/Solver/Sources.hs#L279)
+  [Order contract](Tamarin/MatchOrder.lean) · [Source selection](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/lib/theory/src/Theory/Constraint/Solver/Sources.hs#L279)
 - **Existence and enumeration.** Two captures against 64 distinct AC factors already give an
   exponential family. Boolean matching and unifiability have decision paths. In paged matching,
   a page can advance without producing a binding, and sort filtering precedes the collection
   limit. Tests check the Boolean answer on the wide input and the entire family on smaller ones.
-  [AC feasibility](Tamarin/ACFeasibility.lean) · [Page contract](Tamarin/ACPagePacket.lean) · [Public matching tests](../crates/tamarin-term/tests/native_backend/paged_bag_matches.rs)
+  [AC feasibility](Tamarin/ACFeasibility.lean) · [Page contract](Tamarin/ACPagePacket.lean) · [Public matching tests](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/tests/native_backend/paged_bag_matches.rs)
 - **Shared variables.** An ordinary unifier must account for earlier bindings and residual equations
   together. For tuple variants such as `[fst(x), snd(x)]`, both values and the caller's image of
   `x` must share one substitution. Reopening witnesses and combining independent answer families
-  can change which assignments survive. [Independent unification](Tamarin/IndependentUnification.lean) · [Variant joins](Tamarin/VariantJoinFamily.lean) · [Joint projection model](../crates/tamarin-prover/tests/fixtures/native_joint_projections.spthy)
+  can change which assignments survive. [Independent unification](Tamarin/IndependentUnification.lean) · [Variant joins](Tamarin/VariantJoinFamily.lean) · [Joint projection model](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/fixtures/native_joint_projections.spthy)
 - **Theory-specific equations.** Cancellation requires the active equations and unit for the AC
   head. DH products use signed multiplicities, and bilinear variants reconstruct point and scalar
   values together. The public corpus exercises builtin and user-declared cancellation, received
   DH powers and bilinear pairing through theory closure, source refinement and proof search.
-  [Cancellation](Tamarin/CancellationConvergence.lean) · [Signed products](Tamarin/SignedGraphContract.lean) · [Bilinear variants](Tamarin/BilinearRows.lean) · [Protocol comparisons](../crates/tamarin-prover/tests/lean_unification.rs)
+  [Cancellation](Tamarin/CancellationConvergence.lean) · [Signed products](Tamarin/SignedGraphContract.lean) · [Bilinear variants](Tamarin/BilinearRows.lean) · [Protocol comparisons](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/lean_unification.rs)
 
 For end-to-end changes, the native-only CLI tests run with a missing Maude executable and check
 that an unsupported theory cannot publish a proof. The AC marker regression also checks the
-reachable trace when Maude omits a variant. [CLI and verdict tests](../crates/tamarin-prover/tests/native_backend.rs)
+reachable trace when Maude omits a variant. [CLI and verdict tests](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-prover/tests/native_backend.rs)
 
 ### Proposed cross-query reuse
 
@@ -590,7 +590,7 @@ warmed runs in the optimized `ci` profile. Compact AC rows reduced the packet fr
 words, median Rust encoding from 9.94 to 7.17 µs, C input copying from 1.50 to 0.89 µs, and the
 complete kernel call including encoding from 184 to 65 µs. Full native-only proof output matched
 on `counter`, `xor` and `NumberSubtermTests`, with median elapsed times moving by less than 3%.
-[Hybrid benchmark source](../crates/tamarin-term/examples/lean_unification_bench.rs)
+[Hybrid benchmark source](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/examples/lean_unification_bench.rs)
 
 On `ake/dh/NAXOS_eCK_PFS`, median elapsed time for the full proof was 4.12 s in
 native-only mode and 3.43 s with Maude. Each measurement used five fresh processes
