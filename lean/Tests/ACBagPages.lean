@@ -34,8 +34,10 @@ example : ACBagSearch.Within three := by
   refine ⟨by decide,by decide,by decide,by decide,?_⟩
   intro a ha
   refine ⟨1,?_,by decide⟩
-  have ok : ∀ b ∈ three.flatMap Prod.snd, ∀ r ∈ three, r.2.count b ≤ 1 := by decide
-  exact ok a ha
+  have bounded : ((three.flatMap Prod.snd).all fun b =>
+      three.all fun r => decide (r.2.count b ≤ 1)) = true := by decide_cbv
+  simp only [List.all_eq_true, decide_eq_true_eq] at bounded
+  exact bounded a ha
 
 def main : IO Unit := do
   require (ACBagAnswers.run three).isNone "fixture fits one-shot budget"

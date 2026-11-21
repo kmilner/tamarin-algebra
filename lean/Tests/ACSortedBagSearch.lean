@@ -11,7 +11,9 @@ example : ACBagSearch.Within wide := by
   refine ⟨by decide,by decide,by decide,by decide,?_⟩
   intro a ha
   refine ⟨1,?_,by decide⟩
-  have bounded : ∀ b ∈ wide.flatMap Prod.snd, ∀ r ∈ wide, r.2.count b ≤ 1 := by decide
+  have bounded : ((wide.flatMap Prod.snd).all fun b =>
+      wide.all fun r => decide (r.2.count b ≤ 1)) = true := by decide_cbv
+  simp only [List.all_eq_true, decide_eq_true_eq] at bounded
   exact bounded a ha
 
 private def check (rows : Rows) (limits : Limits) (expected : Bool) : IO Unit := do
