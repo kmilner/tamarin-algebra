@@ -1456,16 +1456,50 @@ theorem Tamarin.referenceSignatureTable_roundTrip (table : Tamarin.SignatureTabl
       Tamarin.WordEncoding.decode table.encoding s w = some t :=
   table.word_roundTrip ht t s hs hv
 
+open Lean Meta in
+/-- Lean 4.36 compiles constructor indices using a runtime tag read. Check the
+    exact primitive and its argument, and reduce the logical function on every
+    constructor to check it returns the corresponding tag. -/
+private def checkedCtorIndex (env : Environment) (name impl : Name) : MetaM Bool := do
+  let some ind := isCtorIdxCore? env name | return false
+  unless impl == name.str "_impl" && Compiler.getImplementedBy? env name == some impl &&
+      ind.numCtors > 1 && !ind.isUnsafe && !Compiler.LCNF.isRuntimeBuiltinType ind.name do
+    return false
+  if ← isPropFormerType ind.type then return false
+  let casesOn ← getConstInfo (mkCasesOnName ind.name)
+  unless casesOn.levelParams.length > ind.levelParams.length do return false
+  let some (.defnInfo logical) := env.find? name | return false
+  let some (.defnInfo runtime) := env.find? impl | return false
+  unless logical.safety == .safe && runtime.safety == .unsafe &&
+      logical.levelParams == ind.levelParams && runtime.levelParams == ind.levelParams &&
+      logical.type == runtime.type do return false
+  let us := ind.levelParams.map mkLevelParam
+  forallTelescope logical.type fun args result => do
+    unless args.size == ind.numParams + ind.numIndices + 1 && result == mkConst ``Nat do
+      return false
+    let value := args.back!
+    let ty := mkAppN (mkConst ind.name us) args.pop
+    unless (← inferType value) == ty do return false
+    let tag := mkApp2 (mkConst ``getObjTagNat [← getLevel ty]) ty value
+    unless runtime.value == (← mkLambdaFVars args tag) do return false
+    for ctorName in ind.ctors do
+      let ctor ← getConstInfoCtor ctorName
+      let agrees ← forallTelescope ctor.type fun fields target => do
+        let constructed := mkAppN (mkConst ctorName us) fields
+        let idx := mkApp (mkAppN (mkConst name us) target.getAppArgs) constructed
+        withTransparency .all <| isDefEq idx (mkNatLit ctor.cidx)
+      unless agrees do return false
+    return true
+
 /-!
 CI audit of project declarations, including private helpers and
 helpers outside the Tamarin namespace. Keep this in the root module so it
 sees every specification and runtime import.
 Only Lean's standard logical axioms are allowed. In particular, `sorryAx`,
 custom solver axioms, and native-evaluation proof shortcuts fail CI verification.
-Unchecked executable replacements (`implemented_by`, `extern`, and value
-initializers) and unsafe project definitions are also forbidden: otherwise a
-correct logical function could execute different code without invalidating
-any correctness theorem.
+The audit rejects project uses of `implemented_by`, `extern`, value initializers,
+and unsafe definitions. Lean's generated constructor tags must pass the checks
+above to qualify for the sole exception for `implemented_by` and unsafe code.
 Checked `csimp` equalities remain available for compiler optimizations.
 The C ABI symbol mapping is pinned to the definitions named by the export
 correctness/completion theorems. Adding an ABI entry requires reviewing both.
@@ -1550,13 +1584,15 @@ run_cmd do
         unless expectedExports.contains (name, symbol) do
           throwError "Unapproved project export {name} maps to {symbol}"
       if let some replacement := Compiler.getImplementedBy? env name then
-        throwError "{name} has unchecked implemented_by replacement {replacement}"
+        unless ← Elab.Command.liftTermElabM <| checkedCtorIndex env name replacement do
+          throwError "{name} has unchecked implemented_by replacement {replacement}"
       if isExtern env name then
         throwError "{name} has unchecked extern implementation"
       if let some initializer := getInitFnNameFor? env name then
         throwError "{name} has unchecked runtime initializer {initializer}"
       if info.isUnsafe then
-        throwError "{name} is an unsafe project declaration"
+        unless ← Elab.Command.liftTermElabM <| checkedCtorIndex env name.getPrefix name do
+          throwError "{name} is an unsafe project declaration"
       for ax in ← collectAxioms name do
         unless ax == ``propext || ax == ``Quot.sound || ax == ``Classical.choice do
           throwError "{name} depends on unapproved axiom {ax}"

@@ -132,6 +132,32 @@ end Tamarin.AuditProbe
 """,
         "unchecked implemented_by replacement",
     ),
+    # Use real inductives and the compiler's own declaration names. Either
+    # half can lie even when the other half has the expected implementation.
+    (
+        "forged_logical_constructor_index",
+        """
+namespace Tamarin.AuditProbe
+set_option genCtorIdx false in
+inductive Tag | left | right
+unsafe def Tag.ctorIdx._impl (x : Tag) : Nat := getObjTagNat x
+@[implemented_by Tag.ctorIdx._impl] def Tag.ctorIdx (_ : Tag) : Nat := 0
+end Tamarin.AuditProbe
+""",
+        "has unchecked implemented_by replacement",
+    ),
+    (
+        "forged_runtime_constructor_index",
+        """
+namespace Tamarin.AuditProbe
+set_option genCtorIdx false in
+inductive Tag | left | right
+unsafe def Tag.ctorIdx._impl (_ : Tag) : Nat := 0
+@[implemented_by Tag.ctorIdx._impl] def Tag.ctorIdx (x : Tag) : Nat := Tag.casesOn x 0 1
+end Tamarin.AuditProbe
+""",
+        "has unchecked implemented_by replacement",
+    ),
     (
         "extern",
         """
@@ -932,6 +958,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="tamarin-audit-") as directory:
         allowed = """
 namespace Tamarin.AuditProbe
+inductive Indexed (α : Type u) : Nat → Type u
+  | nil : Indexed α 0
+  | cons : α → Indexed α n → Indexed α (n + 1)
 def reference (n : Nat) : Nat := n + n
 def optimized (n : Nat) : Nat := 2 * n
 @[csimp] theorem optimized_correct : reference = optimized := by

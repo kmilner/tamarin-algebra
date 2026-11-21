@@ -208,6 +208,7 @@ fn main() {
         "Init",
         "leanrt",
         "leancpp",
+        "cadical",
         "c++",
         "c++abi",
         "gmp",
