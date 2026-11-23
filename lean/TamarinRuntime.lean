@@ -198,10 +198,6 @@ def totalMatchExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (root
 def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules : Array UInt64)
     (root fuel : UInt64) : Array (Array UInt64) := CheckedReductionWire.run decls nodes rules root fuel
 
-@[export tamarin_general_reduce]
-def generalReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := TableCandidate.reduce ds ns rules root fuel
-
 @[export tamarin_path_reduce]
 def pathReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
     (root fuel : UInt64) : Array (Array UInt64) := PathReductionWire.run ds ns rules root fuel

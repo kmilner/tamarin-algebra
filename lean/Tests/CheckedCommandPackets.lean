@@ -21,7 +21,7 @@ private def ns : Array (Array UInt64) := #[#[0,0,2],#[2,0,0],#[2,1],#[2,2]]
 
 -- The general reducer can distinguish an unfinished search, a witnessed fork
 -- with inequivalent normal forms, and branches that join one step later.
-private abbrev reduce := Executable.generalReduce
+private abbrev reduce := GeneralReductionWire.run
 #guard reduce ds ns #[1,2,1,3] 1 1 == #[#[3]]
 #guard reduce ds ns #[1,2,1,3] 1 2 == #[#[2]]
 #guard reduce ds ns #[1,2,1,3,3,2] 1 2 == #[#[3]]
@@ -60,9 +60,9 @@ private def rules : Array UInt64 := #[3,0,4,1]
 -- certified table both return the same normal form for fst(pair(x,y)), a
 -- normal term is returned unchanged, and exhausted depth is reported as such.
 #guard Executable.certifyTable ds ns rules 4
-#guard CertifiedReductionWire.run ds ns rules 3 8 == Executable.generalReduce ds ns rules 3 8
+#guard CertifiedReductionWire.run ds ns rules 3 8 == GeneralReductionWire.run ds ns rules 3 8
 #guard (CertifiedReductionWire.run ds ns rules 3 8)[0]? == some #[1]
-#guard CertifiedReductionWire.run ds ns rules 6 8 == Executable.generalReduce ds ns rules 6 8
+#guard CertifiedReductionWire.run ds ns rules 6 8 == GeneralReductionWire.run ds ns rules 6 8
 #guard CertifiedReductionWire.run ds ns rules 3 0 == #[#[3]]
 #guard CertifiedReductionWire.run ds ns #[3] 3 8 == #[#[0]]
 -- Without a certificate the same path is still an irreducible reduct. A rule

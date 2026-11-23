@@ -44,14 +44,13 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the thirteen exports whose reply the Rust backend uses as the
+export, one of the eleven exports whose reply the Rust backend uses as the
 answer:
 
 * `totalUnify`, `totalUnifyExists`, `unpackConjunction`, `totalMatch`,
   `totalMatchExists`;
-* `certifyTable`, `sessionReduce`, `checkedReduce`, `pathReduce`,
-  `generalReduce`;
-* `sessionVariantCheck`, `checkedVariants`, `generalVariants`.
+* `certifyTable`, `sessionReduce`, `checkedReduce`, `pathReduce`;
+* `sessionVariantCheck`, `checkedVariants`.
 
 A statement here says what a reply means in terms of the decoded packet and
 the rewrite relation. No statement names a search, a classifier or a
@@ -160,9 +159,12 @@ symbols. The only other reply to a decoded packet is the decline `#[#[2]]`.
 
 Nothing here limits declining. The reducer declines by a resource policy (a
 table-derived depth and a work limit on the rewrite graph) that has no
-counterpart in the rewrite relation. The two floors below are the only limits.
-`exportedGeneralReduce_correct` is the reducer whose declines are specified
-by the rewrite relation. -/
+counterpart in the rewrite relation: the cost it guards against is the number
+of matches of a rule against a wide AC product, which no property of the
+rewrite relation bounds. The two floors below are the only limits. A caller
+that needs an answer where this export declines uses `pathReduce`, whose
+replies are all specified by the rewrite relation and which claims no
+uniqueness. -/
 theorem exportedCheckedReduce_sound {ds ns es root n d t rs}
     (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) :
     GeneralReductionWire.Answer d rs t (Executable.checkedReduce ds ns es root n) ∨
@@ -190,9 +192,6 @@ theorem exportedCheckedReduce_sound {ds ns es root n d t rs}
           rw [stop] at shape
           simp at shape
   · exact .inr declined
-
-theorem exportedGeneralReduce_correct : GeneralReductionWire.Correct Executable.generalReduce :=
-  TableCandidateProofs.reduction
 
 /-- What `true` means: the packet decodes and its table is certified, that is,
 range restricted, a canonical presentation (terminating and confluent modulo
@@ -248,19 +247,6 @@ theorem exportedCheckedVariants_sound {ds ns es roots n d rs q}
     CheckedVariantsWire.Decodes rs q (Executable.checkedVariants ds ns es roots n) ∨
       Executable.checkedVariants ds ns es roots n = #[#[2]] :=
   (CheckedVariantsWire.correct.valid _ _ _ _ n _ _ _ decoded).imp_right And.left
-
-theorem exportedGeneralVariants_malformed : GeneralVariantsWire.Malformed Executable.generalVariants :=
-  TableCandidateProofs.malformed
-
-/-- What a reply of the folding variant generator means. A reply other than
-the decline `#[#[2]]` and the request for more depth `#[#[3]]` decodes to
-rows that are each a genuine, reconstructible variant of the decoded
-observations, on any table. The family is complete when the table is a
-canonical presentation, which the caller has to know: from `certifyTable`, or
-as the assumption that the theory of the user is convergent. Nothing limits
-declining or asking for more depth. -/
-theorem exportedGeneralVariants_sound : GeneralVariantsWire.Sound Executable.generalVariants :=
-  TableCandidateProofs.sound
 
 /-- On any decoded table a status 1 reply of the single-path reducer is an
 irreducible reduct that keeps the sorts of the input. Convergence of the table
@@ -478,7 +464,6 @@ run_cmd do
   let env ← getEnv
   let moduleNames := env.header.moduleNames
   -- Exports with a contract: each is mentioned by a theorem of this file.
-  -- Exports with a contract: each is mentioned by a theorem of this file.
   let contractExports : List (Name × Name) := [
     (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
     (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
@@ -486,12 +471,10 @@ run_cmd do
     (``Tamarin.Executable.totalUnifyExists, `tamarin_total_unify_exists),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
     (``Tamarin.Executable.totalMatchExists, `tamarin_total_match_exists),
-    (``Tamarin.Executable.generalReduce, `tamarin_general_reduce),
     (``Tamarin.Executable.pathReduce, `tamarin_path_reduce),
     (``Tamarin.Executable.certifyTable, `tamarin_certify_table),
     (``Tamarin.Executable.sessionReduce, `tamarin_session_reduce),
     (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check),
-    (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
     (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants)]
   -- Proposer exports carry no contract. The caller uses their output only as a
   -- proposal that `tamarin_session_variant_check` has to accept, so no theorem of
@@ -535,7 +518,8 @@ run_cmd do
     (``Tamarin.Executable.reduceRuleSlot, `tamarin_reduce_rule_slot),
     (``Tamarin.Executable.excludeACFactors, `tamarin_exclude_ac_factors),
     (``Tamarin.Executable.excludeRoot, `tamarin_exclude_root),
-    (``Tamarin.Executable.constructorVariant, `tamarin_constructor_variant)]
+    (``Tamarin.Executable.constructorVariant, `tamarin_constructor_variant),
+    (``Tamarin.Executable.generalVariants, `tamarin_general_variants)]
   let expectedExports := contractExports ++ proposerExports
   for (name, symbol) in expectedExports do
     unless getExportNameFor? env name == some symbol do

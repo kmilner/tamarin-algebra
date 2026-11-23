@@ -98,7 +98,7 @@ and distinguish exhaustion, interruption and unsupported input from a complete a
 
 The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManifest.txt).
 
-**Contract exports** are the thirteen whose reply the Rust backend uses as the answer. Each is
+**Contract exports** are the eleven whose reply the Rust backend uses as the answer. Each is
 mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
 are the whole of what is promised to a caller.
 
@@ -111,25 +111,24 @@ are the whole of what is promised to a caller.
 | `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` carries no information. It is the reply to a malformed packet and may be the reply to any table. Three concrete packets must be accepted (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). |
 | `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). |
 | `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). |
-| `tamarin_general_reduce` | Status 1: the unique normal form, also in every signature extension. | 2 only if the table is not range restricted or two rewrite paths end in different normal forms, 3 only while some path within depth `n` is unsettled (`exportedGeneralReduce_correct`). |
-| `tamarin_checked_reduce` | Status 1: the unique normal form, also in every signature extension (`exportedCheckedReduce_sound`). | **No limit**: `#[#[2]]` may be the reply to any decoded packet, except on sorted tables of constructor definitions or of constructor-pattern projections, where it must answer (`exportedDefinitionReduce_ambient`, `exportedDestructorReduce_ambient`). |
+| `tamarin_checked_reduce` | Status 1: the unique normal form, on any table, also in every signature extension (`exportedCheckedReduce_sound`). | **No limit**: `#[#[2]]` may be the reply to any decoded packet, except on sorted tables of constructor definitions or of constructor-pattern projections, where it must answer (`exportedDefinitionReduce_ambient`, `exportedDestructorReduce_ambient`). See the weak clauses below. |
 | `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 below some depth. See the weak clause below. |
-| `tamarin_checked_variants` | A reply other than `#[#[2]]` decodes to a complete set of variants with unique values, on any table (`exportedCheckedVariants_sound`). | **No limit.** |
-| `tamarin_general_variants` | A reply other than `#[#[2]]` and `#[#[3]]` decodes to rows that are each a genuine, reconstructible variant. The family is complete if the table is a canonical presentation (`exportedGeneralVariants_sound`). | **No limit.** |
+| `tamarin_checked_variants` | A reply other than `#[#[2]]` decodes to a complete set of variants with unique values, on any table (`exportedCheckedVariants_sound`). | **No limit.** It stays a contract export because it is the only solver for kind-level input, where the checker is exponential. See the weak clauses below. |
 
 No contract statement names a search, a classifier or a reference procedure. A decline is limited
 either by a condition on the decoded packet and the rewrite relation, or by a concrete packet, or
 not at all. Where it is not limited, coverage is guarded by the corpus and the benchmarks.
 
-**Proposer exports** are the other 39 (`proposer` lines of the manifest): the pieces of the
-specialised variant solvers that still run in Lean. They carry no contract. The Rust backend
+**Proposer exports** are the other 40 (`proposer` lines of the manifest): the pieces of the
+specialised variant solvers that still run in Lean, and the folding variant generator
+`tamarin_general_variants`. They carry no contract. The Rust backend
 assembles their output into a proposed family of variants and uses that family only after
 `tamarin_session_variant_check` accepted it; a rejected or undecided family fails the session.
 A wrong proposal, including a wrong pruning decision inside the proposer, therefore costs a
 rejection and never a wrong answer, which is why nothing has to be promised about a proposer.
-Two things follow for the caller. A proposer's output must never reach the prover without that
-check. And the debugging switch `TAM_RS_NATIVE_UNCHECKED_VARIANTS` of the Rust backend, which
-skips the check, puts the result outside every statement of this library.
+It follows that a proposer's output must never reach the prover without that check. The Rust
+backend has one place where a family of variants is returned (`MaudeHandle::variants`). It
+passes every family through the checker except one that `tamarin_checked_variants` computed.
 
 The theorems about proposers that were contract statements are kept, unpinned and without an
 owner, in [`TamarinProposers.lean`](TamarinProposers.lean), together with the coverage statements
@@ -144,7 +143,7 @@ modules without importing them into its own elaboration. It fails unless:
 - every contract export has a theorem of the proof root, and the kernel statement of every
   public theorem of the proof root is the recorded one (SHA-256 of a canonical encoding);
 - every definition those statements depend on, in whatever module it is defined, is the one
-  recorded in [`SpecManifest.txt`](SpecManifest.txt) (341 constants: terms, signatures,
+  recorded in [`SpecManifest.txt`](SpecManifest.txt) (336 constants: terms, signatures,
   substitutions, the rewrite relation, the reply specifications and the wire decoders);
 - no theorem of the proof root mentions a proposer, and no proposer is in that closure;
 - no module, proposer code included, defines macros, syntax, elaborators or initializers, imports
@@ -154,6 +153,15 @@ modules without importing them into its own elaboration. It fails unless:
 
 CI replays the whole environment of the proof root in the kernel. Cargo builds run the proof
 root and the audit unless `TAMARIN_ALGEBRA_SKIP_PROOFS=1` is set for an unproved experiment.
+
+The foreign interface is checked at both joints by the Cargo build. The C bridge
+([`native/lean_unification.c`](../native/lean_unification.c)) is compiled against the
+declarations Lean generated for its exports. The Rust declarations of the bridge's functions and
+structs, and of the five Lean exports that take machine words only and need no bridge function,
+are generated from the bridge's source and from those declarations
+([`build.rs`](../build.rs), [`src/lib.rs`](../src/lib.rs)). The Rust backend declares none by
+hand, and a test of `tamarin-term` fails on an `extern "C"` block in its sources. A call that
+disagrees with the bridge in the number or type of an argument or in the result does not compile.
 
 A definition that a contract statement depends on (a wire decoder, a semantic predicate) cannot
 be changed in place: the audit fails until an owner regenerates the record. Add a faster copy,
@@ -168,11 +176,23 @@ What the tightening gave up, relative to the previous contract:
   accepts. No semantic statement can replace that clause: termination, confluence and the finite
   variant property are undecidable, Maude does not check them and Tamarin assumes them.
 - `checked_reduce` no longer has its decline tied to `CheckedReduction.run` and the work limit.
-  That limit is resource policy with no counterpart in the rewrite relation. A caller that
-  needs a specified decline uses `general_reduce`.
-- `checked_variants` and `general_variants` keep what a reply means and lose the clauses that
-  forced a reply when the reference search `GeneralVariants.run` finishes, with the corollaries
-  for DH, constructor and subterm tables. They are still proved in `TamarinProposers.lean`.
+  That limit is resource policy with no counterpart in the rewrite relation.
+- `general_variants` is a proposer. Measured on the whole corpus, all 10,282 families of
+  variants reached the prover through a Rust proposer and the checker and none through this
+  export. The caller loses its two statements (`exportedGeneralVariants_malformed`, `_sound`):
+  a folding family is used only if the checker accepts it, and one the checker does not decide
+  fails the session where it used to count as assumed. The statements are still proved in
+  `TamarinProposers.lean`, with the clauses that forced a reply when the reference search
+  `GeneralVariants.run` finishes and the corollaries for DH, constructor and subterm tables.
+- `checked_variants` keeps what a reply means and has no clause that forces a reply. The corpus
+  never uses it either, but it cannot be a proposer yet: see the kind-level clause below.
+- `general_reduce` is no export. It followed every rewrite path to the given depth and listed
+  every match of every rule at every step, so one call on a wide AC product allocated without
+  limit (4.8 GB in 15 s on one test query) and nothing in its contract let a caller prevent
+  that. Production never called it. The caller loses the only all-paths reducer whose declines
+  were specified (`exportedGeneralReduce_correct`: 2 only on a conflict, 3 only while a path
+  within the depth is unsettled). The reference procedure `GeneralReductionWire.run` and its
+  specification stay in the library.
 
 Known weak clauses:
 
@@ -190,13 +210,59 @@ Known weak clauses:
 - Variant certificates. `exportedSessionVariantCheck_decides` and `_complete` say that a depth
   exists (`∃ k : Nat`) from which a call without a work limit never replies with status 3 and
   accepts exactly the closed families. The depth argument is a 64-bit word, so the clause is
-  empty if that depth exceeds 2^64. The depth proved sufficient, `VariantCertificate.threshold`,
-  is one more than the largest rewrite height among the terms the closure test normalizes.
-  Those terms include the narrowing successors the installed unifier lists, so naming the
-  threshold in the contract would pin the narrower, the reference reducer and the unifier
-  (259 further definitions in 39 modules, measured). Acceptance and rejection are exact at
-  every depth. A nonzero work limit only declines members by an estimate of their narrowing
-  layer, so nothing bounds the time of a call.
+  empty if that depth exceeds 2^64. Acceptance and rejection are exact at every depth. No
+  stronger statement was found that is both non-vacuous and cheap to pin:
+  - Naming the depth proved sufficient, `VariantCertificate.threshold`, pins what computes it.
+    It is one more than the largest rewrite height among the terms the closure test normalizes,
+    and those include the narrowing successors that the installed unifier lists: 259 further
+    definitions in 39 modules (the narrower, the reference reducer, the unifier), measured.
+  - A bound through the rewrite relation alone, of the form "status 3 at depth `n` only if some
+    term `u` in a set `U` has a rewrite path of `n` steps", needs a set `U` that contains the
+    terms the test normalizes and is defined without the unifier. Those terms are instances of
+    normal forms of members by unifiers of a subterm with a left-hand side. Any `U` closed under
+    "instance by some unifier" contains instances by arbitrarily large substitutions, whose
+    rewrite heights are unbounded on every table with a rule that keeps a variable, so the
+    clause would hold of every checker. Restricting `U` to most general unifiers names a
+    complete set of unifiers, and the one the checker uses is the installed unifier's: complete
+    sets modulo AC are not unique and the installed one is not minimal.
+  - `∃ k < 2^64` is false: a table with few symbols can have terms of small size and rewrite
+    height above 2^64.
+  A nonzero work limit only declines members by an estimate of their narrowing layer, so
+  nothing bounds the time or the memory of a call.
+- Kind-level products in the variant checker. On an AC product that holds a variable outside
+  the sorts of messages (no well-sorted theory produces one, the corpus has none), the closure
+  test of `tamarin_session_variant_check` takes time and memory proportional to 2^k in the
+  number `k` of factors: 16 factors 0.28 s and 90 MB, 20 factors 5.4 s and 1.43 GB, 129 factors
+  killed at 6 GB after 3 s, with a charge of only `k` against the work limit. Well-sorted
+  products of the same width check in milliseconds. `tamarin_checked_variants` answers such a
+  query in milliseconds and is its only solver, so it remains a contract export with an
+  unlimited decline, and the Rust backend uses its family without the checker. The ignored
+  Rust test `kind_level_product_check_is_not_exponential` (`tamarin-term`,
+  `lean_unification/whole/reduction.rs`) is the acceptance test for a checker that removes
+  this; `checked_variants` can become a proposer once it passes.
+- Reduction on a table `certify_table` did not accept. `tamarin_checked_reduce` may decline
+  anything outside its two floors. Its decline cannot be given a semantic clause as it stands:
+  it guards the cost of listing every match of a rule against a wide AC product (a factorial
+  charge per AC head against a fixed work limit, `CheckedReduction.affordable`), and that cost
+  is a property of the matcher's enumeration, not of the rewrite relation. A limit in terms of
+  the number of distinct terms reachable within the depth would not bound it either: on the
+  query above two terms are reachable and the matches number 2^63. `tamarin_path_reduce`
+  answers where it declines, with every reply specified, but claims no uniqueness, so the Rust
+  backend counts such an answer as assumed. Measured on the 19 corpus theories with an
+  uncertified table: with `path_reduce` alone the proofs are identical (same verdicts, same
+  step counts, same output), and 22,617 reductions that `checked_reduce` settles count as
+  assumed instead of proved (23,010 assumed in all). Every family of variants of those theories
+  is assumed already. So `checked_reduce` could be deleted at the price of that label and of
+  raw sessions, which do not follow a path, reporting every uncertified table.
+- Running time. No statement bounds the time of a call. AC matching and unification are
+  exponential in the worst case, and a call cannot be interrupted: the caller can cancel only
+  between calls. `tamarin_path_reduce` and `tamarin_session_reduce` look for the first match of
+  a rule, and that search can be exponential in the width of an AC product. Measured:
+  `select(pair(f0+…+f63, hash(x)), emap(a, b))` against a rule whose left side has a product
+  of three variables gives no answer in 120 s, at a flat 15 MB, whether or not a match exists.
+  A protocol session reaches this on a table the certifier did not accept, after
+  `checked_reduce` declined the term. The depth argument bounds rewrite steps, not the search
+  for one step.
 
 The repository includes a GitHub ruleset for the default branch. Importing it in Settings →
 Rules → Rulesets requires the GitHub Actions `lean-spec` check and code-owner approval for
@@ -335,12 +401,13 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Reduction | Protocol sessions retry the original term against the entire emitted equation table after a bounded decline. A finite stage suffices on every range-restricted, sort-preserving canonical table, including proper AC subproducts. | The packet must decode and the final numeric budget must cover the rewrite height. [Export and driver proofs](TamarinCI.lean) |
 | Variants | Protocol sessions retry general folding for the original observation tuple under the same assumptions and FVP. Each accepted substitution reconstructs unique values even without assuming confluence. | The stages and bindings must fit the interface. Raw library sessions still offer certificate-only admission. [Export and driver proofs](TamarinCI.lean) · [Replay](Tamarin/GeneralVariants.lean) |
 
-The general reduction contract states progress in terms of the rewrite relation. Once the
+The all-paths reference reducer (`GeneralReductionWire.run`, a library procedure and no longer
+an export) has its progress specified in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
 sorts, it must return the unique normal form or report a conflict between inequivalent
 normal forms. This obligation applies even when other terms in the module have divergent
 rewrites. A replacement reducer may establish either outcome earlier.
-[Progress contract](Tamarin/CheckedReductionPacket.lean) · [Semantic depth bound](Tamarin/CheckedReduction.lean)
+[Progress specification](Tamarin/CheckedReductionPacket.lean) · [Semantic depth bound](Tamarin/CheckedReduction.lean)
 
 A table-wide certificate applies to every arity-correct input, including kind-level contexts. The
 first admitted class defines nullary free symbols by ground terms built from constructors. Multiple

@@ -163,13 +163,11 @@ TOTAL_RUN = "TotalUnifyWire.run decls nodes roots"
 MATCH_RUN = "TotalMatchWire.run decls nodes roots ids"
 EXISTS_RUN = "TotalMatchWire.runExists decls nodes roots ids"
 UNPACK_RUN = "PackedConjunction.run nodes limit lhs rhs"
-GENERAL_REDUCE = "TableCandidate.reduce ds ns rules root fuel"
 CHECKED_REDUCE = "CheckedReductionWire.run decls nodes rules root fuel"
 PATH_REDUCE = "PathReductionWire.run ds ns rules root fuel"
 SESSION_REDUCE = "SessionReductionWire.run ds ns rules extra root fuel"
 SESSION_CHECK = "SessionVariantCheckWire.run ds ns rules extra roots family fuel work"
 CHECKED_VARIANTS = "CheckedVariantsWire.run ds ns rules roots fuel"
-GENERAL_VARIANTS = "TableCandidate.variants ds ns rules roots fuel"
 EXPORT_MUTATIONS = [
     ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem exportedCertifyTable_sound"),
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
@@ -195,10 +193,6 @@ EXPORT_MUTATIONS = [
     ("packed_conjunction_drops_rhs", UNPACK_RUN, "PackedConjunction.run nodes limit lhs lhs",
      "theorem exportedUnpackConjunction_correct"),
     ("packed_conjunction_drops_leaves", UNPACK_RUN, "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
-    ("general_reduce_omits_table", GENERAL_REDUCE, "TableCandidate.reduce ds ns #[] root fuel",
-     "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_retries", GENERAL_REDUCE, "#[#[3]]", "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_declines", GENERAL_REDUCE, "#[#[2]]", "theorem exportedGeneralReduce_correct"),
     ("checked_reduce_ignores_rules", CHECKED_REDUCE, "CheckedReductionWire.run decls nodes #[] root fuel",
      "theorem exportedCheckedReduce_sound"),
     ("checked_reduce_answers_malformed", CHECKED_REDUCE,
@@ -228,13 +222,6 @@ EXPORT_MUTATIONS = [
     ("variants_answers_malformed", CHECKED_VARIANTS,
      "(if (TableWire.input ds ns rules roots).isNone then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel)",
      "theorem exportedCheckedVariants_malformed"),
-    ("general_variants_accepts_malformed", GENERAL_VARIANTS,
-     "(if (TableWire.input ds ns rules roots).isNone then #[#[1]] else TableCandidate.variants ds ns rules roots fuel)",
-     "theorem exportedGeneralVariants_malformed"),
-    ("general_variants_ignores_rules", GENERAL_VARIANTS, "TableCandidate.variants ds ns #[] roots fuel",
-     "theorem exportedGeneralVariants_sound"),
-    ("general_variants_returns_empty_family", GENERAL_VARIANTS, "#[#[1]]",
-     "theorem exportedGeneralVariants_sound"),
 ]
 
 

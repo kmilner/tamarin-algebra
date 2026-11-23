@@ -1,29 +1,33 @@
 //! Native linkage for the Lean solver. The Tamarin adapter owns initialization
 //! and interprets the numeric ABI.
+//!
+//! Every declaration of the C bridge (`native/lean_unification.c`) is
+//! generated from its definition there by `build.rs`: the functions named
+//! `tamarin_lean_*` and the structs they exchange. A caller that declares one
+//! by hand could disagree with the definition without any diagnostic, so the
+//! Rust backend imports them from this crate only. The build also compiles the
+//! bridge against the declarations that Lean generated for its exports, so the
+//! chain from a Rust call to the Lean function is checked at both joints.
+//!
+//! # Safety
+//! `tamarin_lean_initialize` is called exactly once per process before any
+//! other function, and `tamarin_lean_thread_initialize` once on each thread
+//! before it uses Lean; `tamarin_lean_thread_finalize` after that thread
+//! released its last Lean object. Every pointer and slice must be readable
+//! (or writable, for an output) for the supplied number of elements during
+//! the call. A returned `*mut c_void` is an owned Lean object that the row
+//! readers borrow and `tamarin_lean_match_release` releases.
 
-unsafe extern "C" {
-    /// # Safety
-    /// Call exactly once per process, before using the solver.
-    pub fn tamarin_lean_initialize() -> u8;
-    /// # Safety
-    /// Call once on each worker before using Lean on that thread.
-    pub fn tamarin_lean_thread_initialize();
-    /// # Safety
-    /// Call on the initialized worker after releasing its last Lean object.
-    pub fn tamarin_lean_thread_finalize();
+include!(concat!(env!("OUT_DIR"), "/bridge.rs"));
 
-    /// Compare two finite bags of atoms. The status is 2 for equality, 1 for
-    /// inequality and 0 when the query is outside the supported fragment.
-    ///
-    /// # Safety
-    /// Initialize the runtime and this thread first. Both arrays must be
-    /// readable for the supplied numbers of elements during the call.
-    pub fn tamarin_lean_flat_ac_equal(
-        lhs: *const u64,
-        lhs_length: usize,
-        rhs: *const u64,
-        rhs_length: usize,
-    ) -> u8;
+impl WholeWordSlice {
+    /// The slice must outlive every call that receives this value.
+    pub fn new(words: &[u64]) -> Self {
+        Self {
+            data: words.as_ptr(),
+            size: words.len(),
+        }
+    }
 }
 
 #[cfg(test)]

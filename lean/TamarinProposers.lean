@@ -55,11 +55,11 @@ Three kinds of theorem live here.
   statements while the same functions were trusted. They are kept so that the
   proofs stay alive and a proposer that is promoted again has its statement
   ready.
-* Coverage statements about contract exports that are stated relative to a
-  reference procedure (a classifier, a bounded search, a retry schedule): when
-  the folding variant generator must succeed, which tables the checked
-  reducer and variant generator must accept. The contract keeps what a reply
-  means and no longer limits declining through such a procedure, because that
+* Coverage statements that are stated relative to a reference procedure (a
+  classifier, a bounded search, a retry schedule): when the folding variant
+  generator must succeed, which tables the checked reducer and variant
+  generator must accept. The contract keeps what a reply of a contract export
+  means and does not limit declining through such a procedure, because that
   pinned the procedure itself.
 * Library facts that mention no export (reference procedures, encodings,
   narrowing lemmas). They were pinned in the proof root without stating
@@ -109,6 +109,19 @@ theorem exportedFactorRefutes_forced {ds ns es} {d : TotalUnifyWire.Dictionary}
 
 theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
   CheckedVariantsWire.correct
+
+theorem exportedGeneralVariants_malformed : GeneralVariantsWire.Malformed Executable.generalVariants :=
+  TableCandidateProofs.malformed
+
+/-- What a reply of the folding variant generator means. A reply other than
+the decline `#[#[2]]` and the request for more depth `#[#[3]]` decodes to
+rows that are each a genuine, reconstructible variant of the decoded
+observations, on any table. The family is complete when the table is a
+canonical presentation, which the caller has to know: from `certifyTable`, or
+as the assumption that the theory of the user is convergent. Nothing limits
+declining or asking for more depth. -/
+theorem exportedGeneralVariants_sound : GeneralVariantsWire.Sound Executable.generalVariants :=
+  TableCandidateProofs.sound
 
 /-- A canonical table yields a complete reply or a retry at every budget. -/
 theorem exportedGeneralVariants_progress : GeneralVariantsWire.Progress Executable.generalVariants :=
@@ -254,8 +267,12 @@ theorem exportedDefinitionVariants_complete {ds ns es roots n d rs q}
     CheckedVariantsWire.Decodes rs q (Executable.checkedVariants ds ns es roots n) :=
   exportedCheckedVariants_correct.definitions_complete _ _ _ _ _ _ _ _ h cls sorts
 
-/-- Once `certifyTable` accepts the table of a packet, the table is canonical
-in the dictionary of the packet, and the staged reducer returns the unique
+/-- The all-paths reference reducer `GeneralReductionWire.run` is no export:
+it lists every match of every rule at every step, which no depth bounds on a
+wide AC product. It stays as a reference procedure with its specification.
+
+Once `certifyTable` accepts the table of a packet, the table is canonical
+in the dictionary of the packet, and the reference reducer returns the unique
 normal form at every depth beyond the height of the rewrite tree of the term.
 The height belongs to the rewrite relation, so no reducer can keep asking for
 more depth. -/
@@ -265,8 +282,8 @@ theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
     ∃ (bound : ReferenceReduction.Bound rs)
       (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot rs)), ∀ n : UInt64,
       ReductionHeight.height bound can.terminating t < n.toNat →
-      GeneralReductionWire.Answer d rs t (Executable.generalReduce ds ns es root n) :=
-  TableCandidateProofs.reduction.completes_certified CertifiedTableWire.correct decoded hit
+      GeneralReductionWire.Answer d rs t (GeneralReductionWire.run ds ns es root n) :=
+  GeneralReductionWire.correct.completes_certified CertifiedTableWire.correct decoded hit
 
 /-- Every prefix of the host retry schedule is safe on a canonical table. Once
 the final word covers the rewrite height, the driver must return the answer. -/
@@ -274,10 +291,10 @@ theorem exportedReduction_fallback {ds ns es root d t rs}
     (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)
     (bound : ReferenceReduction.Bound rs) (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot rs))
     (earlier : List UInt64) (last : UInt64) (fits : ReductionHeight.height bound can.terminating t < last.toNat) :
-    GeneralReductionWire.Answer d rs t (TableStages.firstTerminal (Executable.generalReduce ds ns es root) last earlier) := by
-  apply TableStages.completes (TableCandidateProofs.reduction.completes decoded bound can last fits)
+    GeneralReductionWire.Answer d rs t (TableStages.firstTerminal (GeneralReductionWire.run ds ns es root) last earlier) := by
+  apply TableStages.completes (GeneralReductionWire.correct.completes decoded bound can last fits)
   intro n _
-  rcases TableCandidateProofs.reduction.valid _ _ _ _ n _ _ _ decoded with ok | ⟨_,out | clash⟩ | ⟨retry,_⟩
+  rcases GeneralReductionWire.correct.valid _ _ _ _ n _ _ _ decoded with ok | ⟨_,out | clash⟩ | ⟨retry,_⟩
   · exact .inl ok
   · exact (out bound).elim
   · obtain ⟨a,b,na,nb,ne⟩ := clash

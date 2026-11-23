@@ -4,10 +4,10 @@
 
 /* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
  * export is specified by theorems and may be used as the answer: total_unify, unpack_conjunction,
- * total_match, total_match_exists, certify_table, session_reduce, checked_reduce, path_reduce,
- * general_reduce, session_variant_check, checked_variants, general_variants. Every other export
- * is a proposer with no contract: its output may only go into a proposed family of variants that
- * tamarin_lean_session_variant_check then has to accept. */
+ * total_unify_exists, total_match, total_match_exists, certify_table, session_reduce,
+ * checked_reduce, path_reduce, session_variant_check, checked_variants. Every other export,
+ * general_variants included, is a proposer with no contract: its output may only go into a
+ * proposed family of variants that tamarin_lean_session_variant_check then has to accept. */
 
 /* The generated module initializer and export use the pinned Lean ABI. */
 extern lean_object *initialize_tamarin_x2dspec_TamarinRuntime(uint8_t builtin);
@@ -349,17 +349,9 @@ void *tamarin_lean_checked_reduce(whole_word_slice decls, const whole_word_slice
                                            atom_array(rules.data, rules.size), root, fuel));
 }
 
-extern lean_object *tamarin_general_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
-
-void *tamarin_lean_general_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                                  size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_general_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(rules.data, rules.size), root, fuel));
-}
-
 extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
 
-/* Same packet and reply layout as tamarin_lean_general_reduce, for a table that is only range
+/* Same packet and reply layout as tamarin_lean_checked_reduce, for a table that is only range
    restricted: one rewrite path is followed. {1, term} is an irreducible reduct (not known to be
    unique), {2} an unsupported table or a reduct that lost a sort, {3} a request for more depth,
    {0} a malformed packet. */

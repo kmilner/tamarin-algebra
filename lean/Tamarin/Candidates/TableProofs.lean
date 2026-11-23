@@ -4,8 +4,6 @@ import Tamarin.CheckedReductionPacket
 
 namespace Tamarin.TableCandidateProofs
 
-theorem reduction : GeneralReductionWire.Correct TableCandidate.reduce := GeneralReductionWire.correct
-
 theorem malformed : GeneralVariantsWire.Malformed TableCandidate.variants := by
   intro ds ns es roots fuel bad
   simp [TableCandidate.variants, GeneralVariantsWire.run, bad]
