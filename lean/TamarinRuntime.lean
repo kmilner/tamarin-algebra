@@ -178,13 +178,37 @@ def factorRefutes (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UI
 def unpackConjunction (nodes : PackedConjunction.Rows) (limit lhs rhs : UInt64) : PackedConjunction.Rows :=
   PackedConjunction.run nodes limit lhs rhs
 
+/-! The searches of an interruptible export under a given caller. The caller
+is an explicit argument here and an instance argument below. The compiler
+specializes the calls in the body of a function for its instance arguments
+only if the function has no instance argument of its own, so these four are
+where the searches get specialized for the declarations of a packet. -/
+
+@[noinline] def totalUnifyFor (i : Interrupt) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : Array (Array UInt64) := @TotalUnifyWire.run i decls nodes roots
+
+@[noinline] def totalUnifyExistsFor (i : Interrupt) (decls : Array UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  @TotalUnifyWire.runExists i decls nodes roots
+
+@[noinline] def pathReduceFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
+  @PathReductionWire.run i ds ns rules root fuel
+
+@[noinline] def sessionReduceFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (root fuel : UInt64) :
+    Array (Array UInt64) :=
+  @SessionReductionWire.run i ds ns rules extra root fuel
+
 @[export tamarin_total_unify]
-def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
-    Array (Array UInt64) := TotalUnifyWire.run decls nodes roots
+def totalUnify (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots
 
 @[export tamarin_total_unify_exists]
-def totalUnifyExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
-    UInt8 := TotalUnifyWire.runExists decls nodes roots
+def totalUnifyExists (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : UInt8 :=
+  Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots
 
 @[export tamarin_total_match]
 def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
@@ -199,13 +223,15 @@ def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules :
     (root fuel : UInt64) : Array (Array UInt64) := CheckedReductionWire.run decls nodes rules root fuel
 
 @[export tamarin_path_reduce]
-def pathReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := PathReductionWire.run ds ns rules root fuel
+def pathReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => pathReduceFor i ds ns rules root fuel
 
 @[export tamarin_session_reduce]
-def sessionReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (extra : Array (Array UInt64)) (root fuel : UInt64) : Array (Array UInt64) :=
-  SessionReductionWire.run ds ns rules extra root fuel
+def sessionReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (root fuel : UInt64) :
+    Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => sessionReduceFor i ds ns rules extra root fuel
 
 @[export tamarin_session_variant_check]
 def sessionVariantCheck (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)

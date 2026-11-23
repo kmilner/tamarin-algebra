@@ -104,20 +104,49 @@ are the whole of what is promised to a caller.
 
 | Export | What a reply means | Where it may decline |
 | --- | --- | --- |
-| `tamarin_total_unify` | The reply decodes to a complete, sound, domain-restricted family of unifiers of the decoded query, also in every extension of the caller's signature (`exportedTotalUnify_correct`, `_ambient`). | `#[#[0]]` on a malformed packet, or when one answer of the family adds at least `2^64 - bound` distinct variables to the query, `bound` being the least identifier above the query's variables (`TotalUnifyWire.Packet.Overflows`): the unifier names the variables it adds by consecutive identifiers from that bound (`UnifierDensity.verified_dense`). Never on a query without solutions (`_unsatisfiable`). |
-| `tamarin_total_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`exportedTotalUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets only (reply 0). |
+| `tamarin_total_unify` | The reply decodes to a complete, sound, domain-restricted family of unifiers of the decoded query, also in every extension of the caller's signature (`exportedTotalUnify_correct`, `_ambient`). | `#[#[0]]` on a malformed packet, or when one answer of the family adds at least `2^64 - bound` distinct variables to the query, `bound` being the least identifier above the query's variables (`TotalUnifyWire.Packet.Overflows`): the unifier names the variables it adds by consecutive identifiers from that bound (`UnifierDensity.verified_dense`). Never on a query without solutions (`_unsatisfiable`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
+| `tamarin_total_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`exportedTotalUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets (reply 0). 4 exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_unpack_conjunction` | The rows are the conjunction the packed command denotes, or the clash header (`exportedUnpackConjunction_correct`). | Malformed packets only. |
 | `tamarin_total_match`, `tamarin_total_match_exists` | The complete set of scoped matches, and 1 or 2 exactly as one exists, also in every signature extension. | Malformed packets only. |
 | `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` carries no information. It is the reply to a malformed packet and may be the reply to any table. Three concrete packets must be accepted (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). |
-| `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). |
-| `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). |
+| `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
+| `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_checked_reduce` | Status 1: the unique normal form, on any table, also in every signature extension (`exportedCheckedReduce_sound`). | **No limit**: `#[#[2]]` may be the reply to any decoded packet, except on sorted tables of constructor definitions or of constructor-pattern projections, where it must answer (`exportedDefinitionReduce_ambient`, `exportedDestructorReduce_ambient`). See the weak clauses below. |
 | `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 below some depth. See the weak clause below. |
 | `tamarin_checked_variants` | A reply other than `#[#[2]]` decodes to a complete set of variants with unique values, on any table (`exportedCheckedVariants_sound`). | **No limit.** It stays a contract export because it is the only solver for kind-level input, where the checker is exponential. See the weak clauses below. |
 
 No contract statement names a search, a classifier or a reference procedure. A decline is limited
 either by a condition on the decoded packet and the rewrite relation, or by a concrete packet, or
-not at all. Where it is not limited, coverage is guarded by the corpus and the benchmarks.
+by the caller's `poll`, or not at all. Where it is not limited, coverage is guarded by the corpus
+and the benchmarks.
+
+**Interruption.** The four exports whose searches can run for a time or allocate memory exponential
+in the width of an AC product (`total_unify`, `total_unify_exists`, `session_reduce`,
+`path_reduce`) take a first argument `poll : Unit → Bool`. Every statement about their answers has
+the hypothesis `poll () = false` and is otherwise the statement it was, and the reply is the
+interrupted status exactly when `poll () = true`. The searches receive `poll` as an instance
+argument `[Interrupt]` and wrap their loops in combinators that are, as definitions, the plain
+computation (`Interrupt.guard d x` is `x ()`, `Interrupt.map f xs` is `xs.map f`) and are compiled,
+through a proved `@[csimp]` equation, to code that asks `poll` first and returns a default when
+told to stop. A proof never sees the question. All instances are equal, so the library's theorems,
+which are stated for the default instance, hold for the instance an export builds. A search that
+is given no instance (the variant checker, the matchers, every proposer) runs as before and is
+compiled without the questions. [Combinators and proofs](Tamarin/Interrupt.lean)
+
+Inside Lean the stopping branch is dead: a function on `Unit` has one value. It exists for the C
+bridge, whose `poll` is a closure that starts to reply `true` when the Rust caller's request is
+cancelled or the call has asked more questions than its work bound, and keeps replying `true`.
+Two things are trusted about it, both in [`native/lean_unification.c`](../native/lean_unification.c):
+
+- the bridge hands a reply to its caller only if the closure replied `false` to every question of
+  that call, and otherwise releases the reply unread and reports the reason;
+- a run in which the closure replied `false` every time is a run of the compiled export with the
+  constant function, which is what the theorems describe. This needs nothing of the compiler
+  beyond what every export already needs, since the compiled code can observe the closure only by
+  calling it.
+
+What an interrupted search computes is therefore irrelevant. The export's own reply `#[#[4]]` is
+produced only when the very first question is answered `true`.
 
 **Proposer exports** are the other 40 (`proposer` lines of the manifest): the pieces of the
 specialised variant solvers that still run in Lean, and the folding variant generator
@@ -255,14 +284,23 @@ Known weak clauses:
   is assumed already. So `checked_reduce` could be deleted at the price of that label and of
   raw sessions, which do not follow a path, reporting every uncertified table.
 - Running time. No statement bounds the time of a call. AC matching and unification are
-  exponential in the worst case, and a call cannot be interrupted: the caller can cancel only
-  between calls. `tamarin_path_reduce` and `tamarin_session_reduce` look for the first match of
-  a rule, and that search can be exponential in the width of an AC product. Measured:
-  `select(pair(f0+…+f63, hash(x)), emap(a, b))` against a rule whose left side has a product
-  of three variables gives no answer in 120 s, at a flat 15 MB, whether or not a match exists.
-  A protocol session reaches this on a table the certifier did not accept, after
-  `checked_reduce` declined the term. The depth argument bounds rewrite steps, not the search
-  for one step.
+  exponential in the worst case. `tamarin_path_reduce` and `tamarin_session_reduce` look for
+  the first match of a rule, and that search can be exponential in the width of an AC product:
+  `select(pair(f0+…+f63, hash(x)), other)` against a rule whose left side has a product of three
+  variables gives no answer in 120 s, at a flat 15 MB. The depth argument bounds rewrite steps,
+  not the search for one step. These two exports and the two unification exports can be
+  interrupted (see Interruption above): the caller's cancellation and a bound on the number of
+  questions one call may ask stop them. Measured on the runaway queries of the fuzzing
+  campaign: the reducer returns 0.2 ms after the request and the unifier 54 ms after a
+  request made at 0.3 s; a later request takes as long as releasing what the unifier had
+  built takes (0.4 s for 0.8 GB). The questions are asked where those searches spend their
+  time: the first-match search of the bag matcher, the selection of basis solutions and the
+  construction of their answers in the homogeneous solver, the frontier and the children of a
+  component search and the partition fallback. Nothing proves that every long loop asks.
+  Still uninterruptible: `total_match` and `total_match_exists` (a fuzzing run found a
+  scoped match that ignores its cancellation), `checked_reduce` (which declines by its own
+  work limit), `certify_table`, the variant checker, which calls the unifier without a
+  `poll`, and every proposer.
 
 The repository includes a GitHub ruleset for the default branch. Importing it in Settings →
 Rules → Rulesets requires the GitHub Actions `lean-spec` check and code-owner approval for

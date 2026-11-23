@@ -201,16 +201,35 @@ def refineProblem (p : Problem s) :
     obtain ⟨ia,ib,ha,hb,ok⟩ := pairs_at [] ts z hz
     exact ⟨by simpa using ia,by simpa using ib,(List.mem_filter.mp ha).1,(List.mem_filter.mp hb).1,ok⟩)
 
+variable [Interrupt]
+
 /-- The answers of each child in order, or `none` at the first child that
 does not complete. The loop carries the finished children, so its stack does
 not grow with their number. -/
-private def gather {ι α : Type} (run : ι → Option (List α)) :
+private def gather [Interrupt] {ι α : Type} (run : ι → Option (List α)) :
     List ι → List (List α) → Option (List (List α))
   | [], done => some done.reverse
   | x :: xs, done =>
     match run x with
     | none => none
     | some a => gather run xs (a :: done)
+
+/-- `gather` as it is compiled: it asks before every child. -/
+private def gatherAsking [Interrupt] {ι α : Type} (run : ι → Option (List α)) :
+    List ι → List (List α) → Option (List (List α))
+  | [], done => some done.reverse
+  | x :: xs, done =>
+    if Interrupt.poll () then none
+    else match run x with
+      | none => none
+      | some a => gatherAsking run xs (a :: done)
+
+omit [Interrupt] in
+@[csimp] private theorem gather_eq_asking : @gather = @gatherAsking := by
+  funext i ι α run xs done
+  induction xs generalizing done with
+  | nil => rfl
+  | cons x xs ih => cases h : run x <;> simp [gather, gatherAsking, Interrupt.quiet, h, ih]
 
 private theorem gather_eq {ι α : Type} (run : ι → Option (List α)) (xs : List ι)
     (done : List (List α)) :
@@ -225,6 +244,7 @@ private theorem gather_eq {ι α : Type} (run : ι → Option (List α)) (xs : L
         List.reverse_cons, List.append_assoc, List.singleton_append]
       cases xs.mapM run <;> simp
 
+omit [Interrupt] in
 private theorem mapM_some {ι α : Type} (run : ι → Option (List α)) :
     ∀ (xs : List ι) (ys : List (List α)), xs.mapM run = some ys →
       (∀ x ∈ xs, ∃ a, run x = some a ∧ a ∈ ys) ∧

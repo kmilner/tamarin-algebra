@@ -7,8 +7,9 @@ import Tamarin.VariablesFast
 The output is a family of residual conjunctions in the original term language. -/
 namespace Tamarin.OperandBatch.Reference
 open ACSystem OperandAbstraction
-variable {sig : Signature} {n : Nat}
+variable {sig : Signature} {n : Nat} [Interrupt]
 
+omit [Interrupt] in
 private theorem sorted (f : sig.ACSym) (rows : List (Row n)) :
     ∀ v ∈ variables (abstractRows 0 f rows), v.sort = sig.acSort f := by
   rw [abstract_vars]
@@ -32,6 +33,7 @@ def split (f : sig.ACSym) (rows : List (Row n)) (term : Fin n → Term sig)
     (reserved term pending observe avoid bindings)
   answers.map fun σ => residual cols (operands 0 f term typed) σ ++ pending
 
+omit [Interrupt] in
 /-- Every original solution survives in a branch and every branch denotes
 only original solutions, including the instantiation of old bindings. -/
 theorem split_correct [DecidableEq sig.ACSym] (f : sig.ACSym) (rows : List (Row n))
@@ -83,6 +85,7 @@ variable {α : Type}
 private def columnTag (tag : Fin n → α) (v : Variable) : Option α :=
   if h : v.id < n then some (tag ⟨v.id,h⟩) else none
 
+omit [Interrupt] in
 private theorem columnTag_at (f : sig.ACSym) (tag : Fin n → α) (i : Fin n) :
     columnTag tag (column 0 f i) = some (tag i) := by
   simp [columnTag, column, i.isLt]
@@ -99,7 +102,7 @@ def splitWith (f : sig.ACSym) (rows : List (Row n)) (term : Fin n → Term sig)
   let answers := ACSystem.Reference.solveWith f abstract (sorted f rows)
     (reserved term pending observe avoid bindings) (columnTag tag)
     (fun a => a.any cap) (fun a b => a.any fun x => b.any (clash x))
-  answers.map fun σ => residual cols (operands 0 f term typed) σ ++ pending
+  Interrupt.map (fun σ => residual cols (operands 0 f term typed) σ ++ pending) answers
 
 theorem splitWith_subset {f : sig.ACSym} {rows : List (Row n)} {term typed pending observe avoid}
     {bindings : Substitution sig} {tag : Fin n → α} {cap clash child}
@@ -108,6 +111,7 @@ theorem splitWith_subset {f : sig.ACSym} {rows : List (Row n)} {term typed pendi
   obtain ⟨σ,hσ,rfl⟩ := List.mem_map.mp h
   exact List.mem_map_of_mem (ACSystem.Reference.solveWith_subset hσ)
 
+omit [Interrupt] in
 theorem split_pending {f : sig.ACSym} {rows : List (Row n)} {term typed pending observe avoid}
     {bindings : Substitution sig} {child}
     (h : child ∈ split f rows term typed pending observe avoid bindings) :
@@ -222,6 +226,7 @@ def splitProblem (f : sig.ACSym) (selected : Problem sig) (hs : SortedAt f selec
   let batch := present f selected hs
   split f batch.rows batch.table.get batch.typed pending observe avoid bindings
 
+omit [Interrupt] in
 theorem splitProblem_correct (f : sig.ACSym) (selected : Problem sig) (hs : SortedAt f selected)
     (pending original : Problem sig) (partition : original.Perm (selected ++ pending))
     (observe avoid : List Variable) (bindings ρ : Substitution sig) :
@@ -249,6 +254,7 @@ theorem splitProblemWith_subset {f : sig.ACSym} {selected : Problem sig} {hs pen
     child ∈ splitProblem f selected hs pending observe avoid bindings :=
   splitWith_subset h
 
+omit [Interrupt] in
 theorem splitProblem_pending {f : sig.ACSym} {selected : Problem sig} {hs pending observe avoid}
     {bindings : Substitution sig} {child}
     (h : child ∈ splitProblem f selected hs pending observe avoid bindings) :

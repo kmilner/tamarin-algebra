@@ -63,27 +63,110 @@ pinned.
 
 namespace Tamarin
 
+/-! An export that can be interrupted receives the caller's `poll`. When the
+first reply is `false` it is the search under the default instance, about
+which the library's theorems speak (`Interrupt.run_quiet`). -/
+
+private theorem totalUnify_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.totalUnify poll = TotalUnifyWire.run := by
+  funext ds ns es
+  exact Interrupt.run_quiet quiet _ _
+
+private theorem totalUnifyExists_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.totalUnifyExists poll = TotalUnifyWire.runExists := by
+  funext ds ns es
+  exact Interrupt.run_quiet quiet _ _
+
+private theorem pathReduce_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.pathReduce poll = PathReductionWire.run := by
+  funext ds ns es root n
+  exact Interrupt.run_quiet quiet _ _
+
+/-- A written term is not the interrupted reply. -/
+private theorem emit_answers {d : TotalUnifyWire.Dictionary} (u : Term d.sig) :
+    CheckedReductionWire.emit u ≠ #[#[4]] := by
+  unfold CheckedReductionWire.emit
+  split <;> simp
+
+private theorem session_answers {d : TotalUnifyWire.Dictionary} (u : Term (TableAmbient.sig d)) :
+    SessionWire.emit u ≠ #[#[4]] := by
+  unfold SessionWire.emit
+  split <;> simp
+
+private theorem sessionReduce_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.sessionReduce poll = SessionReductionWire.run := by
+  funext ds ns es extra root n
+  exact Interrupt.run_quiet quiet _ _
+
 /-- Every arity-correct query has a complete family on its declared signature,
 and the reply is that family fully decoded unless one of its answers adds at
 least `2^64 - bound` distinct variables to the query, `bound` being the least
 identifier above the variables of the query. Malformed input has the same
 decline status. -/
-theorem exportedTotalUnify_correct : TotalUnifyWire.Packet.Correct Executable.totalUnify :=
-  TotalUnifyWire.Packet.correct
+theorem exportedTotalUnify_correct {poll : Unit → Bool} (quiet : poll () = false) :
+    TotalUnifyWire.Packet.Correct (Executable.totalUnify poll) :=
+  totalUnify_quiet quiet ▸ TotalUnifyWire.Packet.correct
+
+/-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
+says stop. It carries no answer. -/
+theorem exportedTotalUnify_interrupted (poll : Unit → Bool) (ds ns es) :
+    Executable.totalUnify poll ds ns es = #[#[4]] ↔ poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      cases decoded : TotalUnifyWire.input ds ns es with
+      | none =>
+        rw [(exportedTotalUnify_correct quiet).malformed _ _ _ decoded] at reply
+        cases reply
+      | some packet =>
+        obtain ⟨d,p⟩ := packet
+        obtain ⟨_,_,⟨rows,shape,_⟩ | ⟨declined,_⟩⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
+        · rw [reply] at shape
+          cases shape
+        · rw [declined] at reply
+          cases reply
+  · exact fun stop => Interrupt.run_stopped stop _ _
 
 /-- The decision export answers 1 exactly when the decoded query has a
 unifier, 2 exactly when it has none, and 0 exactly when the packet does not
 decode. It never declines a decoded query. -/
-theorem exportedTotalUnifyExists_correct :
-    TotalUnifyWire.ExistsCorrect Executable.totalUnifyExists :=
-  TotalUnifyWire.existsCorrect
+theorem exportedTotalUnifyExists_correct {poll : Unit → Bool} (quiet : poll () = false) :
+    TotalUnifyWire.ExistsCorrect (Executable.totalUnifyExists poll) :=
+  totalUnifyExists_quiet quiet ▸ TotalUnifyWire.existsCorrect
+
+/-- The interrupted reply 4 is given exactly when the caller's `poll` says
+stop. It decides nothing. -/
+theorem exportedTotalUnifyExists_interrupted (poll : Unit → Bool) (ds ns es) :
+    Executable.totalUnifyExists poll ds ns es = 4 ↔ poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      cases decoded : TotalUnifyWire.input ds ns es with
+      | none =>
+        rw [(exportedTotalUnifyExists_correct quiet).malformed _ _ _ decoded] at reply
+        cases reply
+      | some packet =>
+        obtain ⟨d,p⟩ := packet
+        rcases (exportedTotalUnifyExists_correct quiet).valid _ _ _ _ _ decoded with ⟨yes,_⟩ | ⟨no,_⟩
+        · rw [yes] at reply
+          cases reply
+        · rw [no] at reply
+          cases reply
+  · exact fun stop => Interrupt.run_stopped stop _ _
 
 /-- The decision also holds in the caller's entire signature, even when only
 the declarations occurring in the terms crossed the wire. -/
-theorem exportedTotalUnifyExists_ambient {ds ns es d p}
+theorem exportedTotalUnifyExists_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) (extra : Signature) :
-    Executable.totalUnifyExists ds ns es = 1 ↔ ∃ σ, (SignatureExtension.query extra p).Solves σ := by
-  obtain ⟨answers,ok,_⟩ := exportedTotalUnify_correct.valid _ _ _ _ _ decoded
+    Executable.totalUnifyExists poll ds ns es = 1 ↔
+      ∃ σ, (SignatureExtension.query extra p).Solves σ := by
+  obtain ⟨answers,ok,_⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
   have lifted := (SignatureExtension.correctIn extra p [] ok).mathematical
   have here := ok.mathematical
   have local_iff : (∃ σ, p.Solves σ) ↔ answers ≠ [] := by
@@ -104,7 +187,7 @@ theorem exportedTotalUnifyExists_ambient {ds ns es d p}
     · intro some
       obtain ⟨σ,rest,rfl⟩ := List.exists_cons_of_ne_nil some
       exact ⟨_,lifted.sound _ List.mem_cons_self⟩
-  rcases exportedTotalUnifyExists_correct.valid _ _ _ _ _ decoded with ⟨yes,hit⟩ | ⟨no,miss⟩
+  rcases (exportedTotalUnifyExists_correct quiet).valid _ _ _ _ _ decoded with ⟨yes,hit⟩ | ⟨no,miss⟩
   · exact ⟨fun _ => ambient_iff.mpr (local_iff.mp hit),fun _ => yes⟩
   · refine ⟨fun yes => by simp [no] at yes,fun hit => ?_⟩
     exact (miss (local_iff.mpr (ambient_iff.mp hit))).elim
@@ -254,24 +337,63 @@ is not assumed, so the reply need not be the only normal form. Status 2 is
 returned only for a table that is not range restricted or when an irreducible
 reduct lost a sort, and status 3 only while some rewrite path is at least as
 long as the depth. -/
-theorem exportedPathReduce_correct : PathReductionWire.Correct Executable.pathReduce :=
-  PathReductionWire.correct
+theorem exportedPathReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
+    PathReductionWire.Correct (Executable.pathReduce poll) :=
+  pathReduce_quiet quiet ▸ PathReductionWire.correct
+
+/-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
+says stop. It carries no answer. -/
+theorem exportedPathReduce_interrupted (poll : Unit → Bool) (ds ns es root n) :
+    Executable.pathReduce poll ds ns es root n = #[#[4]] ↔ poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      rw [pathReduce_quiet quiet] at reply
+      unfold PathReductionWire.run at reply
+      repeat' split at reply
+      all_goals first
+        | exact emit_answers _ reply
+        | (simp at reply; done)
+  · exact fun stop => Interrupt.run_stopped stop _ _
 
 /-- The session reducer reads the terms of a call from further node rows, over
 the table of the rules-only packet and all ambient names. -/
-theorem exportedSessionReduce_correct : SessionReductionWire.Correct Executable.sessionReduce :=
-  SessionReductionWire.correct
+theorem exportedSessionReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
+    SessionReductionWire.Correct (Executable.sessionReduce poll) :=
+  sessionReduce_quiet quiet ▸ SessionReductionWire.correct
+
+/-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
+says stop. It carries no answer. -/
+theorem exportedSessionReduce_interrupted (poll : Unit → Bool) (ds ns es extra root n) :
+    Executable.sessionReduce poll ds ns es extra root n = #[#[4]] ↔ poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      rw [sessionReduce_quiet quiet] at reply
+      unfold SessionReductionWire.run at reply
+      repeat' split at reply
+      all_goals first
+        | exact session_answers _ reply
+        | (simp at reply; done)
+  · exact fun stop => Interrupt.run_stopped stop _ _
 
 /-- Once `certifyTable` accepts the rules-only packet `ds ns es`, every call
 that adds node rows to that packet replies with the unique normal form of the
 term the rows denote, or with a request for more depth. The certificate is
 the one of the rules-only packet. -/
-theorem exportedSessionReduce_certified {ds ns es extra root n d rs t budget}
+theorem exportedSessionReduce_certified {poll : Unit → Bool} (quiet : poll () = false)
+    {ds ns es extra root n d rs t budget}
     (decoded : SessionReductionWire.input ds ns es extra root = some ⟨d,rs,t⟩)
     (hit : Executable.certifyTable ds ns es budget = true) :
-    SessionReductionWire.Answer d rs t (Executable.sessionReduce ds ns es extra root n) ∨
-      Executable.sessionReduce ds ns es extra root n = #[#[3]] :=
-  exportedSessionReduce_correct.valid _ _ _ _ _ _ _ _ _ decoded
+    SessionReductionWire.Answer d rs t (Executable.sessionReduce poll ds ns es extra root n) ∨
+      Executable.sessionReduce poll ds ns es extra root n = #[#[3]] :=
+  (exportedSessionReduce_correct quiet).valid _ _ _ _ _ _ _ _ _ decoded
     (CertifiedTableWire.sound CertifiedTableWire.correct
       (SessionReductionWire.input_table decoded) hit)
 
@@ -279,12 +401,13 @@ theorem exportedSessionReduce_certified {ds ns es extra root n d rs t budget}
 packet replies with the unique normal form at every depth that bounds all
 rewrite paths from its term under the lifted rules. The bound is on the
 rewrite relation, so the request for more depth cannot persist. -/
-theorem exportedSessionReduce_complete {ds ns es extra root d rs t budget}
+theorem exportedSessionReduce_complete {poll : Unit → Bool} (quiet : poll () = false)
+    {ds ns es extra root d rs t budget}
     (decoded : SessionReductionWire.input ds ns es extra root = some ⟨d,rs,t⟩)
     (hit : Executable.certifyTable ds ns es budget = true) (n : UInt64)
     (within : CheckedReduction.Within (TableAmbient.liftRules rs) n.toNat t) :
-    SessionReductionWire.Answer d rs t (Executable.sessionReduce ds ns es extra root n) :=
-  exportedSessionReduce_correct.completes _ _ _ _ _ _ _ _ decoded
+    SessionReductionWire.Answer d rs t (Executable.sessionReduce poll ds ns es extra root n) :=
+  (exportedSessionReduce_correct quiet).completes _ _ _ _ _ _ _ _ decoded
     (CertifiedTableWire.sound CertifiedTableWire.correct
       (SessionReductionWire.input_table decoded) hit) n within
 
@@ -373,22 +496,22 @@ theorem exportedDestructorReduce_ambient {ds ns es root n d t rs}
 /-- The packet dictionary may contain only the query's symbols. Every reply
 other than the decline word still covers caller solutions involving other
 symbols. The hypothesis is one the caller observes. -/
-theorem exportedTotalUnify_ambient {ds ns es d p}
+theorem exportedTotalUnify_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
-    (answered : Executable.totalUnify ds ns es ≠ #[#[0]]) :
-    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalUnify ds ns es) answers ∧
+    (answered : Executable.totalUnify poll ds ns es ≠ #[#[0]]) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalUnify poll ds ns es) answers ∧
       ∀ extra : Signature, (Outcome.complete (answers.map (SignatureExtension.liftSubst extra))).CorrectIn
         (SignatureExtension.query extra p) [] := by
-  obtain ⟨answers,ok,hp | ⟨declined,_⟩⟩ := exportedTotalUnify_correct.valid _ _ _ _ _ decoded
+  obtain ⟨answers,ok,hp | ⟨declined,_⟩⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
   · exact ⟨answers,hp,fun extra => SignatureExtension.correctIn extra p [] ok⟩
   · exact (answered declined).elim
 
 /-- A decodable query without solutions is never declined: its reply is the
 bare status row of the empty family. -/
-theorem exportedTotalUnify_unsatisfiable {ds ns es d p}
+theorem exportedTotalUnify_unsatisfiable {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) (unsolvable : ¬ p.Satisfiable) :
-    Executable.totalUnify ds ns es = #[#[1]] := by
-  obtain ⟨answers,ok,reply⟩ := exportedTotalUnify_correct.valid _ _ _ _ _ decoded
+    Executable.totalUnify poll ds ns es = #[#[1]] := by
+  obtain ⟨answers,ok,reply⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
   have empty : answers = [] := by
     cases answers with
     | nil => rfl

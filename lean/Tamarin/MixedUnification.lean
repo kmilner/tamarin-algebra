@@ -6,6 +6,7 @@ import Tamarin.ForcedOperandUnifier
 
 namespace Tamarin.MixedUnification
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 open ComponentEncoding (SlotPair)
 
@@ -101,6 +102,7 @@ Answers that agree on every query variable are returned once. -/
 def verified : VerifiedUnifier s (fun _ => True) :=
   NarrowingClash.rootUnifier (DistinctAnswers.unifier (FreeFactoring.unifier (forcing rounds)))
 
+omit [Interrupt] in
 private theorem wrapped_solve (inner : VerifiedUnifier s (fun _ => True)) (p : Problem s)
     (avoid : List Variable) :
     (NarrowingClash.rootUnifier (DistinctAnswers.unifier (FreeFactoring.unifier inner))).solve

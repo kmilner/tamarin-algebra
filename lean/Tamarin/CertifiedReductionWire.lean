@@ -7,6 +7,7 @@ denotes a malformed or unrepresentable packet. The caller is responsible for
 having certified the table of the packet. -/
 namespace Tamarin.CertifiedReductionWire
 open MaudeOperations Rewriting
+variable [Interrupt]
 
 /-- Local normalization, which revisits only rewritten subterms. When its
 bound runs out, the outermost path is followed instead. -/
@@ -39,6 +40,7 @@ theorem follow_eq {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [
     | nil => rfl
     | cons x xs => exact ih x
 
+omit [Interrupt] in
 /-- The path taken is the one the total reference reducer takes. -/
 theorem choose_exact {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym]
     [DecidableEq s.Atom] {rs : Problem s} (bound : ReferenceReduction.Bound rs)
@@ -164,6 +166,7 @@ reports a table that is not range restricted or a reduct that lost a sort,
 status 3 requests more depth, and status 0 denotes a malformed packet. -/
 namespace Tamarin.PathReductionWire
 open MaudeOperations Rewriting
+variable [Interrupt]
 
 def run (ds : Array UInt64) (ns : Array (Array UInt64)) (pairs : Array UInt64) (root fuel : UInt64) :
     Array (Array UInt64) :=

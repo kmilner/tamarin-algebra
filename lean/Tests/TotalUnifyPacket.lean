@@ -3,7 +3,7 @@ import Tamarin.TotalUnifyPacket
 
 namespace Tamarin.TotalUnifyWireTests
 
-private abbrev kernel := Executable.totalUnify
+private abbrev kernel := Executable.totalUnify fun _ => false
 private def decls : Array UInt64 := #[4,7,2,2,2,2,2,8,1,2,2]
 private def nested : Array (Array UInt64) :=
   #[#[0,0,2],#[1,0,0],#[1,1,0],#[4,7,1,2],#[2,8,3]]
@@ -54,7 +54,9 @@ private def lateClash := (Array.replicate 256 (#[0,0] : Array UInt64)).flatten +
 
 -- The decision entry point agrees with the listing: 1 for a unifier, 2 for
 -- none, 0 for a malformed packet.
-private abbrev existsKernel := Executable.totalUnifyExists
+private abbrev existsKernel := Executable.totalUnifyExists fun _ => false
+#guard Executable.totalUnifyExists (fun _ => true) decls nested #[0,4] == 4
+#guard Executable.totalUnify (fun _ => true) decls nested #[0,4] == #[#[4]]
 #guard existsKernel decls nested #[0,4] == 1
 #guard existsKernel #[] #[] #[] == 1
 #guard existsKernel #[] #[#[1,0,0],#[1,1,0]] #[0,1] == 2

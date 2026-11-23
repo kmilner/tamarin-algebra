@@ -262,6 +262,8 @@ def solve (p : Problem s) (bindable : List Variable) : List (Substitution s) :=
   let domain := keys p bindable
   (queryBranches (fun v => bindable.contains v) p).map fun row => assignment row domain
 
+variable [Interrupt]
+
 /-- The first answer of `solve`, found without listing the others. -/
 def first (p : Problem s) (bindable : List Variable) : Option (Substitution s) :=
   let domain := keys p bindable
@@ -279,6 +281,7 @@ theorem first_eq (p : Problem s) (bindable : List Variable) :
     (fun e _ k => BagMatching.rowsF_eq _ (fun v => bindable.contains v) equal e.lhs e.rhs k),
     List.head?_map, BagMatching.findSome_some]
 
+omit [Interrupt] in
 private theorem around_holds (f : s.ACSym) (pattern subject : Term s)
     {out : Requirements s × List (Term s)}
     (member : out ∈ BagMatching.around (fun _ => true) equal f pattern subject) :
@@ -302,6 +305,7 @@ def subproducts (f : s.ACSym) (pattern subject : Term s) : List (Substitution s 
     found.filterMap fun out =>
       (ACRepresentation.decode f out.2).map fun rest => (assignment out.1 domain, rest)
 
+omit [Interrupt] in
 private theorem subproducts_eq (f : s.ACSym) (pattern subject : Term s) :
     subproducts f pattern subject =
       (BagMatching.around (fun _ => true) equal f pattern subject).filterMap fun out =>
@@ -311,6 +315,7 @@ private theorem subproducts_eq (f : s.ACSym) (pattern subject : Term s) :
   · next none_ => rw [none_]; rfl
   · rfl
 
+omit [Interrupt] in
 theorem subproducts_sound (f : s.ACSym) (pattern subject : Term s) {θ : Substitution s} {rest : Term s}
     (member : (θ,rest) ∈ subproducts f pattern subject) :
     EquivB subject (.ac f (θ.apply pattern) rest) := by
@@ -325,6 +330,7 @@ theorem subproducts_sound (f : s.ACSym) (pattern subject : Term s) {θ : Substit
     BagMatching.fold_cls,dec] at e
   exact Quotient.exact (Option.some.inj e)
 
+omit [Interrupt] in
 theorem subproducts_complete (f : s.ACSym) (pattern subject : Term s) (σ : Substitution s)
     {rem : Term s} (h : EquivB subject (.ac f (σ.apply pattern) rem)) :
     ∃ θ rest, (θ,rest) ∈ subproducts f pattern subject ∧

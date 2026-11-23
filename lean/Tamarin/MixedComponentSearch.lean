@@ -8,6 +8,7 @@ from the pending equations. A deferred child prevents completion of its parent. 
 namespace Tamarin.MixedUnification.ComponentSearch
 open OperandBatch.Reference
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 private def sameHead : Constraint s → Constraint s → Bool
   | .atom _ a,.atom _ b => decide (a = b)
@@ -19,6 +20,7 @@ private def sameHead : Constraint s → Constraint s → Bool
 private def compatible (cs : List (Constraint s)) :=
   cs.all fun a => cs.all fun b => a.out != b.out || sameHead a b
 
+omit [Interrupt] in
 private theorem model_compatible (q : System s) {V} (h : q.Model V) : compatible q.constraints := by
   apply List.all_eq_true.mpr
   intro a ha
@@ -37,11 +39,13 @@ private theorem model_compatible (q : System s) {V} (h : q.Model V) : compatible
 private def anchors (vs : List Variable) : Problem s := vs.map fun v => ⟨.var v,.var v⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] [DecidableEq s.ACSym] in
+omit [Interrupt] in
 private theorem anchored (p : Problem s) (vs : List Variable) (v) (h : v ∈ vs) :
     (p ++ anchors vs).Occurs v :=
   ⟨⟨.var v,.var v⟩,List.mem_append_right _ (List.mem_map_of_mem h),.inl rfl⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] [DecidableEq s.ACSym] in
+omit [Interrupt] in
 private theorem solves_anchored (p : Problem s) (vs) (δ : Substitution s) :
     (p ++ anchors vs).Solves δ ↔ p.Solves δ := by
   constructor
@@ -90,6 +94,7 @@ def ConstructorDecided (p : Problem s) (obs : List Variable) : Prop :=
   let cs := (purify (p ++ anchors (s := s) obs)).constraints
   compatible cs = false ∨ AgreeingDefinitions cs
 
+omit [Interrupt] in
 private theorem leaf_completes (p : Problem s) (obs) (h : ConstructorDecided p obs) :
     (leaf p obs).val.isSome := by
   let a := p ++ anchors (s := s) obs
@@ -114,6 +119,7 @@ private def selected (f : s.ACSym) (e : Equation s) : Bool :=
   | _ => false
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem selected_sort {f : s.ACSym} {e : Equation s} (h : selected f e) :
     HasSort e.lhs (s.acSort f) ∧ HasSort e.rhs (s.acSort f) := by
   unfold selected at h
@@ -168,6 +174,7 @@ def frontier (heads : List s.ACSym) (p : Problem s) (observe : List Variable) :
       exact ⟨c,hc,((tail c).property ρ).mpr ⟨d,hd,sol⟩⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 theorem ac_of_equiv {t : Term s} {f : s.ACSym} {a b : Term s} (h : EquivB t (.ac f a b)) :
     ∃ c d, t = .ac f c d := by
   have root := h.head_eq
@@ -179,6 +186,7 @@ private def link (x : Variable) : Equation s → Option Variable
   | _ => none
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem link_equiv {δ : Substitution s} {e : Equation s}
     (eq : EquivB (δ.apply e.lhs) (δ.apply e.rhs)) {x y : Variable} (h : link x e = some y) :
     EquivB (δ.image x) (δ.image y) := by
@@ -199,6 +207,7 @@ private def definition (x : Variable) : Equation s → Option (Term s)
   | _ => none
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem definition_equiv {δ : Substitution s} {e : Equation s}
     (eq : EquivB (δ.apply e.lhs) (δ.apply e.rhs)) {x : Variable} {t : Term s}
     (h : definition x e = some t) : EquivB (δ.image x) (δ.apply t) := by
@@ -220,6 +229,7 @@ private def near (c : Problem s) (x : Variable) : List Variable :=
   x :: (one ++ one.flatMap fun y => c.filterMap (link y))
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem near_equiv {c : Problem s} {δ : Substitution s} (sol : c.Solves δ)
     {x y : Variable} (h : y ∈ near c x) : EquivB (δ.image x) (δ.image y) := by
   rcases List.mem_cons.mp h with rfl | h
@@ -236,6 +246,7 @@ private def rigid (c : Problem s) (x : Variable) : List (Term s) :=
   (near c x).flatMap fun y => c.filterMap (definition y)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem rigid_equiv {c : Problem s} {δ : Substitution s} (sol : c.Solves δ)
     {x : Variable} {t : Term s} (h : t ∈ rigid c x) : EquivB (δ.image x) (δ.apply t) := by
   obtain ⟨y,hy,h⟩ := List.mem_flatMap.mp h
@@ -253,6 +264,7 @@ private def banned (ban : Variable → Head s → Bool) (y : Variable) : Term s 
   | t => ban y ((headModel s).eval Head.var t)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem unbanned {ban : Variable → Head s → Bool} {obs : List Variable}
     {ρ δ : Substitution s} (inside : ∀ y h, ban y h = true → y ∈ obs) (shaped : Shaped ban ρ)
     (agree : ∀ v, v ∈ obs → EquivB (ρ.image v) (δ.apply (Substitution.identity.image v)))
@@ -278,6 +290,7 @@ private def excluded (ban : Variable → Head s → Bool) (c : Problem s) : Bool
     ts.any (fun a => ts.any (NarrowingClash.clash a)) ||
       (near c x).any fun y => ts.any (banned ban y)
 
+omit [Interrupt] in
 private theorem admitted {ban : Variable → Head s → Bool} {obs : List Variable} {c : Problem s}
     {ρ : Substitution s} (inside : ∀ y h, ban y h = true → y ∈ obs) (shaped : Shaped ban ρ)
     (hd : Residual.Denotes (· ∈ obs) c .identity ρ) : excluded ban c = false := by
@@ -315,6 +328,7 @@ private def capTag (ban : Variable → Head s → Bool) (f : s.ACSym)
   t.2.any (fun y => ban y (.ac f)) || t.1.any (fun a => NarrowingClash.clash a (.ac f a a)) ||
     conflictTag ban t t
 
+omit [Interrupt] in
 private theorem clash_ac (t : Term s) (f : s.ACSym) (a b c d : Term s) :
     NarrowingClash.clash t (.ac f a b) = NarrowingClash.clash t (.ac f c d) := by
   cases t <;> rfl
@@ -327,9 +341,9 @@ private def childrenWith (ban : Variable → Head s → Bool) (p : Problem s)
   let sel := p.filter (selected f)
   let pending := p.filter (fun e => !(selected f e))
   have hs : SortedAt f sel := fun _ he => selected_sort (List.mem_filter.mp he).2
-  (splitProblemWith f sel hs pending observe [] .identity
-      (tagOf pending) (capTag ban f) (conflictTag ban)).filter
-    (fun c => !c.any NarrowingClash.impossible)
+  Interrupt.filter (fun c => !c.any NarrowingClash.impossible)
+    (splitProblemWith f sel hs pending observe [] .identity
+      (tagOf pending) (capTag ban f) (conflictTag ban))
 
 private theorem childrenWith_subset {ban : Variable → Head s → Bool} {p : Problem s}
     {f : s.ACSym} {observe : List Variable} {c : Problem s}
@@ -337,6 +351,7 @@ private theorem childrenWith_subset {ban : Variable → Head s → Bool} {p : Pr
   obtain ⟨hc,ok⟩ := List.mem_filter.mp h
   exact List.mem_filter.mpr ⟨splitProblemWith_subset hc,ok⟩
 
+omit [Interrupt] in
 /-- Operands with conflicting tags have different values in every admissible solution. -/
 private theorem no_conflict {ban : Variable → Head s → Bool} {obs : List Variable}
     {pending : Problem s} {ρ δ : Substitution s} (inside : ∀ y h, ban y h = true → y ∈ obs)
@@ -410,8 +425,8 @@ def pruned (ban : Variable → Head s → Bool) :
     List s.ACSym → Problem s → List Variable → List (Problem s)
   | [], p, _ => (RigidBranches.refineProblem p).val
   | f :: rest, p, observe =>
-    ((childrenWith ban p f observe).filter fun c => !excluded ban c).flatMap fun c =>
-      pruned ban rest c observe
+    Interrupt.flatMap (fun c => pruned ban rest c observe)
+      (Interrupt.filter (fun c => !excluded ban c) (childrenWith ban p f observe))
 
 theorem pruned_subset (ban : Variable → Head s → Bool) (heads : List s.ACSym)
     (p : Problem s) (observe : List Variable) :
@@ -584,6 +599,7 @@ private def realign (pick : Equation s → Bool) (r : Variable → Variable) (c 
   c.flatMap fun e => if pick e then restate r e else [e]
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem renamed (r : Variable → Variable) (δ : Substitution s) (t : Term s)
     (same : ∀ v, t.Occurs v → EquivB (δ.image v) (δ.image (r v))) :
     EquivB (δ.apply t) (δ.apply (t.subst (fun v => .var (r v)))) := by
@@ -592,6 +608,7 @@ private theorem renamed (r : Variable → Variable) (δ : Substitution s) (t : T
   exact Term.subst_equiv _ _ t same
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem realign_solves (pick : Equation s → Bool) (r : Variable → Variable) (c : Problem s)
     (δ : Substitution s)
     (same : c.Solves δ → ∀ v, c.Occurs v → EquivB (δ.image v) (δ.image (r v))) :
@@ -639,6 +656,7 @@ private def slotTable (k : Term s → Nat) (ts : List (Term s)) : List (Nat × V
     | .var w => some (k (.var w), w)
     | _ => none
 
+omit [Interrupt] in
 /-- Every solution gives a variable and its representative the same value. -/
 private theorem representative_equiv (c : Problem s) (obs : List Variable) (δ : Substitution s)
     (sol : c.Solves δ) (v : Variable) (hv : c.Occurs v) :

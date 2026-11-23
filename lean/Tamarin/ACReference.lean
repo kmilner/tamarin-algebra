@@ -10,7 +10,7 @@ import Tamarin.Buckets
 ordinary AC head. Inputs and answer indices use natural numbers throughout. -/
 namespace Tamarin.ACSystem.Reference
 open VariablePermutation
-variable {sig : Signature}
+variable {sig : Signature} [Interrupt]
 
 /-- Build the coordinate table from the source variable occurrences. -/
 def frame (f : sig.ACSym) (rows : List Row)
@@ -41,6 +41,7 @@ def frame (f : sig.ACSym) (rows : List Row)
 private def witness (f : sig.ACSym) (used : List Variable) (j : Nat) : Variable :=
   ⟨freshBound used + j, sig.acSort f⟩
 
+omit [Interrupt] in
 private theorem unused (f : sig.ACSym) (used : List Variable) (j : Nat) :
     witness f used j ∉ used := by
   intro h
@@ -64,6 +65,7 @@ def solve (f : sig.ACSym) (rows : List Row)
     List (Substitution sig) :=
   (branches (frame f rows sorted) avoid).map Branch.answer
 
+omit [Interrupt] in
 theorem correct (f : sig.ACSym) (rows : List Row)
     (sorted : ∀ v ∈ variables rows, v.sort = sig.acSort f) (avoid : List Variable) :
     (Outcome.complete (solve f rows sorted avoid)).CorrectIn (problem f rows) avoid := by
@@ -74,6 +76,7 @@ theorem correct (f : sig.ACSym) (rows : List Row)
     basis_answers_correct fr _ (ACBasis.hilbert_correct _) _ inject
       (fun _ => rfl) (fun j => unused f (variables rows ++ avoid) j.val)
 
+omit [Interrupt] in
 theorem range_fresh {f : sig.ACSym} {rows : List Row} {sorted avoid σ}
     (returned : σ ∈ solve f rows sorted avoid) {v w}
     (live : (problem f rows).Occurs v) (occ : (σ.image v).Occurs w) :
@@ -81,6 +84,7 @@ theorem range_fresh {f : sig.ACSym} {rows : List Row} {sorted avoid σ}
   obtain ⟨b,_,rfl⟩ := List.mem_map.mp returned
   exact b.range_fresh live occ
 
+omit [Interrupt] in
 /-- Images in a homogeneous answer are variables or products at the selected
 head. Other signatures can combine the answer using just this outer shape. -/
 theorem image_shape {f : sig.ACSym} {rows sorted avoid σ}
@@ -110,6 +114,7 @@ private def rejected {n} (tags : Vector α n) (cap : α → Bool) (clash : α �
 private def capMask {n} (tags : Vector α n) (cap : α → Bool) : BitVec n :=
   (BitVec.ofBoolListLE (List.ofFn fun i : Fin n => cap tags[i])).cast (by simp)
 
+omit [Interrupt] in
 private theorem capMask_bit {n} (tags : Vector α n) (cap : α → Bool) (i : Fin n) :
     (capMask tags cap).getLsbD i = cap tags[i] := by
   simp only [capMask, BitVec.getLsbD_cast, BitVec.getLsbD_ofBoolListLE,
@@ -131,17 +136,18 @@ private def branchesWith {f : sig.ACSym} {rows : List Row} {n} (fr : Frame f row
   let matrix := rows.map (ACBasis.encode fr.names)
   let gs := ACBasis.hilbert matrix
   let tags := Vector.ofFn fun i => tag (fr.names i)
-  (chosen gs tags cap clash).attach.map fun js =>
+  Interrupt.map (fun js =>
     selectedBranch fr gs (ACBasis.hilbert_correct matrix)
       (fun j => witness f (variables rows ++ avoid) j.val) (fun _ => rfl)
-      (fun j => unused _ _ j.val) ⟨js.val, chosen_covering gs tags cap clash js.property⟩
+      (fun j => unused _ _ j.val) ⟨js.val, chosen_covering gs tags cap clash js.property⟩)
+    (chosen gs tags cap clash).attach
 
 /-- The answers of `solve` that respect the column constraints. A capped column
 receives one witness, and two columns with conflicting tags never share one. -/
 def solveWith (f : sig.ACSym) (rows : List Row)
     (sorted : ∀ v ∈ variables rows, v.sort = sig.acSort f) (avoid : List Variable)
     (tag : Variable → α) (cap : α → Bool) (clash : α → α → Bool) : List (Substitution sig) :=
-  (branchesWith (frame f rows sorted) avoid tag cap clash).map Branch.answer
+  Interrupt.map Branch.answer (branchesWith (frame f rows sorted) avoid tag cap clash)
 
 theorem solveWith_subset {f : sig.ACSym} {rows sorted avoid} {tag : Variable → α} {cap clash σ}
     (h : σ ∈ solveWith f rows sorted avoid tag cap clash) : σ ∈ solve f rows sorted avoid := by
@@ -153,6 +159,7 @@ private def picks {n} (gs : List (ACBasis.Vec n)) (w : Fin gs.length → Variabl
     (js : List (Fin gs.length)) (i : Fin n) : List Variable :=
   js.flatMap fun j => List.replicate (gs.get j i) (w j)
 
+omit [Interrupt] in
 private theorem image_selected {n} {f : sig.ACSym} {rows : List Row} {avoid : List Variable}
     (fr : Frame f rows n) (gs : List (ACBasis.Vec n)) (basis) (w : Fin gs.length → Variable)
     (typed) (fresh) (js : {l // l ∈ Homogeneous.selections gs}) (i : Fin n) :
@@ -168,6 +175,7 @@ private theorem image_selected {n} {f : sig.ACSym} {rows : List Row} {avoid : Li
   generalize picks gs w js.val i = l
   cases l <;> rfl
 
+omit [Interrupt] in
 private theorem picks_length {n} (gs : List (ACBasis.Vec n)) (w : Fin gs.length → Variable)
     (js : List (Fin gs.length)) (i : Fin n) :
     (picks gs w js i).length = (js.map fun j => gs.get j i).sum := by
@@ -176,6 +184,7 @@ private theorem picks_length {n} (gs : List (ACBasis.Vec n)) (w : Fin gs.length 
   | cons j js ih => simp only [picks, List.flatMap_cons, List.length_append, List.length_replicate,
       List.map_cons, List.sum_cons] at ih ⊢; rw [ih]
 
+omit [Interrupt] in
 private theorem picks_single {n} (gs : List (ACBasis.Vec n)) (w : Fin gs.length → Variable)
     (js : List (Fin gs.length)) (i : Fin n) (small : (js.map fun j => gs.get j i).sum ≤ 1)
     {j} (hj : j ∈ js) (pos : 0 < gs.get j i) : picks gs w js i = [w j] := by

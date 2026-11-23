@@ -509,6 +509,8 @@ theorem input_proper {ds ns es extra root d rs t}
           have fits := graph_fieldsFit graph
           exact ⟨graph_widths graph,fetch_proper fits (extend_proper fits ext) got⟩
 
+variable [Interrupt]
+
 def run (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UInt64)
     (extra : Array (Array UInt64)) (root fuel : UInt64) : Array (Array UInt64) :=
   match input ds ns es extra root with

@@ -239,6 +239,8 @@ private def spine {d : Dictionary} : Nat → Term d.sig → Nat
 /-- Operands of a product from which a query is examined before listing. -/
 def wideProduct : Nat := 8
 
+variable [Interrupt]
+
 /-- The family of the unifier, or the empty family when the linear residuals
 of the query already show that it has no unifier. Only a query between sums
 with a product of at least `wideProduct` operands and at least 32 variable
@@ -276,19 +278,24 @@ def run (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UIn
     let ⟨_,p⟩ ← input decls nodes roots
     pack p (family p)).getD #[#[0]]
 
+omit [Interrupt] in
 theorem app_free {d : Dictionary} (f : d.sig.FreeSym) (args : Fin (d.sig.arity f) → Term d.sig) :
     app d 2 f.val (List.ofFn args) = some (.free f args) := by
   simp [app,resolve,f.property,List.get_eq_getElem,List.getElem_ofFn]
 
+omit [Interrupt] in
 theorem app_comm {d : Dictionary} (f : d.sig.CSym) (l r : Term d.sig) :
     app d 3 f.val [l,r] = some (.comm f l r) := by simp [app,resolve,f.property]
 
+omit [Interrupt] in
 theorem app_ac {d : Dictionary} (f : d.sig.ACSym) (l r : Term d.sig) :
     app d 4 f.val [l,r] = some (.ac f l r) := by simp [app,resolve,f.property,ACRepresentation.fold]
 
+omit [Interrupt] in
 theorem leaf_var {d : Dictionary} (id : UInt64) (s : SortId) :
     leaf d 0 id (sortCode s) = some (.var ⟨id.toNat,s⟩) := by cases s <;> rfl
 
+omit [Interrupt] in
 theorem leaf_atom {d : Dictionary} (a : d.sig.Atom) :
     leaf d 1 a.val.1 (sortCode a.val.2) = some (.atom a) := by
   rcases a with ⟨⟨i,k⟩,h⟩

@@ -159,13 +159,13 @@ end OtherNamespace
 # proof must then fail). Only contract exports appear: a proposer export has no
 # contract, so nothing may depend on what it computes.
 CERTIFY_RUN = "CertifiedTableWire.run ds ns rules fuel"
-TOTAL_RUN = "TotalUnifyWire.run decls nodes roots"
+TOTAL_RUN = "@TotalUnifyWire.run i decls nodes roots"
 MATCH_RUN = "TotalMatchWire.run decls nodes roots ids"
 EXISTS_RUN = "TotalMatchWire.runExists decls nodes roots ids"
 UNPACK_RUN = "PackedConjunction.run nodes limit lhs rhs"
 CHECKED_REDUCE = "CheckedReductionWire.run decls nodes rules root fuel"
-PATH_REDUCE = "PathReductionWire.run ds ns rules root fuel"
-SESSION_REDUCE = "SessionReductionWire.run ds ns rules extra root fuel"
+PATH_REDUCE = "@PathReductionWire.run i ds ns rules root fuel"
+SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
 SESSION_CHECK = "SessionVariantCheckWire.run ds ns rules extra roots family fuel work"
 CHECKED_VARIANTS = "CheckedVariantsWire.run ds ns rules roots fuel"
 EXPORT_MUTATIONS = [
@@ -179,10 +179,16 @@ EXPORT_MUTATIONS = [
     ("refuses_bilinear_table", CERTIFY_RUN,
      "(ds != BilinearWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
      "theorem exportedPhysicalBilinearTable_admitted"),
-    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem exportedTotalUnify_correct"),
-    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem exportedTotalUnify_correct"),
-    ("total_ignores_equation_tail", TOTAL_RUN, "TotalUnifyWire.run decls nodes (roots.extract 0 2)",
-     "theorem exportedTotalUnify_correct"),
+    # An interruptible export is tied to its search by one equation, on which
+    # its contract theorems rest: a wrong search breaks that equation.
+    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),
+    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem totalUnify_quiet"),
+    ("total_ignores_equation_tail", TOTAL_RUN, "@TotalUnifyWire.run i decls nodes (roots.extract 0 2)",
+     "theorem totalUnify_quiet"),
+    ("total_ignores_its_caller", "Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots",
+     "totalUnifyFor Interrupt.never decls nodes roots", "theorem exportedTotalUnify_interrupted"),
+    ("total_exists_stops_unasked", "Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots",
+     "4", "theorem totalUnifyExists_quiet"),
     ("match_ignores_scope", MATCH_RUN, "TotalMatchWire.run decls nodes roots #[]",
      "theorem exportedTotalMatch_correct"),
     ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),
@@ -205,12 +211,13 @@ EXPORT_MUTATIONS = [
      "(if (TableWire.input decls nodes rules #[root]).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
      "then #[#[2]] else CheckedReductionWire.run decls nodes rules root fuel)",
      "theorem exportedDestructorReduce_ambient"),
-    ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem exportedPathReduce_correct"),
-    ("path_reduce_omits_table", PATH_REDUCE, "PathReductionWire.run ds ns #[] root fuel",
-     "theorem exportedPathReduce_correct"),
-    ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem exportedSessionReduce_correct"),
-    ("session_reduce_ignores_term_rows", SESSION_REDUCE, "SessionReductionWire.run ds ns rules #[] root fuel",
-     "theorem exportedSessionReduce_correct"),
+    ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem pathReduce_quiet"),
+    ("path_reduce_omits_table", PATH_REDUCE, "@PathReductionWire.run i ds ns #[] root fuel",
+     "theorem pathReduce_quiet"),
+    ("path_reduce_always_interrupted", PATH_REDUCE, "#[#[4]]", "theorem pathReduce_quiet"),
+    ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem sessionReduce_quiet"),
+    ("session_reduce_ignores_term_rows", SESSION_REDUCE, "@SessionReductionWire.run i ds ns rules #[] root fuel",
+     "theorem sessionReduce_quiet"),
     ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem exportedSessionVariantCheck_correct"),
     ("variant_check_ignores_family", SESSION_CHECK,
      "SessionVariantCheckWire.run ds ns rules extra roots #[] fuel work",

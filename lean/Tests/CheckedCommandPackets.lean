@@ -67,11 +67,14 @@ private def rules : Array UInt64 := #[3,0,4,1]
 #guard CertifiedReductionWire.run ds ns #[3] 3 8 == #[#[0]]
 -- Without a certificate the same path is still an irreducible reduct. A rule
 -- with an unbound right-side variable is refused.
-#guard Executable.pathReduce ds ns rules 3 8 == CertifiedReductionWire.run ds ns rules 3 8
-#guard Executable.pathReduce ds ns rules 6 8 == CertifiedReductionWire.run ds ns rules 6 8
-#guard Executable.pathReduce ds ns rules 3 0 == #[#[3]]
-#guard Executable.pathReduce ds ns #[6,0] 3 8 == #[#[2]]
-#guard Executable.pathReduce ds ns #[3] 3 8 == #[#[0]]
+#guard Executable.pathReduce (fun _ => false) ds ns rules 3 8 == CertifiedReductionWire.run ds ns rules 3 8
+#guard Executable.pathReduce (fun _ => false) ds ns rules 6 8 == CertifiedReductionWire.run ds ns rules 6 8
+#guard Executable.pathReduce (fun _ => false) ds ns rules 3 0 == #[#[3]]
+#guard Executable.pathReduce (fun _ => false) ds ns #[6,0] 3 8 == #[#[2]]
+#guard Executable.pathReduce (fun _ => false) ds ns #[3] 3 8 == #[#[0]]
+-- A caller that says stop gets the interrupted reply, whatever the packet.
+#guard Executable.pathReduce (fun _ => true) ds ns rules 3 8 == #[#[4]]
+#guard Executable.pathReduce (fun _ => true) ds ns #[3] 3 8 == #[#[4]]
 
 -- A proposed family for fst(z),z. The identity and z := pair(x,y) are
 -- complete. The identity alone leaves a narrowing successor uncovered, the
@@ -105,7 +108,8 @@ private def both : Array (Array UInt64) :=
 private def table : Array (Array UInt64) := ns.extract 0 5
 private def queryRows : Array (Array UInt64) := ns.extract 5 7
 private def named : Array (Array UInt64) := #[#[1,77,0],#[2,0,5,0],#[2,1,6],#[2,2,6]]
-private abbrev session := Executable.sessionReduce
+private abbrev session := Executable.sessionReduce fun _ => false
+#guard Executable.sessionReduce (fun _ => true) ds table rules #[] 3 8 == #[#[4]]
 #guard Executable.certifyTable ds table rules 4
 #guard session ds table rules #[] 3 8 == CertifiedReductionWire.run ds ns rules 3 8
 #guard session ds table rules queryRows 6 8 == CertifiedReductionWire.run ds ns rules 6 8

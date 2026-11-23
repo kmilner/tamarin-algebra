@@ -6,6 +6,8 @@ namespace Tamarin.TotalUnifyWire
 
 abbrev Decision := Array UInt64 → Array (Array UInt64) → Array UInt64 → UInt8
 
+variable [Interrupt]
+
 /-- 1: a unifier exists; 2: none exists; 0: malformed packet. -/
 def runExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
   match input decls nodes roots with

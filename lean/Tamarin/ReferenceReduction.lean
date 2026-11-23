@@ -218,6 +218,8 @@ theorem exactSteps (rules : List (Equation s)) (bound : Bound rules) (a b : Term
 private theorem distinct_head (xs : List (Term s)) : (distinct xs).head? = xs.head? := by
   cases xs <;> rfl
 
+variable [Interrupt]
+
 /-- The first root rewrite in the order of `roots`. -/
 private def rootF (rules : List (Equation s)) (t : Term s) : Option (Term s) :=
   rules.findSome? fun r =>
@@ -394,6 +396,7 @@ def normalize (rules : List (Equation s)) (n : Nat) (t : Term s) : Option (Term 
   | some (u,false) => follow rules n u
   | none => none
 
+omit [Interrupt] in
 private theorem head_nil {α : Type} {xs : List α} (h : xs.head? = none) : xs = [] :=
   List.head?_eq_none_iff.mp h
 
@@ -410,6 +413,7 @@ private theorem stepHere_eq (rules : List (Equation s)) (t : Term s) :
     simp only [stepHere, atNode, BagMatching.orLater_eq, rootF_eq, extensionF_eq, List.head?_append]
   | _ => simp [stepHere, atNode, BagMatching.orLater_eq, rootF_eq]
 
+omit [Interrupt] in
 private theorem atNode_steps (rules : List (Equation s)) {t w : Term s} (h : w ∈ atNode rules t) :
     w ∈ steps rules t := by
   cases t with

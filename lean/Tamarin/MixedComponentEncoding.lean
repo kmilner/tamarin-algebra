@@ -148,6 +148,7 @@ private def heads (q : System s) [DecidableEq s.ACSym] : List s.ACSym :=
   (q.constraints.filterMap fun c => match c with | .ac _ f .. => some f | _ => none).eraseDups
 
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 private def compiledProblem (q : System s) : Problem (uniform s) := q.constraints.map equation
 
@@ -210,16 +211,19 @@ private def watched (compiled : Problem (uniform s)) (q : System s) (terms : Lis
     | _ => marks.getD (q.slot t) false
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem watched_subset (compiled : Problem (uniform s)) (q : System s) (terms : List (Term s))
     {t : Term s} (h : t ∈ watched compiled q terms) : t ∈ terms :=
   (List.mem_filter.mp h).1
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem watched_var (compiled : Problem (uniform s)) (q : System s) (terms : List (Term s))
     {v : Variable} (h : .var v ∈ terms) : .var v ∈ watched compiled q terms :=
   List.mem_filter.mpr ⟨h, rfl⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem decode_map {a b : Signature} (f : a.ACSym) (g : b.ACSym) (h : Term a → Term b)
     (step : ∀ x y, h (.ac f x y) = .ac g (h x) (h y)) (l : List (Term a)) :
     ACRepresentation.decode g (l.map h) = (ACRepresentation.decode f l).map h := by
@@ -233,6 +237,7 @@ private theorem decode_map {a b : Signature} (f : a.ACSym) (g : b.ACSym) (h : Te
     | cons y ys ih => simp only [List.map_cons, ACRepresentation.fold, step, ih]
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem decode_occurs {a : Signature} (f : a.ACSym) (l : List (Term a)) (r : Term a)
     (h : ACRepresentation.decode f l = some r) (t : Term a) (ht : t ∈ l) (v : Variable)
     (occ : t.Occurs v) : r.Occurs v := by
@@ -250,6 +255,7 @@ private theorem decode_occurs {a : Signature} (f : a.ACSym) (l : List (Term a)) 
       · exact .inr (ih y ht rfl)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem flatSide_some (k : Term s → Nat) (f : s.ACSym) (t : Term s) :
     ∃ product, flatSide k f t = some product := by
   unfold flatSide
@@ -258,6 +264,7 @@ private theorem flatSide_some (k : Term s → Nat) (f : s.ACSym) (t : Term s) :
   | cons x xs => exact ⟨_, rfl⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 /-- A solved flat product reads as the fold of the values of its operands. -/
 private theorem side_read (k : Term s → Nat) (σ : Substitution (uniform s)) (f : s.ACSym) (t : Term s)
     (product : Term (uniform s)) (shape : flatSide k f t = some product) :
@@ -270,6 +277,7 @@ private theorem side_read (k : Term s → Nat) (σ : Substitution (uniform s)) (
   exact images
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 /-- A flat product under the reserved valuation is the encoded fold of the
 values of its operands. -/
 private theorem side_reserve (k : Term s → Nat) (obs : List Variable) (V : Nat → Term s)
@@ -305,6 +313,7 @@ private theorem side_reserve (k : Term s → Nat) (obs : List Variable) (V : Nat
     exact (Option.some.inj applied).symm
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 /-- A solution of the definition of a term makes the term defined. -/
 private theorem flat_defined (k : Term s → Nat) (σ : Substitution (uniform s)) (u : Term s)
     (solved : ∀ e, flatEquation k u = some e → EquivB (σ.apply e.lhs) (σ.apply e.rhs)) :
@@ -324,6 +333,7 @@ private theorem flat_defined (k : Term s → Nat) (σ : Substitution (uniform s)
     exact ⟨_, side_read k σ f _ product shape, eq⟩
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 /-- The values of a defined term solve its definition. -/
 private theorem defined_flat (k : Term s → Nat) (obs : List Variable) (V : Nat → Term s) (u : Term s)
     (e : Equation (uniform s)) (he : flatEquation k u = some e)
@@ -371,6 +381,7 @@ private theorem defined_flat (k : Term s → Nat) (obs : List Variable) (V : Nat
     exact encode_equiv eq
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem direct_shape {e : Equation s} {f : s.ACSym} (h : direct e = some f) :
     (∃ a b, e.lhs = .ac f a b) ∧ ∃ c d, e.rhs = .ac f c d := by
   unfold direct at h
@@ -384,6 +395,7 @@ private theorem direct_shape {e : Equation s} {f : s.ACSym} (h : direct e = some
   · cases h
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem named_subterms {e : Equation s} {u : Term s} (h : u ∈ named e) :
     u ∈ subterms e.lhs ∨ u ∈ subterms e.rhs := by
   unfold named at h
@@ -523,6 +535,7 @@ private def banOf (table : List (Variable × SortId)) (y : Variable) (h : Head (
   table.any fun z => z.1 == y && !headFits z.2 h
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem fits_encode (t : Term s) (k : SortId) (le : Subsort t.rootSort k) :
     headFits k ((headModel (uniform s)).eval Head.var (encode t)) = true := by
   cases t with
@@ -530,6 +543,7 @@ private theorem fits_encode (t : Term s) (k : SortId) (le : Subsort t.rootSort k
   | _ => exact (Subsort.check_iff ..).mpr le
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem ban_source (q : System s) (p : Problem s) {y : Variable} {h : Head (uniform s)}
     (hb : banOf (narrowOf q p) y h = true) :
     ∃ v, p.Occurs v ∧ y = slot (q.slot (.var v)) ∧ headFits v.sort h = false := by
@@ -542,6 +556,7 @@ private theorem ban_source (q : System s) (p : Problem s) {y : Variable} {h : He
     exact ⟨v,(p.mem_variables v).mp (List.mem_eraseDups.mp hv),(beq_iff_eq.mp same).symm,
       by simpa using misfit⟩
 
+omit [Interrupt] in
 private theorem ban_observed (p : Problem s) (compiled : Problem (uniform s)) :
     ∀ y (h : Head (uniform s)), banOf (narrowOf (purify p) p) y h = true →
       y ∈ observationsOn compiled (purify p) (watched compiled (purify p) (inventory p)) := by
@@ -558,6 +573,7 @@ private def minimalInto {α : Type} [DecidableEq α] : List (List α) → List (
   | kept, x :: xs =>
     if kept.any (fun k => k.all (· ∈ x)) then minimalInto kept xs else minimalInto (x :: kept) xs
 
+omit [Interrupt] in
 private theorem minimalInto_mem {α : Type} [DecidableEq α] (kept xs : List (List α)) :
     ∀ y ∈ minimalInto kept xs, y ∈ kept ∨ y ∈ xs := by
   induction xs generalizing kept with
@@ -573,6 +589,7 @@ private theorem minimalInto_mem {α : Type} [DecidableEq α] (kept xs : List (Li
         · exact .inl h
       · exact .inr (List.mem_cons_of_mem _ h)
 
+omit [Interrupt] in
 private theorem minimalInto_covers {α : Type} [DecidableEq α] (kept xs : List (List α)) :
     ∀ y, y ∈ kept ∨ y ∈ xs → ∃ k ∈ minimalInto kept xs, k ⊆ y := by
   induction xs generalizing kept with
@@ -605,6 +622,7 @@ satisfies a request satisfies each request contained in it. -/
 def minimal {α : Type} [DecidableEq α] (xs : List (List α)) : List (List α) :=
   minimalInto [] (ACBasis.sortBy (fun a b => decide (a.length ≤ b.length)) xs)
 
+omit [Interrupt] in
 theorem minimal_mem {α : Type} [DecidableEq α] (xs : List (List α)) :
     ∀ y ∈ minimal xs, y ∈ xs := by
   intro y h
@@ -612,6 +630,7 @@ theorem minimal_mem {α : Type} [DecidableEq α] (xs : List (List α)) :
   · cases h
   · exact (ACBasis.mem_sortBy _ _ _).mp h
 
+omit [Interrupt] in
 theorem minimal_covers {α : Type} [DecidableEq α] (xs : List (List α)) :
     ∀ y ∈ xs, ∃ k ∈ minimal xs, k ⊆ y :=
   fun y h => minimalInto_covers _ _ y (.inr ((ACBasis.mem_sortBy _ _ _).mpr h))
@@ -658,7 +677,7 @@ private def branchOn (p : Problem s) (candidates : List (SlotPair s)) (c : Compi
       simp [rows,List.mem_filterMap,Sum.getLeft?_eq_some_iff]
     have memR {zs} : zs ∈ requests ↔ Sum.inr zs ∈ ans := by
       simp [requests,List.mem_filterMap,Sum.getRight?_eq_some_iff]
-    refine some ⟨rows.map image,again,
+    refine some ⟨Interrupt.map image rows,again,
       fun zs hz => (allowed zs (memR.mp (minimal_mem _ zs hz))).1,
       fun zs hz z mem => (List.mem_filter.mp
         ((allowed zs (memR.mp (minimal_mem _ zs hz))).2 z mem)).1,?_,?_⟩

@@ -1,4 +1,5 @@
 import Tamarin.BagMatching
+import Tamarin.Interrupt
 
 /-! First branch of the bag matcher without building the list of branches.
 Each enumerator of `BagMatching` has a counterpart here that hands its
@@ -72,7 +73,7 @@ section Bags
 variable {α β : Type} (same : α → α → Bool)
 
 /-- The first accepted sub-bag in the order of `sub`. -/
-def subF : Nat → List α → List α → (List α × List α → Option β) → Option β
+def subF [Interrupt] : Nat → List α → List α → (List α × List α → Option β) → Option β
   | 0, _, xs, k => k ([], xs)
   | _ + 1, _, [], k => k ([], [])
   | n + 1, banned, x :: xs, k =>
@@ -80,7 +81,28 @@ def subF : Nat → List α → List α → (List α × List α → Option β) �
     else orLater (subF n banned xs fun out => k (x :: out.1, out.2)) fun _ =>
       subF (n + 1) (x :: banned) xs fun out => k (out.1, x :: out.2)
 
-theorem subF_eq (n : Nat) (banned xs : List α) (k : List α × List α → Option β) :
+/-- `subF` as it is compiled: every node of the search asks first. -/
+private def subFAsking [Interrupt] :
+    Nat → List α → List α → (List α × List α → Option β) → Option β
+  | 0, _, xs, k => k ([], xs)
+  | _ + 1, _, [], k => k ([], [])
+  | n + 1, banned, x :: xs, k =>
+    if Interrupt.poll () then none
+    else if banned.any (same · x) then
+      subFAsking (n + 1) (x :: banned) xs fun out => k (out.1, x :: out.2)
+    else orLater (subFAsking n banned xs fun out => k (x :: out.1, out.2)) fun _ =>
+      subFAsking (n + 1) (x :: banned) xs fun out => k (out.1, x :: out.2)
+
+@[csimp] private theorem subF_eq_asking : @subF = @subFAsking := by
+  funext α β same i n banned xs k
+  induction xs generalizing n banned k with
+  | nil => cases n <;> rfl
+  | cons x xs ih =>
+    cases n with
+    | zero => rfl
+    | succ n => simp [subF, subFAsking, Interrupt.quiet, ih]
+
+theorem subF_eq [Interrupt] (n : Nat) (banned xs : List α) (k : List α × List α → Option β) :
     subF same n banned xs k = (sub same n banned xs).findSome? k := by
   induction xs generalizing n banned k with
   | nil => cases n <;> simp [subF, sub]
@@ -97,7 +119,7 @@ theorem subF_eq (n : Nat) (banned xs : List α) (k : List α × List α → Opti
 
 end Bags
 
-variable {s : Signature} {β : Type}
+variable {s : Signature} {β : Type} [Interrupt]
 
 /-- The first accepted combination in the order of `joined`. -/
 def joinedF (eq : Term s → Term s → Bool) :
@@ -106,6 +128,7 @@ def joinedF (eq : Term s → Term s → Bool) :
   | e :: rest, k =>
     e fun a => joinedF eq rest fun b => if consistent eq (a ++ b) then k (a ++ b) else none
 
+omit [Interrupt] in
 theorem joinedF_eq {ι : Type} (eq : Term s → Term s → Bool) (items : List ι)
     (search : ι → (Requirements s → Option β) → Option β) (rows : ι → List (Requirements s))
     (same : ∀ i ∈ items, ∀ k, search i k = (rows i).findSome? k) (k : Requirements s → Option β) :
@@ -121,6 +144,7 @@ theorem joinedF_eq {ι : Type} (eq : Term s → Term s → Bool) (items : List �
     rw [tail, List.findSome?_map]
     rfl
 
+omit [Interrupt] in
 theorem ofFn_eq_map {α : Type} {n : Nat} (f : Fin n → α) : List.ofFn f = (List.finRange n).map f := by
   rw [List.finRange, List.map_ofFn]
   rfl
@@ -204,13 +228,13 @@ theorem shareF_eq (eq : Term s → Term s → Bool) (tab : List (Bound s)) (g : 
 /-- The first accepted operand choice in the order of `operand`. -/
 def operandF (xs : List (Term s)) (single : Term s → (Requirements s → Option β) → Option β)
     (k : Partial s → Option β) : Option β :=
-  (picks same xs).findSome? fun (x, r) => single x fun row => k (row, r, [])
+  Interrupt.findSome? (fun (x, r) => single x fun row => k (row, r, [])) (picks same xs)
 
 theorem operandF_eq (xs : List (Term s)) (search : Term s → (Requirements s → Option β) → Option β)
     (single : Term s → List (Requirements s))
     (agree : ∀ x c, search x c = (single x).findSome? c) (k : Partial s → Option β) :
     operandF xs search k = (operand xs single).findSome? k := by
-  unfold operandF operand
+  unfold operandF operand Interrupt.findSome?
   rw [findSome_flatMap]
   apply findSome_congr
   rintro ⟨x, r⟩

@@ -1,4 +1,5 @@
 import Tamarin.ACCoverage
+import Tamarin.Interrupt
 
 /-! Covering selections under per-coordinate constraints. A capped coordinate
 admits one selected generator of multiplicity one, and a rejected generator is
@@ -7,7 +8,7 @@ condition, so excluded selections are never built. -/
 namespace Tamarin.Homogeneous.Constrained
 open ACBasis Coverage
 
-variable {α : Type} {n : Nat}
+variable {α : Type} {n : Nat} [Interrupt]
 
 /-- No capped coordinate lies in the support of two chosen items. -/
 def apart (caps : BitVec n) (mask : α → BitVec n) : BitVec n → List α → Bool
@@ -16,7 +17,8 @@ def apart (caps : BitVec n) (mask : α → BitVec n) : BitVec n → List α → 
 
 /-- The covering traversal restricted to admitted items and capped coordinates.
 The visiting order is that of `Coverage.enumerate`. -/
-def enumerate (full caps : BitVec n) (bad : α → Bool) : Plan α n → BitVec n → List (List α)
+def enumerate [Interrupt] (full caps : BitVec n) (bad : α → Bool) :
+    Plan α n → BitVec n → List (List α)
   | .done, covered => if covered = full then [[]] else []
   | .step x support remaining tail, covered =>
     if covered ||| remaining = full then
@@ -24,6 +26,25 @@ def enumerate (full caps : BitVec n) (bad : α → Bool) : Plan α n → BitVec 
         (if !bad x && (covered &&& support &&& caps == 0#n) then
           (enumerate full caps bad tail (covered ||| support)).map (x :: ·) else [])
     else []
+
+/-- `enumerate` as it is compiled: every node of the traversal asks first. -/
+private def enumerateAsking [Interrupt] (full caps : BitVec n) (bad : α → Bool) :
+    Plan α n → BitVec n → List (List α)
+  | .done, covered => if covered = full then [[]] else []
+  | .step x support remaining tail, covered =>
+    if Interrupt.poll () then []
+    else if covered ||| remaining = full then
+      enumerateAsking full caps bad tail covered ++
+        (if !bad x && (covered &&& support &&& caps == 0#n) then
+          Interrupt.map (x :: ·) (enumerateAsking full caps bad tail (covered ||| support)) else [])
+    else []
+
+omit [Interrupt] in
+@[csimp] private theorem enumerate_eq_asking : @enumerate = @enumerateAsking := by
+  funext α n i full caps bad plan covered
+  induction plan generalizing covered with
+  | done => rfl
+  | step x support remaining tail ih => simp [enumerate, enumerateAsking, Interrupt.quiet, ih]
 
 theorem enumerate_eq (full caps : BitVec n) (bad : α → Bool) (mask : α → BitVec n)
     (xs : List α) (seen : BitVec n) :
@@ -46,6 +67,7 @@ theorem enumerate_eq (full caps : BitVec n) (bad : α → Bool) (mask : α → B
       · simp [Function.comp_def, hb]
     · rfl
 
+omit [Interrupt] in
 private theorem le_sum (xs : List Nat) (m : Nat) (hm : m ∈ xs) : m ≤ xs.sum := by
   induction xs with
   | nil => cases hm
@@ -76,6 +98,7 @@ theorem enumerate_sublist (full caps : BitVec n) (bad : α → Bool) (mask : α 
         · cases h
     · cases h
 
+omit [Interrupt] in
 /-- A selection that is not apart uses some capped coordinate twice. -/
 theorem crowded (caps : BitVec n) (mask : α → BitVec n) (weight : α → Fin n → Nat)
     (positive : ∀ x (i : Fin n), (mask x).getLsbD i = true → 0 < weight x i)
@@ -131,7 +154,7 @@ def summary (mask : α → BitVec n) : List α → BitVec n → BitVec n → Bit
 
 /-- The selections of `enumerate` without rejected items, each in some order.
 With no fuel left the remaining items are enumerated in their given order. -/
-def search (full caps : BitVec n) (mask : α → BitVec n) :
+def search [Interrupt] (full caps : BitVec n) (mask : α → BitVec n) :
     Nat → List α → BitVec n → List (List α)
   | 0, xs, covered => enumerate full caps (fun _ => false) (prepare mask xs) covered
   | fuel + 1, xs, covered =>
@@ -151,7 +174,37 @@ def search (full caps : BitVec n) (mask : α → BitVec n) :
         | none => enumerate full caps (fun _ => false) (prepare mask xs) covered
     else []
 
+/-- `search` as it is compiled: every node of the search asks first. -/
+private def searchAsking [Interrupt] (full caps : BitVec n) (mask : α → BitVec n) :
+    Nat → List α → BitVec n → List (List α)
+  | 0, xs, covered => enumerate full caps (fun _ => false) (prepare mask xs) covered
+  | fuel + 1, xs, covered =>
+    if Interrupt.poll () then [] else
+    let xs := xs.filter fun x => covered &&& mask x &&& caps == 0#n
+    let both := summary mask xs 0#n 0#n
+    if covered ||| both.1 = full then
+      let forced := both.1 &&& ~~~both.2 &&& ~~~covered
+      match xs.find? (fun x => mask x &&& forced != 0#n) with
+      | some g =>
+        Interrupt.map (g :: ·) (searchAsking full caps mask fuel (xs.filter (· != g)) (covered ||| mask g))
+      | none =>
+        match xs.find? (fun x => mask x &&& caps != 0#n) with
+        | some g =>
+          let rest := xs.filter (· != g)
+          searchAsking full caps mask fuel rest covered ++
+            Interrupt.map (g :: ·) (searchAsking full caps mask fuel rest (covered ||| mask g))
+        | none => enumerate full caps (fun _ => false) (prepare mask xs) covered
+    else []
+
+omit [Interrupt] in
+@[csimp] private theorem search_eq_asking : @search = @searchAsking := by
+  funext α n d i full caps mask fuel xs covered
+  induction fuel generalizing xs covered with
+  | zero => rfl
+  | succ fuel ih => simp [search, searchAsking, Interrupt.quiet, ih]
+
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem exists_bit {v : BitVec n} (h : v ≠ 0#n) : ∃ i : Fin n, v.getLsbD i = true := by
   apply Classical.byContradiction
   intro none
@@ -162,12 +215,14 @@ private theorem exists_bit {v : BitVec n} (h : v ≠ 0#n) : ∃ i : Fin n, v.get
   simpa using this
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem zero_of_bits {v : BitVec n} (h : ∀ i : Fin n, v.getLsbD i = false) : v = 0#n := by
   apply BitVec.eq_of_getLsbD_eq
   intro i hi
   simpa using h ⟨i,hi⟩
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem full_iff (v : BitVec n) :
     v = BitVec.allOnes n ↔ ∀ i : Fin n, v.getLsbD i = true := by
   constructor
@@ -179,6 +234,7 @@ private theorem full_iff (v : BitVec n) :
     simpa [hi] using h ⟨i, hi⟩
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem available_bit (mask : α → BitVec n) (xs : List α) (i : Fin n) :
     (prepare mask xs).available.getLsbD i = true ↔ ∃ x ∈ xs, (mask x).getLsbD i = true := by
   induction xs with
@@ -197,10 +253,12 @@ structure Valid (caps : BitVec n) (mask : α → BitVec n) (xs : List α) (cover
   covers : ∀ i : Fin n, covered.getLsbD i = true ∨ ∃ z ∈ zs, (mask z).getLsbD i = true
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem Valid.mono {caps : BitVec n} {mask : α → BitVec n} {xs xs' covered zs}
     (h : Valid caps mask xs covered zs) (sub : ∀ z ∈ zs, z ∈ xs') :
     Valid caps mask xs' covered zs := ⟨sub, h.clear, h.apart, h.covers⟩
 
+omit [Interrupt] in
 private theorem Valid.take {caps : BitVec n} {mask : α → BitVec n} {xs xs' covered zs} {g : α}
     (h : Valid caps mask xs covered zs) (hg : g ∈ zs) (sub : ∀ z ∈ zs, z ≠ g → z ∈ xs') :
     Valid caps mask xs' (covered ||| mask g) (zs.filter (· != g)) := by
@@ -228,6 +286,7 @@ private theorem Valid.take {caps : BitVec n} {mask : α → BitVec n} {xs xs' co
       · exact .inl (by simp [← same, bit])
       · exact .inr ⟨z, List.mem_filter.mpr ⟨hz, by simpa using same⟩, bit⟩
 
+omit [Interrupt] in
 private theorem take_members {zs ys : List α} {g : α} (hg : g ∈ zs)
     (same : ∀ x, x ∈ ys ↔ x ∈ zs.filter (· != g)) : ∀ x, x ∈ g :: ys ↔ x ∈ zs := by
   intro x
@@ -307,6 +366,7 @@ theorem enumerate_covers (caps : BitVec n) (bad : α → Bool) (mask : α → Bi
     · cases h
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem summary_once (mask : α → BitVec n) (xs : List α) (once twice : BitVec n)
     (i : Fin n) : (summary mask xs once twice).1.getLsbD i = true ↔
       once.getLsbD i = true ∨ ∃ x ∈ xs, (mask x).getLsbD i = true := by
@@ -317,6 +377,7 @@ private theorem summary_once (mask : α → BitVec n) (xs : List α) (once twice
       or_assoc]
 
 omit [DecidableEq α] in
+omit [Interrupt] in
 private theorem summary_twice (mask : α → BitVec n) (xs : List α) (once twice : BitVec n)
     (i : Fin n) :
     (twice.getLsbD i = true → (summary mask xs once twice).2.getLsbD i = true) ∧
@@ -429,6 +490,7 @@ theorem search_covers (caps : BitVec n) (mask : α → BitVec n) (fuel : Nat) (x
 
 end Search
 
+omit [Interrupt] in
 /-- Valid selections are exactly those the constrained filter keeps. -/
 theorem valid_of_apart (caps : BitVec n) (mask : α → BitVec n) (seen : BitVec n) (ys : List α)
     (distinct : ys.Nodup) (h : apart caps mask seen ys = true) :
@@ -465,6 +527,8 @@ theorem valid_of_apart (caps : BitVec n) (mask : α → BitVec n) (seen : BitVec
 
 end Constrained
 
+variable [Interrupt]
+
 open ACBasis in
 /-- Covering selections that avoid every rejected generator and select at most
 one generator at each capped coordinate. Each selection lists its generators in
@@ -478,9 +542,10 @@ def constrainedSelections {n} (gs : List (Vec n)) (caps : BitVec n)
     Constrained.enumerate (BitVec.allOnes n) caps (fun _ => false)
       (Coverage.prepare (fun j => masks[j]) admitted) 0#n
   else
-    (Constrained.search (BitVec.allOnes n) caps (fun j => masks[j]) admitted.length admitted 0#n).map
-      fun ys => all.filter (ys.contains ·)
+    Interrupt.map (fun ys => all.filter (ys.contains ·))
+      (Constrained.search (BitVec.allOnes n) caps (fun j => masks[j]) admitted.length admitted 0#n)
 
+omit [Interrupt] in
 private theorem filter_members {α : Type} [DecidableEq α] {l all : List α} (sub : l.Sublist all)
     (distinct : all.Nodup) : all.filter (l.contains ·) = l := by
   induction sub with

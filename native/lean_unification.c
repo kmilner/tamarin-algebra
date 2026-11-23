@@ -307,6 +307,66 @@ static void *wrap_rows(lean_object *rows) {
     return outer;
 }
 
+/* Interruption of a long search (lean/Tamarin/Interrupt.lean).
+
+   The exports wrapped with an interrupt_watch take a function `poll : Unit -> Bool` and ask it
+   before each step of their searches. Their theorems are about a `poll` that is a function, so one
+   whose first reply is false replies false every time, and the export then returns the specified
+   answer. The closure built here is not a function: it replies true from the moment the caller's
+   flag is set or the budget of questions is spent, and from then on every time. The compiled search
+   then abandons its loops and returns something unspecified.
+
+   What is trusted here: a reply is handed to the caller only if the closure replied false to every
+   question of that call (`stopped` is still 0). Such a run cannot be told from a run with the
+   constant function, so its result is the one the theorems describe. Every other reply is released
+   unread and the call returns NULL (or status 4), with the reason in `stopped`.
+
+   cancel may be NULL. It is read, never written, and may be set by another thread at any time.
+   budget 0 means no limit. asked and stopped are outputs and are reset by every call. */
+typedef struct {
+    const uint8_t *cancel;
+    uint64_t budget;
+    uint64_t asked;
+    uint8_t stopped;
+} interrupt_watch;
+
+/* stopped: the request was cancelled, or the budget of questions is spent. */
+#define WATCH_CANCELLED 1
+#define WATCH_SPENT 2
+
+static lean_object *watch_poll(lean_object *state, lean_object *unit) {
+    interrupt_watch *watch = (interrupt_watch *)((uintptr_t)state & ~(uintptr_t)1);
+    (void)unit;
+    if (!watch->stopped) {
+        watch->asked += 1;
+        if (watch->cancel && *(const volatile uint8_t *)watch->cancel) watch->stopped = WATCH_CANCELLED;
+        else if (watch->budget && watch->asked > watch->budget) watch->stopped = WATCH_SPENT;
+    }
+    return lean_box(watch->stopped != 0);
+}
+
+/* The closure Lean receives as `poll`. Its captured argument is the address of the watch with the
+   low bit set, which Lean's reference counting takes for an unboxed scalar and never follows. The
+   closure itself is consumed by the export, and nothing in a reply refers to it. */
+static lean_object *watch_closure(interrupt_watch *watch) {
+    watch->asked = 0;
+    watch->stopped = 0;
+    lean_object *closure = lean_alloc_closure((void *)watch_poll, 2, 1);
+    lean_closure_set(closure, 0, (lean_object *)((uintptr_t)watch | 1));
+    return closure;
+}
+
+/* The reply of a watched call, or NULL when the closure ever replied true. */
+static void *watched_rows(const interrupt_watch *watch, lean_object *reply) {
+    if (watch->stopped) {
+        lean_dec(reply);
+        return NULL;
+    }
+    lean_object *outer = lean_alloc_array(1, 1);
+    lean_array_set_core(outer, 0, reply);
+    return outer;
+}
+
 extern lean_object *tamarin_unpack_conjunction(lean_object *, uint64_t, uint64_t, uint64_t);
 
 void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count,
@@ -314,7 +374,7 @@ void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count
     return wrap_rows(tamarin_unpack_conjunction(word_rows(rows, count), limit, lhs, rhs));
 }
 
-extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *);
+extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *, lean_object *);
 
 extern uint8_t tamarin_certify_table(lean_object *, lean_object *, lean_object *, uint64_t);
 
@@ -335,10 +395,12 @@ uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_sli
                                  atom_array(equations.data, equations.size));
 }
 
+/* NULL when the call was interrupted: see interrupt_watch. */
 void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice equations) {
-    return wrap_rows(tamarin_total_unify(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                        atom_array(equations.data, equations.size)));
+                               size_t count, whole_word_slice equations, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_total_unify(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
+                        atom_array(equations.data, equations.size)));
 }
 
 extern lean_object *tamarin_checked_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
@@ -349,15 +411,18 @@ void *tamarin_lean_checked_reduce(whole_word_slice decls, const whole_word_slice
                                            atom_array(rules.data, rules.size), root, fuel));
 }
 
-extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
+                                       uint64_t, uint64_t);
 
 /* Same packet and reply layout as tamarin_lean_checked_reduce, for a table that is only range
    restricted: one rewrite path is followed. {1, term} is an irreducible reduct (not known to be
    unique), {2} an unsupported table or a reduct that lost a sort, {3} a request for more depth,
-   {0} a malformed packet. */
+   {0} a malformed packet. NULL when the call was interrupted: see interrupt_watch. */
 void *tamarin_lean_path_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_path_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
+                               size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel,
+                               interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_path_reduce(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
                         atom_array(rules.data, rules.size), root, fuel));
 }
 
@@ -369,13 +434,17 @@ void *tamarin_lean_total_match(whole_word_slice decls, const whole_word_slice *r
                                         atom_array(equations.data, equations.size), atom_array(bindable.data, bindable.size)));
 }
 
-extern uint8_t tamarin_total_unify_exists(lean_object *, lean_object *, lean_object *);
+extern uint8_t tamarin_total_unify_exists(lean_object *, lean_object *, lean_object *, lean_object *);
 
-/* Same packet as tamarin_lean_total_unify. 1: a unifier exists; 2: none exists; 0: malformed packet. */
+/* Same packet as tamarin_lean_total_unify. 1: a unifier exists; 2: none exists; 0: malformed packet;
+   4: the call was interrupted and decided nothing (see interrupt_watch). */
 uint8_t tamarin_lean_total_unify_exists(whole_word_slice decls, const whole_word_slice *rows,
-                                        size_t count, whole_word_slice equations) {
-    return tamarin_total_unify_exists(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                      atom_array(equations.data, equations.size));
+                                        size_t count, whole_word_slice equations,
+                                        interrupt_watch *watch) {
+    uint8_t reply = tamarin_total_unify_exists(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
+                        atom_array(equations.data, equations.size));
+    return watch->stopped ? 4 : reply;
 }
 
 extern uint8_t tamarin_total_match_exists(lean_object *, lean_object *, lean_object *, lean_object *);
@@ -396,17 +465,19 @@ void *tamarin_lean_checked_variants(whole_word_slice decls, const whole_word_sli
 }
 
 extern lean_object *tamarin_session_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
-                                          uint64_t, uint64_t);
+                                          lean_object *, uint64_t, uint64_t);
 
 /* Reduce on the table that tamarin_lean_certify_table accepted. decls, rows and rules are exactly
    the words of that rules-only packet. The term arrives as further node rows: row i of extra has
    node index count + i, and a child index may name a table row or an earlier further row. root is
    a node index. The reply is {1, term} with the unique normal form, {3} a request for more depth,
-   or {0} for a malformed packet. */
+   or {0} for a malformed packet. NULL when the call was interrupted: see interrupt_watch. */
 void *tamarin_lean_session_reduce(whole_word_slice decls, const whole_word_slice *rows, size_t count,
                                   whole_word_slice rules, const whole_word_slice *extra,
-                                  size_t added, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_session_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
+                                  size_t added, uint64_t root, uint64_t fuel,
+                                  interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_session_reduce(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
                         atom_array(rules.data, rules.size), word_rows(extra, added), root, fuel));
 }
 

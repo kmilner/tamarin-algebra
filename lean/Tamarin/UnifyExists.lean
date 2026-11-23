@@ -10,7 +10,7 @@ has a unifier exactly when the system has a positive solution. Every other
 residual is decided by listing. The verdict is exact in both cases. -/
 namespace Tamarin.UnifyExists
 variable {s : Signature} [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym]
-  [DecidableEq s.ACSym]
+  [DecidableEq s.ACSym] [Interrupt]
 
 /-- The variables of a list of terms, if all are variables of the sort of the head. -/
 def variablesOf (f : s.ACSym) : List (Term s) → Option (List Variable)
@@ -19,6 +19,7 @@ def variablesOf (f : s.ACSym) : List (Term s) → Option (List Variable)
   | _ :: _ => none
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] in
+omit [Interrupt] in
 theorem variablesOf_spec (f : s.ACSym) (ts : List (Term s)) (vs : List Variable)
     (h : variablesOf f ts = some vs) : ts = vs.map Term.var ∧ ∀ v ∈ vs, v.sort = s.acSort f := by
   induction ts generalizing vs with
@@ -51,6 +52,7 @@ def sideOf (f : s.ACSym) (t : Term s) : Option ACSystem.Side :=
   | _ => none
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+omit [Interrupt] in
 theorem sideOf_spec (f : s.ACSym) (t : Term s) (side : ACSystem.Side) (h : sideOf f t = some side) :
     EquivB (side.term f) t ∧ ∀ v ∈ side.vars, v.sort = s.acSort f := by
   unfold sideOf at h
@@ -79,6 +81,7 @@ def rowsOf (f : s.ACSym) : Problem s → Option (List ACSystem.Row)
     | _, _ => none
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+omit [Interrupt] in
 theorem rowsOf_spec (f : s.ACSym) (q : Problem s) (rows : List ACSystem.Row)
     (h : rowsOf f q = some rows) :
     (∀ σ : Substitution s, q.Solves σ ↔ (ACSystem.problem f rows).Solves σ) ∧
@@ -123,6 +126,7 @@ def feasible {n : Nat} (matrix : List (ACBasis.Row n)) : Bool :=
   | some b => b
   | none => ACBasis.coversCoordinates (ACBasis.hilbert matrix)
 
+omit [Interrupt] in
 theorem feasible_iff {n : Nat} (matrix : List (ACBasis.Row n)) :
     feasible matrix = true ↔ ACFeasibility.Feasible matrix := by
   unfold feasible
@@ -154,6 +158,7 @@ def linear (q : Problem s) : Option Bool :=
         some (feasible (rows.map (ACBasis.encode fr.names)))
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+omit [Interrupt] in
 theorem linear_sound (q : Problem s) (b : Bool) (h : linear q = some b) :
     b = true ↔ q.Satisfiable := by
   unfold linear at h
@@ -183,6 +188,7 @@ def splitComm : Problem s → Option (Problem s × Problem s)
     | e => (splitComm es).map fun alts => (e :: alts.1, e :: alts.2)
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.ACSym] in
+omit [Interrupt] in
 theorem splitComm_spec (q : Problem s) (alts : Problem s × Problem s) (h : splitComm q = some alts)
     (σ : Substitution s) : q.Solves σ ↔ alts.1.Solves σ ∨ alts.2.Solves σ := by
   induction q generalizing alts with
@@ -229,6 +235,7 @@ def residual (p : Problem s) : Bool ⊕ Problem s :=
     let q := st.todo ++ st.kept
     if q.any NarrowingClash.impossible then .inl false else .inr q
 
+omit [Interrupt] in
 theorem residual_verdict (p : Problem s) (b : Bool) (h : residual p = .inl b) :
     b = true ↔ p.Satisfiable := by
   unfold residual at h
@@ -245,6 +252,7 @@ theorem residual_verdict (p : Problem s) (b : Bool) (h : residual p = .inl b) :
         ⟨ρ, (FreeFactoring.factor p).trace.factoring.residual ρ sol⟩
     · cases h
 
+omit [Interrupt] in
 theorem residual_same (p q : Problem s) (h : residual p = .inr q) :
     p.Satisfiable ↔ q.Satisfiable := by
   unfold residual at h
@@ -270,6 +278,7 @@ def attempt (p : Problem s) (alternatives : Problem s → Problem s → Option B
       | none => none
       | some alts => alternatives alts.1 alts.2
 
+omit [Interrupt] in
 theorem attempt_sound (p : Problem s) (alternatives : Problem s → Problem s → Option Bool)
     (sound : ∀ a c b, alternatives a c = some b → (b = true ↔ a.Satisfiable ∨ c.Satisfiable))
     (b : Bool) (h : attempt p alternatives = some b) : b = true ↔ p.Satisfiable := by
@@ -308,6 +317,7 @@ def fast : Nat → Problem s → Option Bool
   | 0, p => attempt p fun _ _ => none
   | fuel+1, p => attempt p fun a c => either (fast fuel a) fun _ => fast fuel c
 
+omit [Interrupt] in
 theorem fast_sound (fuel : Nat) (p : Problem s) (b : Bool) (h : fast fuel p = some b) :
     b = true ↔ p.Satisfiable := by
   induction fuel generalizing p b with
