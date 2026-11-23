@@ -1,6 +1,7 @@
 import Tamarin.CertifiedTableWire
 import Tamarin.CertifiedReductionWire
 import Tamarin.VariantCheckWire
+import Tamarin.VariantFold
 import Tamarin.SessionTableWire
 import TamarinRuntime.Candidates.Table
 import Tamarin.CheckedReductionWire
@@ -250,6 +251,10 @@ def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array 
 @[export tamarin_general_variants]
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := TableCandidate.variants ds ns rules roots fuel
+
+@[export tamarin_fold_variants]
+def foldVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64)
+    (fuel work : UInt64) : Array (Array UInt64) := FoldVariantsWire.run ds ns rules roots fuel work
 
 @[export tamarin_variant_overlap_agrees]
 def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=

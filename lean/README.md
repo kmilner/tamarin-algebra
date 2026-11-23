@@ -148,9 +148,16 @@ Two things are trusted about it, both in [`native/lean_unification.c`](../native
 What an interrupted search computes is therefore irrelevant. The export's own reply `#[#[4]]` is
 produced only when the very first question is answered `true`.
 
-**Proposer exports** are the other 40 (`proposer` lines of the manifest): the pieces of the
-specialised variant solvers that still run in Lean, and the folding variant generator
-`tamarin_general_variants`. They carry no contract. The Rust backend
+**Proposer exports** are the other 41 (`proposer` lines of the manifest): the pieces of the
+specialised variant solvers that still run in Lean, the folding variant generator
+`tamarin_general_variants`, and `tamarin_fold_variants`, the proposer for a sorted query that no
+specialised solver covers. The latter runs folding variant narrowing in the order of Maude's
+`VariantSearch` and `VariantFolder` on the narrowing layer and the subsumption test of the
+certificate checker: a successor that is an instance of a retained variant is dropped, a
+successor that is kept evicts the retained variants it subsumes other than its ancestors, and a
+layer is listed when it is complete ([`Tamarin/VariantFold.lean`](Tamarin/VariantFold.lean)).
+A call stops with status 3 beyond a given number of narrowing sites; the caller retries with a
+larger number and can cancel between calls. They carry no contract. The Rust backend
 assembles their output into a proposed family of variants and uses that family only after
 `tamarin_session_variant_check` accepted it; a rejected or undecided family fails the session.
 A wrong proposal, including a wrong pruning decision inside the proposer, therefore costs a

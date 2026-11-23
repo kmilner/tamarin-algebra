@@ -70,6 +70,7 @@ proposer tamarin_factor_refutes Tamarin.Executable.factorRefutes
 proposer tamarin_flat_ac_equal Tamarin.Executable.flatACEqual
 proposer tamarin_flat_ac_match Tamarin.Executable.flatACMatch
 proposer tamarin_flat_ac_residual Tamarin.Executable.flatACResidual
+proposer tamarin_fold_variants Tamarin.Executable.foldVariants
 proposer tamarin_general_variants Tamarin.Executable.generalVariants
 proposer tamarin_ground_variant Tamarin.Executable.groundVariant
 proposer tamarin_masked_operand_unify Tamarin.Executable.maskedOperandUnify

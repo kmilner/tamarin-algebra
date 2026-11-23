@@ -158,6 +158,14 @@ private def rules : Array UInt64 := #[2,3,3,4,4,5,5,6,6,7,10,12,14,0,15,1]
 -- The generic ABI distinguishes an unfinished stage from a completed family.
 #guard Executable.generalVariants ds ns rules #[2,0] 4 == #[#[3]]
 #guard (Executable.generalVariants ds ns rules #[2,0] 32)[0]? == some #[1]
+-- The folding proposer lists the two variants in the order of Maude's layers, the
+-- identity first. A budget that does not suffice is reported as unfinished, whether
+-- it bounds the narrowing sites or the rewrite steps, and a malformed packet as such.
+#guard Executable.foldVariants ds ns rules #[2,0] 64 0 ==
+  #[#[1],#[],#[0,2,0,0,2],#[],#[0,2,2,9,0]]
+#guard Executable.foldVariants ds ns rules #[2,0] 64 1 == #[#[3]]
+#guard Executable.foldVariants ds ns rules #[2,0] 2 0 == #[#[3]]
+#guard Executable.foldVariants ds ns rules #[99,0] 64 0 == #[#[0]]
 -- A competing normal endpoint for the same specialized input invalidates the family.
 #guard Executable.checkedVariants ds ns (rules ++ #[10,8]) #[2,0] 4 == #[#[2]]
 end Tamarin.GeneralVariantPacketTests

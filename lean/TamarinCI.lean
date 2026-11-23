@@ -642,7 +642,8 @@ run_cmd do
     (``Tamarin.Executable.excludeACFactors, `tamarin_exclude_ac_factors),
     (``Tamarin.Executable.excludeRoot, `tamarin_exclude_root),
     (``Tamarin.Executable.constructorVariant, `tamarin_constructor_variant),
-    (``Tamarin.Executable.generalVariants, `tamarin_general_variants)]
+    (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
+    (``Tamarin.Executable.foldVariants, `tamarin_fold_variants)]
   let expectedExports := contractExports ++ proposerExports
   for (name, symbol) in expectedExports do
     unless getExportNameFor? env name == some symbol do

@@ -6,7 +6,7 @@
  * export is specified by theorems and may be used as the answer: total_unify, unpack_conjunction,
  * total_unify_exists, total_match, total_match_exists, certify_table, session_reduce,
  * checked_reduce, path_reduce, session_variant_check, checked_variants. Every other export,
- * general_variants included, is a proposer with no contract: its output may only go into a
+ * general_variants and fold_variants included, is a proposer with no contract: its output may only go into a
  * proposed family of variants that tamarin_lean_session_variant_check then has to accept. */
 
 /* The generated module initializer and export use the pinned Lean ABI. */
@@ -507,6 +507,16 @@ void *tamarin_lean_general_variants(whole_word_slice decls, const whole_word_sli
                                     size_t count, whole_word_slice rules, whole_word_slice roots, uint64_t fuel) {
     return wrap_rows(tamarin_general_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
                     atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel));
+}
+
+extern lean_object *tamarin_fold_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+
+/* A proposer: folding variant narrowing within `work` narrowing sites. */
+void *tamarin_lean_fold_variants(whole_word_slice decls, const whole_word_slice *rows,
+                                 size_t count, whole_word_slice rules, whole_word_slice roots,
+                                 uint64_t fuel, uint64_t work) {
+    return wrap_rows(tamarin_fold_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
+                    atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel, work));
 }
 
 extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);
