@@ -128,4 +128,70 @@ theorem admits_subterm {rs : Problem d.sig} (cls : SubtermTable.Presentation rs)
   simp only [plain]
   exact SubtermTable.accepted cls fuel
 
+/-! The budget is spent only on rows that no component claims. A table that
+`admits` accepts at budget zero through components that claim each of its rows
+is therefore accepted at every budget. -/
+
+private def claimsAll {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] (ps : List (PresentationComponents.Part s))
+    (rs : Problem s) : Bool :=
+  (PresentationComponents.table ps rs).all fun r => PresentationComponents.claimed ps (ConstructorVariants.head r.lhs)
+
+private theorem accepts_budget {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] {ps : List (PresentationComponents.Part s)} {w a rs}
+    (claims : claimsAll ps rs) (ok : PresentationComponents.accepts ps w a rs) (b : Nat) :
+    PresentationComponents.accepts ps w b rs := by
+  have owned := List.all_eq_true.mp claims
+  have every (check : Equation s → Bool) : ((PresentationComponents.table ps rs).all fun r =>
+      PresentationComponents.claimed ps (ConstructorVariants.head r.lhs) || check r) = true :=
+    List.all_eq_true.mpr fun r hr => by simp [owned r hr]
+  unfold PresentationComponents.accepts at ok ⊢
+  simp only [Bool.and_eq_true] at ok ⊢
+  exact ⟨ok.1,every _⟩
+
+private def dhBudgetFree (rs : Problem d.sig) (s : Symbols d.sig)
+    (ks : Fin 3 → Variable) (parts : List (PresentationComponents.Independent (TableAmbient.sig d))) :
+    Bool :=
+  let ambient := TableAmbient.liftRules rs
+  let dh := DHWire.liftSymbols s
+  let extensions := parts.map (GroupTable.independent dh) ++
+    (BilinearTable.detect s rs).map (fun b => GroupTable.bilinear dh (BilinearTable.liftSchema b))
+  claimsAll (GroupPresentationParts.dhPart dh ks :: extensions.map GroupTable.Extension.toPart) ambient
+
+private theorem dh_budget {rs : Problem d.sig} {s ks xs parts}
+    (free : dhBudgetFree rs s ks parts) (ok : dh rs 0 s ks xs parts) (fuel : Nat) :
+    dh rs fuel s ks xs parts := by
+  simp only [dh,Bool.and_eq_true] at ok ⊢
+  exact ⟨ok.1,accepts_budget free ok.2 fuel⟩
+
+/-- Acceptance at budget zero by components that claim every row they check. -/
+def budgetFree (rs : Problem d.sig) : Bool :=
+  let ambient := TableAmbient.liftRules rs
+  if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
+    let xs := XorTable.candidates rs
+    let parts := components xs (UserAC.candidates rs)
+    (detect rs).any (fun (s,ks) => dh rs 0 s ks xs parts && dhBudgetFree rs s ks parts) ||
+      (withoutDH ambient 0 parts &&
+        claimsAll (parts.map PresentationComponents.Independent.toPart) ambient)
+  else withoutDH ambient 0 [] && claimsAll [] ambient
+
+theorem admits_of_budgetFree {rs : Problem d.sig} (ok : budgetFree rs) (fuel : Nat) :
+    admits rs fuel = true := by
+  unfold budgetFree at ok
+  unfold admits
+  split at ok
+  · rename_i active
+    simp only [active,ite_true]
+    rcases Bool.or_eq_true_iff.mp ok with dhOK | otherOK
+    · obtain ⟨⟨s,ks⟩,found,hit⟩ := (Option.any_eq_true _ _).mp dhOK
+      obtain ⟨zero,free⟩ := Bool.and_eq_true_iff.mp hit
+      exact Bool.or_eq_true_iff.mpr (.inl ((Option.any_eq_true _ _).mpr
+        ⟨⟨s,ks⟩,found,dh_budget free zero fuel⟩))
+    · obtain ⟨zero,free⟩ := Bool.and_eq_true_iff.mp otherOK
+      exact Bool.or_eq_true_iff.mpr (.inr (accepts_budget free zero fuel))
+  · rename_i plain
+    simp only [plain]
+    obtain ⟨zero,free⟩ := Bool.and_eq_true_iff.mp ok
+    exact accepts_budget free zero fuel
+
 end Tamarin.CertifiedTable

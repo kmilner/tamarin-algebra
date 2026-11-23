@@ -98,7 +98,7 @@ and distinguish exhaustion, interruption and unsupported input from a complete a
 
 The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManifest.txt).
 
-**Contract exports** are the ten whose reply the Rust backend uses as the answer. Each is
+**Contract exports** are the eighteen whose reply the Rust backend uses as the answer. Each is
 mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
 are the whole of what is promised to a caller.
 
@@ -112,6 +112,7 @@ are the whole of what is promised to a caller.
 | `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` is the reply to a malformed packet. It is never the reply to a decoded table of constructor-pattern rules whose results are subterms or constants (`exportedCertifyTable_subterm`, class `SubtermTable.Presentation`, below), nor to three concrete packets (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). On any other table it carries no information. |
 | `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
+| `tamarin_theory_*` (eight) | The export above on the packet of the theory of a Tamarin file (`Tamarin.Theory`, below): `theory_unify`, `theory_unify_exists`, `theory_match`, `theory_match_exists`, `theory_certify`, `theory_path_reduce`, `theory_reduce`, `theory_variant_check`, with the counterparts of its theorems stated over `Theory.Signature` and `Theory.Table` (`theoryUnify_correct`, …). A reduction or variant-check call takes its certificate as `theoryCertify … = true` on the same table arguments (`theoryReduce_certified`, `theoryVariantCheck_certified`, …). | As the export above, and `#[#[0]]`, 0 or `false` for arguments that are not those of a valid signature (`_foreign`). `theory_certify` is never `false` on a valid combination of builtins without user symbols or rules, at any budget (`theoryCertify_builtin`). |
 | `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 only if a term the check has to normalize (`VariantCertificate.Demand`: a term of the query, its instance by a member, or a value of a most general narrowing successor of a member) has a rewrite path at least as long as the depth, or the work limit is nonzero and below the positions of the narrowing layers (`VariantCertificate.Overcharged`); see `_decides`, `_complete` and `variantDemand_bounded`. `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 
 No contract statement names a search, a classifier or a reference procedure. A decline is limited
@@ -139,9 +140,9 @@ with an equation of Diffie-Hellman, XOR, bilinear pairing, multisets or natural 
 certifier accepts many such tables (the three packets, user AC units, defined calls in results),
 and nothing in the contract makes it.
 
-**Interruption.** The five exports whose searches can run for a time or allocate memory exponential
+**Interruption.** The ten exports whose searches can run for a time or allocate memory exponential
 in the width of an AC product (`total_unify`, `total_unify_exists`, `session_reduce`,
-`path_reduce`, `session_variant_check`) take a first argument `poll : Unit → Bool`. Every statement about their answers has
+`path_reduce`, `session_variant_check` and their `theory_*` counterparts) take a first argument `poll : Unit → Bool`. Every statement about their answers has
 the hypothesis `poll () = false` and is otherwise the statement it was, and the reply is the
 interrupted status exactly when `poll () = true`. The searches receive `poll` as an instance
 argument `[Interrupt]` and wrap their loops in combinators that are, as definitions, the plain
@@ -169,7 +170,7 @@ Two things are trusted about it, both in [`native/lean_unification.c`](../native
 What an interrupted search computes is therefore irrelevant. The export's own reply `#[#[4]]` is
 produced only when the very first question is answered `true`.
 
-**Proposer exports** are the other 42 (`proposer` lines of the manifest): the pieces of the
+**Proposer exports** are the other 43 (`proposer` lines of the manifest): the pieces of the
 specialised variant solvers that still run in Lean, the folding variant generator
 `tamarin_general_variants`, the bounded narrowing search `tamarin_checked_variants` (the proposer
 for kind-level queries and for tables the certifier did not accept), and `tamarin_fold_variants`,
@@ -191,6 +192,28 @@ rejection and never a wrong answer, which is why nothing has to be promised abou
 It follows that a proposer's output must never reach the prover without that check. The Rust
 backend has one place where a family of variants is returned (`MaudeHandle::variants`). It
 passes every family through the checker, without exception.
+
+### The theory of a Tamarin file
+
+[`Tamarin/Theory.lean`](Tamarin/Theory.lean) fixes the signature and the builtin rewrite rules in
+the specification instead of taking them from the caller. A `Theory.Signature` is what the theory
+file says: the five equational builtins (`dh`, `xor`, `bp`, `mset`, `nat`; `bp` needs `dh`), the
+arities of the other free symbols (user functions and the symbols of the rule-carrying builtins
+such as pairing and encryption, whose equations are user rules) and the number of user AC symbols.
+The builtins have fixed ids (free `exp 0, inv 1, one 2, DH_neutral 3, zero 4, pmult 5, tone 6`; AC
+`mult 0, xor 1, union 2, tplus 3`; C `em 0`), user symbol `i` has id `16 + i`, and every symbol has
+sort msg except `tplus : nat nat → nat` and `tone : → nat`. `Signature.symbols` lists them and
+`theorySignature_decodes` proves that the declaration words decode to exactly that list. The rules
+of DH (13), XOR (3) and bilinear pairing (3) are written as terms there; multisets and natural
+numbers have none. A `Theory.Table` adds the user rules as node rows indexed from 0, and
+`Table.packet` places the builtin rule rows first and the user rows after them.
+`theoryTable_rules` reads the decoded rules back without the rows: they are the builtin rules
+as terms of the decoded signature (`Term.denote`, `Signature.builtinEquations`) followed by the
+rules of the user's block decoded by itself; `theoryTable_builtin` states that a builtin-only
+table decodes to exactly its builtin rules and is certified. The terms of a
+call on a table arrive as rows numbered from 0 that may name only each other. Since a session call
+receives the same table arguments as `theory_certify`, the identity of the certified table and the
+table of the call is no longer an obligation of the caller.
 
 The theorems about proposers that were contract statements are kept, unpinned and without an
 owner, in [`TamarinProposers.lean`](TamarinProposers.lean), together with the coverage statements
@@ -882,6 +905,7 @@ lake env lean Tests/RecursiveACMatch.lean
 lake env lean Tests/StableDH.lean
 lake env lean Tests/DHProductUnique.lean
 lake env lean Tests/VariantJoin.lean
+lake env lean Tests/Theory.lean
 python3 Tests/check_audit.py
 ```
 

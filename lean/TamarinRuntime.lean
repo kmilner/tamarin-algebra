@@ -1,4 +1,5 @@
 import Tamarin.CertifiedTableWire
+import Tamarin.TheoryWire
 import Tamarin.CertifiedReductionWire
 import Tamarin.VariantCheckWire
 import Tamarin.VariantFold
@@ -301,5 +302,65 @@ def maskedOperandUnify (width mask : UInt64) (sides : Array (Array UInt64)) : Op
 @[export tamarin_project_answers]
 def projectAnswers (width : UInt64) (answers : Homogeneous.Answers) : Option Homogeneous.Answers :=
   AnswerProjection.project width answers
+
+/-! Exports over the theory of a Tamarin file (`Tamarin.Theory`): the caller
+sends the builtin flags, the arities of its other free symbols and the number
+of its AC symbols instead of declaration words, and the user rules of a table.
+The builtin rules are added here. Each export is the export above on the packet
+`Tamarin.Theory` builds; arguments that are not those of a valid signature get
+the reply to an undecodable packet. The terms of a call on a table arrive as
+rows `extra` numbered from 0, and `root`, `roots` and `family` index them. -/
+
+@[export tamarin_theory_unify]
+def theoryUnify (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  totalUnify poll (Theory.wireDeclarations flags free ac) nodes roots
+
+@[export tamarin_theory_unify_exists]
+def theoryUnifyExists (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  totalUnifyExists poll (Theory.wireDeclarations flags free ac) nodes roots
+
+@[export tamarin_theory_match]
+def theoryMatch (flags : UInt64) (free : Array UInt64) (ac : UInt64) (nodes : Array (Array UInt64))
+    (roots ids : Array UInt64) : Array (Array UInt64) :=
+  totalMatch (Theory.wireDeclarations flags free ac) nodes roots ids
+
+@[export tamarin_theory_match_exists]
+def theoryMatchExists (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots ids : Array UInt64) : UInt8 :=
+  totalMatchExists (Theory.wireDeclarations flags free ac) nodes roots ids
+
+@[export tamarin_theory_certify]
+def theoryCertify (flags : UInt64) (free : Array UInt64) (ac : UInt64) (nodes : Array (Array UInt64))
+    (rules : Array UInt64) (fuel : UInt64) : Bool :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  certifyTable p.ds p.ns p.es fuel
+
+@[export tamarin_theory_path_reduce]
+def theoryPathReduce (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (root fuel : UInt64) : Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  pathReduce poll p.ds (p.ns ++ Theory.moveRows p.ns.size extra) p.es
+    (Theory.place p.ns.size extra.size root) fuel
+
+@[export tamarin_theory_reduce]
+def theoryReduce (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (root fuel : UInt64) : Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  sessionReduce poll p.ds p.ns p.es (Theory.moveRows p.ns.size extra)
+    (Theory.place p.ns.size extra.size root) fuel
+
+@[export tamarin_theory_variant_check]
+def theoryVariantCheck (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (roots : Array UInt64) (family : Array (Array UInt64)) (fuel work : UInt64) :
+    Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  sessionVariantCheck poll p.ds p.ns p.es (Theory.moveRows p.ns.size extra)
+    (roots.map (Theory.place p.ns.size extra.size))
+    (family.map (·.map (Theory.place p.ns.size extra.size))) fuel work
 
 end Tamarin.Executable

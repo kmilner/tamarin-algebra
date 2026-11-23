@@ -37,6 +37,9 @@ import Tamarin.ProjectedRuleMatches
 import Tamarin.ACMatchSortedBags
 import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
+import Tamarin.TheoryFacts
+import Tamarin.TheoryBuiltin
+import Tamarin.TheoryRules
 import Lean
 
 /-!
@@ -45,13 +48,16 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the ten exports whose reply the Rust backend uses as the
+export, one of the eighteen exports whose reply the Rust backend uses as the
 answer, or states a property of the specification itself:
 
 * `totalUnify`, `totalUnifyExists`, `nameUnifiers`, `unpackConjunction`,
   `totalMatch`, `totalMatchExists`;
 * `certifyTable`, `sessionReduce`, `pathReduce`;
-* `sessionVariantCheck`.
+* `sessionVariantCheck`;
+* over the theory of a Tamarin file (`Tamarin.Theory`): `theoryUnify`,
+  `theoryUnifyExists`, `theoryMatch`, `theoryMatchExists`, `theoryCertify`,
+  `theoryPathReduce`, `theoryReduce`, `theoryVariantCheck`.
 
 A statement here says what a reply means in terms of the decoded packet and
 the rewrite relation. No statement names a search, a classifier or a
@@ -581,6 +587,438 @@ theorem exportedNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = f
   · rw [declined,UnifierNames.apply_declined] at read
     cases read
 
+
+/-! ## Exports over the theory of a Tamarin file
+
+The `tamarin_theory_*` exports take the theory of the file (`Theory.Signature`,
+`Theory.Table`) instead of declaration words and add the rules of the enabled
+builtins themselves. Each is the export above on the packet the theory gives
+(`Theory.Table.packet`), so every statement below is a statement above with
+that packet, the decoded query or table being read through `Theory`. A call on
+a table names the table it runs on by the same arguments `theoryCertify`
+receives, so the certificate of a session is the one of its own table. -/
+
+section Theory
+open Rewriting MaudeOperations
+
+/-- The declarations of a valid signature decode to exactly its symbols
+(`Theory.Signature.symbols`): kinds, ids, arities and sorts. -/
+theorem theorySignature_decodes {sig : Theory.Signature} (valid : sig.valid) :
+    Whole.declarations sig.declarations.toList = some sig.symbols :=
+  Theory.declarations_decode valid
+
+/-- A decoded query is over the symbols of the signature. -/
+theorem theoryQuery_symbols {sig : Theory.Signature} {ns es d p}
+    (decoded : sig.query ns es = some ⟨d,p⟩) : d.decls = sig.symbols :=
+  Theory.query_symbols decoded
+
+/-- A decoded table is over the symbols of its signature. -/
+theorem theoryTable_symbols {T : Theory.Table} {d rs q}
+    (decoded : T.input = some ⟨d,rs,q⟩) : d.decls = T.symbols :=
+  Theory.input_symbols decoded
+
+/-- The table of a reduction call is the table of the theory. -/
+theorem theoryReduceInput_table {T : Theory.Table} {extra root d rs t}
+    (decoded : T.reduceInput extra root = some ⟨d,rs,t⟩) : T.input = some ⟨d,rs,[]⟩ :=
+  Theory.reduceInput_table decoded
+
+/-- The table of a variant check is the table of the theory. -/
+theorem theoryCheckInput_table {T : Theory.Table} {extra roots family d rs q members}
+    (decoded : T.checkInput extra roots family = some ⟨d,rs,q,members⟩) : T.input = some ⟨d,rs,[]⟩ :=
+  Theory.checkInput_table decoded
+
+/-- The rules of a decoded table are the rules of its enabled builtins
+(`Theory.Signature.builtinRules`, read as terms over the decoded dictionary by
+`Theory.Term.denote`), in order, followed by rules `us`. Without user rules
+`us` is empty. When the packet has fewer than `2^64` rows, `us` is what the
+table decoder yields for the user's block read by itself, over the same
+dictionary. -/
+theorem theoryTable_rules {T : Theory.Table} {d rs q} (decoded : T.input = some ⟨d,rs,q⟩) :
+    ∃ bs us, T.builtinEquations d = some bs ∧ rs = bs ++ us ∧ (T.rules = #[] → us = []) ∧
+      (T.packet.ns.size < UInt64.size →
+        TableWire.input T.declarations T.nodes T.rules #[] = some ⟨d,us,[]⟩) :=
+  Theory.input_rules decoded
+
+/-- Without user rules a decoded table holds exactly the builtin rules. -/
+theorem theoryTable_builtinRules {T : Theory.Table} {d rs q} (decoded : T.input = some ⟨d,rs,q⟩)
+    (noRules : T.rules = #[]) : T.builtinEquations d = some rs :=
+  Theory.input_builtinRules decoded noRules
+
+/-! ### Unification and matching -/
+
+/-- Arguments that are not those of a valid signature get the reply to a
+malformed packet. -/
+theorem theoryUnify_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (ns es) :
+    Executable.theoryUnify poll flags free ac ns es = #[#[0]] :=
+  (exportedTotalUnify_correct quiet).malformed _ _ _ (Theory.wire_query_none foreign ns es)
+
+theorem theoryUnify_malformed {poll : Unit → Bool} (quiet : poll () = false) {sig : Theory.Signature}
+    {ns es} (malformed : sig.query ns es = none) :
+    Executable.theoryUnify poll sig.flags sig.free sig.ac ns es = #[#[0]] :=
+  (exportedTotalUnify_correct quiet).malformed _ _ _ ((Theory.wire_query sig ns es).trans malformed)
+
+/-- `exportedTotalUnify_correct` on the query of the signature. -/
+theorem theoryUnify_correct {poll : Unit → Bool} (quiet : poll () = false) {sig : Theory.Signature}
+    {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩) :
+    ∃ answers, (Outcome.complete answers).CorrectIn p [] ∧
+      (TotalUnifyWire.Packet.Decodes p (Executable.theoryUnify poll sig.flags sig.free sig.ac ns es) answers ∨
+        (Executable.theoryUnify poll sig.flags sig.free sig.ac ns es = #[#[0]] ∧
+          ∃ σ ∈ answers, TotalUnifyWire.Packet.Overflows p σ)) :=
+  (exportedTotalUnify_correct quiet).valid _ _ _ _ _ ((Theory.wire_query sig ns es).trans decoded)
+
+theorem theoryUnify_interrupted (poll : Unit → Bool) (flags free ac ns es) :
+    Executable.theoryUnify poll flags free ac ns es = #[#[4]] ↔ poll () = true :=
+  exportedTotalUnify_interrupted poll _ ns es
+
+theorem theoryUnify_ambient {poll : Unit → Bool} (quiet : poll () = false) {sig : Theory.Signature}
+    {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩)
+    (answered : Executable.theoryUnify poll sig.flags sig.free sig.ac ns es ≠ #[#[0]]) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.theoryUnify poll sig.flags sig.free sig.ac ns es)
+        answers ∧
+      ∀ extra : Signature, (Outcome.complete (answers.map (SignatureExtension.liftSubst extra))).CorrectIn
+        (SignatureExtension.query extra p) [] :=
+  exportedTotalUnify_ambient quiet ((Theory.wire_query sig ns es).trans decoded) answered
+
+theorem theoryUnify_unsatisfiable {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩)
+    (unsolvable : ¬ p.Satisfiable) :
+    Executable.theoryUnify poll sig.flags sig.free sig.ac ns es = #[#[1]] :=
+  exportedTotalUnify_unsatisfiable quiet ((Theory.wire_query sig ns es).trans decoded) unsolvable
+
+theorem theoryNameUnifiers_total {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩)
+    (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
+    (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal true low) true
+      (Executable.theoryUnify poll sig.flags sig.free sig.ac ns es) = some named) :
+    ∃ answers, UnifierNames.Decodes p named answers ∧
+      (Outcome.complete answers).CorrectIn p [] ∧
+      (answers ≠ [] → UnifierNames.Labelled names p) ∧
+      (∀ σ ∈ answers, UnifierNames.Fresh names p σ) ∧
+      (proposal = #[] → ∀ σ ∈ answers, UnifierNames.Unused names p σ) ∧
+      (proposal = #[] → low = false → ∀ σ ∈ answers, UnifierNames.Above names p σ) :=
+  exportedNameUnifiers_total quiet ((Theory.wire_query sig ns es).trans decoded) names heads ranges
+    proposal low read
+
+theorem theoryNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩)
+    (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
+    (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal false low) false
+      (Executable.theoryUnify poll sig.flags sig.free sig.ac ns es) = some named) :
+    ∃ answers, UnifierNames.Decodes p named answers ∧
+      (∀ σ ∈ answers, DomainRestricted p σ) ∧
+      (∀ ρ : Substitution d.sig, (∀ v, p.Occurs v → UnavailableSort.marked .nat (ρ.image v) = false) →
+        (p.Solves ρ ↔ ∃ σ ∈ answers, Substitution.InstanceOn p.Occurs ρ σ)) ∧
+      (answers ≠ [] → UnifierNames.Labelled names p) ∧
+      (∀ σ ∈ answers, UnifierNames.Fresh names p σ) ∧
+      (proposal = #[] → ∀ σ ∈ answers, UnifierNames.Unused names p σ) ∧
+      (proposal = #[] → low = false → ∀ σ ∈ answers, UnifierNames.Above names p σ) :=
+  exportedNameUnifiers_natFree quiet ((Theory.wire_query sig ns es).trans decoded) names heads ranges
+    proposal low read
+
+theorem theoryUnifyExists_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (ns es) :
+    Executable.theoryUnifyExists poll flags free ac ns es = 0 :=
+  (exportedTotalUnifyExists_correct quiet).malformed _ _ _ (Theory.wire_query_none foreign ns es)
+
+theorem theoryUnifyExists_malformed {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es} (malformed : sig.query ns es = none) :
+    Executable.theoryUnifyExists poll sig.flags sig.free sig.ac ns es = 0 :=
+  (exportedTotalUnifyExists_correct quiet).malformed _ _ _ ((Theory.wire_query sig ns es).trans malformed)
+
+theorem theoryUnifyExists_correct {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩) :
+    (Executable.theoryUnifyExists poll sig.flags sig.free sig.ac ns es = 1 ∧ ∃ σ, p.Solves σ) ∨
+      (Executable.theoryUnifyExists poll sig.flags sig.free sig.ac ns es = 2 ∧ ¬ ∃ σ, p.Solves σ) :=
+  (exportedTotalUnifyExists_correct quiet).valid _ _ _ _ _ ((Theory.wire_query sig ns es).trans decoded)
+
+theorem theoryUnifyExists_interrupted (poll : Unit → Bool) (flags free ac ns es) :
+    Executable.theoryUnifyExists poll flags free ac ns es = 4 ↔ poll () = true :=
+  exportedTotalUnifyExists_interrupted poll _ ns es
+
+theorem theoryUnifyExists_ambient {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩) (extra : Signature) :
+    Executable.theoryUnifyExists poll sig.flags sig.free sig.ac ns es = 1 ↔
+      ∃ σ, (SignatureExtension.query extra p).Solves σ :=
+  exportedTotalUnifyExists_ambient quiet ((Theory.wire_query sig ns es).trans decoded) extra
+
+theorem theoryMatch_foreign {flags free ac} (foreign : Theory.Signature.ofWire flags free ac = none)
+    (ns es ids) : Executable.theoryMatch flags free ac ns es ids = #[#[0]] :=
+  exportedTotalMatch_correct.malformed _ _ _ ids (Theory.wire_query_none foreign ns es)
+
+theorem theoryMatch_malformed {sig : Theory.Signature} {ns es} (malformed : sig.query ns es = none)
+    (ids) : Executable.theoryMatch sig.flags sig.free sig.ac ns es ids = #[#[0]] :=
+  exportedTotalMatch_correct.malformed _ _ _ ids ((Theory.wire_query sig ns es).trans malformed)
+
+theorem theoryMatch_correct {sig : Theory.Signature} {ns es d p} (ids)
+    (decoded : sig.query ns es = some ⟨d,p⟩) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.theoryMatch sig.flags sig.free sig.ac ns es ids)
+        answers ∧ Matching.Complete p (TotalMatchWire.Bindable ids) answers :=
+  exportedTotalMatch_correct.valid _ _ _ ids _ _ ((Theory.wire_query sig ns es).trans decoded)
+
+theorem theoryMatch_ambient {sig : Theory.Signature} {ns es d p} (ids)
+    (decoded : sig.query ns es = some ⟨d,p⟩) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.theoryMatch sig.flags sig.free sig.ac ns es ids)
+        answers ∧
+      ∀ extra : Signature, Matching.Complete (SignatureExtension.query extra p) (TotalMatchWire.Bindable ids)
+        (answers.map (SignatureExtension.liftSubst extra)) :=
+  exportedTotalMatch_ambient ids ((Theory.wire_query sig ns es).trans decoded)
+
+theorem theoryMatchExists_foreign {flags free ac} (foreign : Theory.Signature.ofWire flags free ac = none)
+    (ns es ids) : Executable.theoryMatchExists flags free ac ns es ids = 0 :=
+  exportedTotalMatchExists_correct.malformed _ _ _ ids (Theory.wire_query_none foreign ns es)
+
+theorem theoryMatchExists_malformed {sig : Theory.Signature} {ns es}
+    (malformed : sig.query ns es = none) (ids) :
+    Executable.theoryMatchExists sig.flags sig.free sig.ac ns es ids = 0 :=
+  exportedTotalMatchExists_correct.malformed _ _ _ ids ((Theory.wire_query sig ns es).trans malformed)
+
+theorem theoryMatchExists_correct {sig : Theory.Signature} {ns es d p} (ids)
+    (decoded : sig.query ns es = some ⟨d,p⟩) :
+    (Executable.theoryMatchExists sig.flags sig.free sig.ac ns es ids = 1 ∧
+        ∃ σ, Matching.Matches p σ ∧ Matching.Scoped p (TotalMatchWire.Bindable ids) σ) ∨
+      (Executable.theoryMatchExists sig.flags sig.free sig.ac ns es ids = 2 ∧
+        ¬ ∃ σ, Matching.Matches p σ ∧ Matching.Scoped p (TotalMatchWire.Bindable ids) σ) :=
+  exportedTotalMatchExists_correct.valid _ _ _ ids _ _ ((Theory.wire_query sig ns es).trans decoded)
+
+theorem theoryMatchExists_ambient {sig : Theory.Signature} {ns es d p} (ids)
+    (decoded : sig.query ns es = some ⟨d,p⟩) (extra : Signature) :
+    Executable.theoryMatchExists sig.flags sig.free sig.ac ns es ids = 1 ↔
+      ∃ σ, Matching.Matches (SignatureExtension.query extra p) σ ∧
+        Matching.Scoped (SignatureExtension.query extra p) (TotalMatchWire.Bindable ids) σ :=
+  exportedTotalMatchExists_ambient ids ((Theory.wire_query sig ns es).trans decoded) extra
+
+/-! ### Tables -/
+
+theorem theoryCertify_foreign {flags free ac} (foreign : Theory.Signature.ofWire flags free ac = none)
+    (nodes rules fuel) : Executable.theoryCertify flags free ac nodes rules fuel = false := by
+  have spec := CertifiedTableWire.correct (Theory.wirePacket flags free ac nodes rules).ds
+    (Theory.wirePacket flags free ac nodes rules).ns (Theory.wirePacket flags free ac nodes rules).es fuel
+  rw [(Theory.wire_none (nodes := nodes) (rules := rules) foreign).1 #[]] at spec
+  exact spec
+
+/-- What `true` means: the table of the theory, its builtin rules and the user
+rules, decodes and is certified (`exportedCertifyTable_sound`). -/
+theorem theoryCertify_sound {T : Theory.Table} {fuel}
+    (hit : Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules fuel = true) :
+    ∃ d rs, T.input = some ⟨d,rs,[]⟩ ∧ CertifiedTableWire.Certified rs := by
+  obtain ⟨d,rs,decoded,certified⟩ := exportedCertifyTable_sound hit
+  exact ⟨d,rs,(Theory.wire_table T).symm.trans decoded,certified⟩
+
+/-- `exportedCertifyTable_subterm` on the table of the theory. -/
+theorem theoryCertify_subterm {T : Theory.Table} {d rs q} (decoded : T.input = some ⟨d,rs,q⟩)
+    (cls : SubtermTable.Presentation rs) (fuel : UInt64) :
+    Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules fuel = true :=
+  exportedCertifyTable_subterm ((Theory.wire_table T).trans decoded) cls fuel
+
+/-- Every valid combination of the builtins, without user symbols or rules, is
+certified at every budget. -/
+theorem theoryCertify_builtin (sig : Theory.Signature) (valid : sig.valid) (noFree : sig.free = #[])
+    (noAC : sig.ac = 0) (fuel : UInt64) :
+    Executable.theoryCertify sig.flags #[] 0 #[] #[] fuel = true := by
+  have packet := Theory.wirePacket_valid (T := { sig with nodes := #[], rules := #[] }) valid
+  simp only [noFree, noAC] at packet
+  have certified := Theory.builtin_certified sig valid noFree noAC fuel
+  unfold Executable.theoryCertify Executable.certifyTable
+  rw [packet]
+  exact certified
+
+/-- A valid combination of builtins without user symbols or rules decodes to
+exactly its builtin rules, and that table is certified. -/
+theorem theoryTable_builtin (sig : Theory.Signature) (valid : sig.valid) (noFree : sig.free = #[])
+    (noAC : sig.ac = 0) :
+    ∃ d rs, ({ sig with nodes := #[], rules := #[] } : Theory.Table).input = some ⟨d,rs,[]⟩ ∧
+      sig.builtinEquations d = some rs ∧ CertifiedTableWire.Certified rs := by
+  have hit : Executable.theoryCertify ({ sig with nodes := #[], rules := #[] } : Theory.Table).flags
+      ({ sig with nodes := #[], rules := #[] } : Theory.Table).free
+      ({ sig with nodes := #[], rules := #[] } : Theory.Table).ac #[] #[] 0 = true := by
+    show Executable.theoryCertify sig.flags sig.free sig.ac #[] #[] 0 = true
+    rw [noFree, noAC]
+    exact theoryCertify_builtin sig valid noFree noAC 0
+  obtain ⟨d,rs,decoded,certified⟩ := theoryCertify_sound hit
+  exact ⟨d,rs,decoded,Theory.input_builtinRules decoded rfl,certified⟩
+
+/-! ### Reduction -/
+
+theorem theoryPathReduce_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (nodes rules extra root n) :
+    Executable.theoryPathReduce poll flags free ac nodes rules extra root n = #[#[0]] :=
+  (exportedPathReduce_correct quiet).malformed _ _ _ _ _
+    ((Theory.wire_none (nodes := nodes) (rules := rules) foreign).2.1 _ _)
+
+theorem theoryPathReduce_malformed {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra root} (malformed : T.pathInput extra root = none) (n) :
+    Executable.theoryPathReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[0]] :=
+  (exportedPathReduce_correct quiet).malformed _ _ _ _ _ ((Theory.wire_path T extra root).trans malformed)
+
+/-- `exportedPathReduce_correct` on the table of the theory and the term at
+`root` of `extra`. -/
+theorem theoryPathReduce_correct {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra root d t rs} (decoded : T.pathInput extra root = some ⟨d,rs,[t]⟩)
+    (n : UInt64) :
+    (∃ u, CheckedReductionWire.Decodes d
+        (Executable.theoryPathReduce poll T.flags T.free T.ac T.nodes T.rules extra root n) u ∧
+      NormalForm (ruleRoot rs) t u ∧
+      ∀ extra : Signature, NormalForm (ruleRoot (SignatureExtension.query extra rs))
+        (SignatureExtension.embed extra t) (SignatureExtension.embed extra u)) ∨
+    (Executable.theoryPathReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[2]] ∧
+      (¬ ReferenceReduction.Bound rs ∨
+        ∃ u, Reduces (ruleRoot rs) t u ∧ Normal (ruleRoot rs) u ∧ ¬ ∀ k, HasSort t k → HasSort u k)) ∨
+    (Executable.theoryPathReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[3]] ∧
+      ReferenceReduction.Bound rs ∧ ¬ CheckedReduction.Within rs n.toNat t) :=
+  (exportedPathReduce_correct quiet).valid _ _ _ _ n _ _ _ ((Theory.wire_path T extra root).trans decoded)
+
+theorem theoryPathReduce_interrupted (poll : Unit → Bool) (flags free ac nodes rules extra root n) :
+    Executable.theoryPathReduce poll flags free ac nodes rules extra root n = #[#[4]] ↔
+      poll () = true :=
+  exportedPathReduce_interrupted poll _ _ _ _ n
+
+theorem theoryReduce_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (nodes rules extra root n) :
+    Executable.theoryReduce poll flags free ac nodes rules extra root n = #[#[0]] :=
+  (exportedSessionReduce_correct quiet).malformed _ _ _ _ _ n
+    ((Theory.wire_none (nodes := nodes) (rules := rules) foreign).2.2.1 _ _)
+
+theorem theoryReduce_malformed {poll : Unit → Bool} (quiet : poll () = false) {T : Theory.Table}
+    {extra root} (malformed : T.reduceInput extra root = none) (n) :
+    Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[0]] :=
+  (exportedSessionReduce_correct quiet).malformed _ _ _ _ _ n
+    ((Theory.wire_reduce T extra root).trans malformed)
+
+/-- `exportedSessionReduce_correct` on the table of the theory and the term at
+`root` of `extra`. -/
+theorem theoryReduce_correct {poll : Unit → Bool} (quiet : poll () = false) {T : Theory.Table}
+    {extra root d rs t} (decoded : T.reduceInput extra root = some ⟨d,rs,t⟩)
+    (certified : CertifiedTableWire.Certified rs) :
+    (∀ n, SessionReductionWire.Answer d rs t
+        (Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n) ∨
+      Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[3]]) ∧
+    ∀ n : UInt64, CheckedReduction.Within (TableAmbient.liftRules rs) n.toNat t →
+      SessionReductionWire.Answer d rs t
+        (Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n) :=
+  ⟨fun n => (exportedSessionReduce_correct quiet).valid _ _ _ _ _ n _ _ _
+      ((Theory.wire_reduce T extra root).trans decoded) certified,
+    (exportedSessionReduce_correct quiet).completes _ _ _ _ _ _ _ _
+      ((Theory.wire_reduce T extra root).trans decoded) certified⟩
+
+theorem theoryReduce_interrupted (poll : Unit → Bool) (flags free ac nodes rules extra root n) :
+    Executable.theoryReduce poll flags free ac nodes rules extra root n = #[#[4]] ↔ poll () = true :=
+  exportedSessionReduce_interrupted poll _ _ _ _ _ n
+
+/-- Once `theoryCertify` accepts a table, every reduction call on that same
+table replies with the unique normal form of its term, or with a request for
+more depth. -/
+theorem theoryReduce_certified {poll : Unit → Bool} (quiet : poll () = false) {T : Theory.Table}
+    {extra root n d rs t budget} (decoded : T.reduceInput extra root = some ⟨d,rs,t⟩)
+    (hit : Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules budget = true) :
+    SessionReductionWire.Answer d rs t
+        (Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n) ∨
+      Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n = #[#[3]] :=
+  exportedSessionReduce_certified quiet ((Theory.wire_reduce T extra root).trans decoded) hit
+
+/-- Once `theoryCertify` accepts a table, every reduction call on that same
+table replies with the unique normal form at every depth that bounds all
+rewrite paths from its term. -/
+theorem theoryReduce_complete {poll : Unit → Bool} (quiet : poll () = false) {T : Theory.Table}
+    {extra root d rs t budget} (decoded : T.reduceInput extra root = some ⟨d,rs,t⟩)
+    (hit : Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules budget = true) (n : UInt64)
+    (within : CheckedReduction.Within (TableAmbient.liftRules rs) n.toNat t) :
+    SessionReductionWire.Answer d rs t
+      (Executable.theoryReduce poll T.flags T.free T.ac T.nodes T.rules extra root n) :=
+  exportedSessionReduce_complete quiet ((Theory.wire_reduce T extra root).trans decoded) hit n within
+
+/-! ### Variants -/
+
+theorem theoryVariantCheck_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (nodes rules extra roots family fuel work) :
+    Executable.theoryVariantCheck poll flags free ac nodes rules extra roots family fuel work = #[#[0]] :=
+  (exportedSessionVariantCheck_correct quiet).malformed _ _ _ _ _ _ fuel work
+    ((Theory.wire_none (nodes := nodes) (rules := rules) foreign).2.2.2 _ _ _)
+
+theorem theoryVariantCheck_malformed {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra roots family} (malformed : T.checkInput extra roots family = none)
+    (fuel work) :
+    Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work =
+      #[#[0]] :=
+  (exportedSessionVariantCheck_correct quiet).malformed _ _ _ _ _ _ fuel work
+    ((Theory.wire_check T extra roots family).trans malformed)
+
+/-- `exportedSessionVariantCheck_correct` on the table of the theory and the
+observations and family of `extra`. -/
+theorem theoryVariantCheck_correct {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra roots family d rs q members}
+    (decoded : T.checkInput extra roots family = some ⟨d,rs,q,members⟩) (fuel work : UInt64) :
+    (Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work =
+        #[#[1]] ∨
+      (∃ reason index, Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots
+        family fuel work = #[#[2,reason,index]]) ∨
+      Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work =
+        #[#[3]]) ∧
+    (Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work =
+        #[#[1]] →
+      CanonicalPresentation (ruleRoot (TableAmbient.liftRules rs)) →
+      ∃ rows, VariantReply (ruleRoot (TableAmbient.liftRules rs)) q [] rows ∧
+        rows.length = members.length ∧
+        ∀ pair ∈ members.zip rows, ∀ v, Observed q v → pair.2.subst.image v = pair.1.image v) :=
+  ⟨(exportedSessionVariantCheck_correct quiet).status _ _ _ _ _ _ fuel work _ _ _ _
+      ((Theory.wire_check T extra roots family).trans decoded),
+    (exportedSessionVariantCheck_correct quiet).accepted _ _ _ _ _ _ fuel work _ _ _ _
+      ((Theory.wire_check T extra roots family).trans decoded)⟩
+
+theorem theoryVariantCheck_interrupted (poll : Unit → Bool)
+    (flags free ac nodes rules extra roots family fuel work) :
+    Executable.theoryVariantCheck poll flags free ac nodes rules extra roots family fuel work = #[#[4]] ↔
+      poll () = true :=
+  exportedSessionVariantCheck_interrupted poll _ _ _ _ _ _ fuel work
+
+/-- Once `theoryCertify` accepts a table, a family accepted on a call on that
+same table is a complete set of variants of the observations, with exactly the
+proposed substitutions on their variables. -/
+theorem theoryVariantCheck_certified {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra roots family fuel work d rs q members budget}
+    (decoded : T.checkInput extra roots family = some ⟨d,rs,q,members⟩)
+    (hit : Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules budget = true)
+    (accepted : Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family
+      fuel work = #[#[1]]) :
+    ∃ rows, VariantReply (ruleRoot (TableAmbient.liftRules rs)) q [] rows ∧
+      rows.length = members.length ∧
+      ∀ pair ∈ members.zip rows, ∀ v, Observed q v → pair.2.subst.image v = pair.1.image v :=
+  exportedSessionVariantCheck_certified quiet ((Theory.wire_check T extra roots family).trans decoded)
+    hit accepted
+
+/-- `exportedSessionVariantCheck_decides` on the table of the theory. -/
+theorem theoryVariantCheck_decides {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra roots family d rs q members}
+    (decoded : T.checkInput extra roots family = some ⟨d,rs,q,members⟩) :
+    VariantCheckWire.Decision (TableAmbient.liftRules rs) q members fun fuel work =>
+      Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work :=
+  exportedSessionVariantCheck_decides quiet _ _ _ _ _ _ _ _ _ _
+    ((Theory.wire_check T extra roots family).trans decoded)
+
+/-- Once `theoryCertify` accepts a table, a call on that same table whose depth
+exceeds every rewrite path from the terms the check has to normalize, and
+whose work limit is zero or covers the narrowing layers of the members, never
+replies with status 3, and replies with status 1 exactly when the family is
+closed. -/
+theorem theoryVariantCheck_complete {poll : Unit → Bool} (quiet : poll () = false)
+    {T : Theory.Table} {extra roots family d rs q members budget}
+    (decoded : T.checkInput extra roots family = some ⟨d,rs,q,members⟩)
+    (hit : Executable.theoryCertify T.flags T.free T.ac T.nodes T.rules budget = true)
+    (fuel work : UInt64)
+    (deep : ∀ t, VariantCertificate.Demand (ruleRoot (TableAmbient.liftRules rs)) q members t →
+      CheckedReduction.Within (TableAmbient.liftRules rs) fuel.toNat t)
+    (funded : work = 0 ∨ ¬VariantCertificate.Overcharged
+      (ruleRoot (TableAmbient.liftRules rs)) q members work.toNat) :
+    Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work ≠
+        #[#[3]] ∧
+      (Executable.theoryVariantCheck poll T.flags T.free T.ac T.nodes T.rules extra roots family fuel work =
+          #[#[1]] ↔
+        VariantCertificate.Closed (ruleRoot (TableAmbient.liftRules rs)) q members) :=
+  exportedSessionVariantCheck_complete quiet ((Theory.wire_check T extra roots family).trans decoded) hit
+    fuel work deep funded
+
+end Theory
+
 end Tamarin
 
 open Lean Meta in
@@ -657,7 +1095,15 @@ run_cmd do
     (``Tamarin.Executable.pathReduce, `tamarin_path_reduce),
     (``Tamarin.Executable.certifyTable, `tamarin_certify_table),
     (``Tamarin.Executable.sessionReduce, `tamarin_session_reduce),
-    (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check)]
+    (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check),
+    (``Tamarin.Executable.theoryUnify, `tamarin_theory_unify),
+    (``Tamarin.Executable.theoryUnifyExists, `tamarin_theory_unify_exists),
+    (``Tamarin.Executable.theoryMatch, `tamarin_theory_match),
+    (``Tamarin.Executable.theoryMatchExists, `tamarin_theory_match_exists),
+    (``Tamarin.Executable.theoryCertify, `tamarin_theory_certify),
+    (``Tamarin.Executable.theoryPathReduce, `tamarin_theory_path_reduce),
+    (``Tamarin.Executable.theoryReduce, `tamarin_theory_reduce),
+    (``Tamarin.Executable.theoryVariantCheck, `tamarin_theory_variant_check)]
   -- Proposer exports carry no contract. The caller uses their output only as a
   -- proposal that `tamarin_session_variant_check` has to accept, so no theorem of
   -- this file may mention them. Their theorems are in `TamarinProposers.lean`.

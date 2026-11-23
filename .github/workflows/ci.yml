@@ -50,6 +50,7 @@ jobs:
           lake env lean Tests/TotalMatchPacket.lean
           lake env lean Tests/BagMatching.lean
           lake env lean Tests/CheckedCommandPackets.lean
+          lake env lean Tests/Theory.lean
           lake env lean Tests/VariantCompositionLimit.lean
           lake env lean Tests/DHCanonical.lean
           lake env lean Tests/MixedTermination.lean
