@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 namespace Tamarin.XorVariantsTests
 open Rewriting FreshXor

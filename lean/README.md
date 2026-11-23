@@ -94,20 +94,126 @@ completion on its full domain. A bounded export must establish completion on its
 and distinguish exhaustion, interruption and unsupported input from a complete answer.
 [Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) · [Equation printer](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/maude_print.rs#L511-L523) · [Tamarin's theory assumptions](https://github.com/tamarin-prover/tamarin-prover/blob/573a43953195d83e62fdbe32fc98253031bca60f/manual/src/004_cryptographic-messages.md#L129-L143)
 
-**For a table solver optimization**, change the two candidate files. The runtime imports the
-implementation and CI imports its proof witnesses. The fixed CI root checks the actual exports,
-rechecks the compiled Lean environment and rejects unchecked executable replacements.
-Local builds support unproved experiments. [Implementation](TamarinRuntime/Candidates/Table.lean) ·
-[Proofs](Tamarin/Candidates/TableProofs.lean) · [Export obligations](TamarinCI.lean)
+### The contract and the gate
+
+The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManifest.txt).
+
+**Contract exports** are the thirteen whose reply the Rust backend uses as the answer. Each is
+mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
+are the whole of what is promised to a caller.
+
+| Export | What a reply means | Where it may decline |
+| --- | --- | --- |
+| `tamarin_total_unify` | The reply decodes to a complete, sound, domain-restricted family of unifiers of the decoded query, also in every extension of the caller's signature (`exportedTotalUnify_correct`, `_ambient`). | `#[#[0]]` on a malformed packet, or when one answer of the family adds at least `2^64 - bound` distinct variables to the query, `bound` being the least identifier above the query's variables (`TotalUnifyWire.Packet.Overflows`): the unifier names the variables it adds by consecutive identifiers from that bound (`UnifierDensity.verified_dense`). Never on a query without solutions (`_unsatisfiable`). |
+| `tamarin_total_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`exportedTotalUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets only (reply 0). |
+| `tamarin_unpack_conjunction` | The rows are the conjunction the packed command denotes, or the clash header (`exportedUnpackConjunction_correct`). | Malformed packets only. |
+| `tamarin_total_match`, `tamarin_total_match_exists` | The complete set of scoped matches, and 1 or 2 exactly as one exists, also in every signature extension. | Malformed packets only. |
+| `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` carries no information. It is the reply to a malformed packet and may be the reply to any table. Three concrete packets must be accepted (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). |
+| `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). |
+| `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). |
+| `tamarin_general_reduce` | Status 1: the unique normal form, also in every signature extension. | 2 only if the table is not range restricted or two rewrite paths end in different normal forms, 3 only while some path within depth `n` is unsettled (`exportedGeneralReduce_correct`). |
+| `tamarin_checked_reduce` | Status 1: the unique normal form, also in every signature extension (`exportedCheckedReduce_sound`). | **No limit**: `#[#[2]]` may be the reply to any decoded packet, except on sorted tables of constructor definitions or of constructor-pattern projections, where it must answer (`exportedDefinitionReduce_ambient`, `exportedDestructorReduce_ambient`). |
+| `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 below some depth. See the weak clause below. |
+| `tamarin_checked_variants` | A reply other than `#[#[2]]` decodes to a complete set of variants with unique values, on any table (`exportedCheckedVariants_sound`). | **No limit.** |
+| `tamarin_general_variants` | A reply other than `#[#[2]]` and `#[#[3]]` decodes to rows that are each a genuine, reconstructible variant. The family is complete if the table is a canonical presentation (`exportedGeneralVariants_sound`). | **No limit.** |
+
+No contract statement names a search, a classifier or a reference procedure. A decline is limited
+either by a condition on the decoded packet and the rewrite relation, or by a concrete packet, or
+not at all. Where it is not limited, coverage is guarded by the corpus and the benchmarks.
+
+**Proposer exports** are the other 39 (`proposer` lines of the manifest): the pieces of the
+specialised variant solvers that still run in Lean. They carry no contract. The Rust backend
+assembles their output into a proposed family of variants and uses that family only after
+`tamarin_session_variant_check` accepted it; a rejected or undecided family fails the session.
+A wrong proposal, including a wrong pruning decision inside the proposer, therefore costs a
+rejection and never a wrong answer, which is why nothing has to be promised about a proposer.
+Two things follow for the caller. A proposer's output must never reach the prover without that
+check. And the debugging switch `TAM_RS_NATIVE_UNCHECKED_VARIANTS` of the Rust backend, which
+skips the check, puts the result outside every statement of this library.
+
+The theorems about proposers that were contract statements are kept, unpinned and without an
+owner, in [`TamarinProposers.lean`](TamarinProposers.lean), together with the coverage statements
+that were stated through reference procedures and the library facts that mention no export. CI
+builds that module so the proofs stay alive. Nothing in it is promised to a caller: a theorem
+there can be weakened or deleted without review.
+
+**For an optimization**, change any implementation module. A standalone audit reads the compiled
+modules without importing them into its own elaboration. It fails unless:
+
+- every export is listed in the manifest exactly once, as `export` or as `proposer`;
+- every contract export has a theorem of the proof root, and the kernel statement of every
+  public theorem of the proof root is the recorded one (SHA-256 of a canonical encoding);
+- every definition those statements depend on, in whatever module it is defined, is the one
+  recorded in [`SpecManifest.txt`](SpecManifest.txt) (341 constants: terms, signatures,
+  substitutions, the rewrite relation, the reply specifications and the wire decoders);
+- no theorem of the proof root mentions a proposer, and no proposer is in that closure;
+- no module, proposer code included, defines macros, syntax, elaborators or initializers, imports
+  `Lean`, replaces compiled code (`implemented_by`, `extern`, unsafe, or partial or opaque code
+  behind an export) or uses an unapproved axiom. Proposer code runs in the caller's process, so
+  it has to stay ordinary, memory-safe Lean even though its results are not trusted.
+
+CI replays the whole environment of the proof root in the kernel. Cargo builds run the proof
+root and the audit unless `TAMARIN_ALGEBRA_SKIP_PROOFS=1` is set for an unproved experiment.
+
+A definition that a contract statement depends on (a wire decoder, a semantic predicate) cannot
+be changed in place: the audit fails until an owner regenerates the record. Add a faster copy,
+prove it equal (a `@[csimp]` equality needs no other change) and leave the original. Everything
+else can be changed in place, including the unifier, the matcher, the table classifier, the
+reducers and every proposer: no statement reaches them. The `contractTyped` list of the audit,
+which used to exempt the verified unifier, is empty for that reason.
+
+What the tightening gave up, relative to the previous contract:
+
+- `certify_table` no longer has to accept what the reference classifier `CertifiedTable.admits`
+  accepts. No semantic statement can replace that clause: termination, confluence and the finite
+  variant property are undecidable, Maude does not check them and Tamarin assumes them.
+- `checked_reduce` no longer has its decline tied to `CheckedReduction.run` and the work limit.
+  That limit is resource policy with no counterpart in the rewrite relation. A caller that
+  needs a specified decline uses `general_reduce`.
+- `checked_variants` and `general_variants` keep what a reply means and lose the clauses that
+  forced a reply when the reference search `GeneralVariants.run` finishes, with the corollaries
+  for DH, constructor and subterm tables. They are still proved in `TamarinProposers.lean`.
+
+Known weak clauses:
+
+- Total unification. `tamarin_total_unify` may reply with the decline word `#[#[0]]` on a
+  decodable query when some complete family has a variable identity or an arity outside 64 bits
+  (`TotalUnifyWire.Packet.Correct.valid`). The clause names no search, so it only asks for a proof
+  that such a family exists, and one exists for most solvable queries. Missing is a bound on the
+  fresh identities of the installed unifier. With it `valid` becomes
+  `(∃ answers, Decodes p (kernel ds ns es) answers ∧ (Outcome.complete answers).CorrectIn p []) ∨
+  (kernel ds ns es = #[#[0]] ∧ ¬ Headroom p)`, where `Headroom p` speaks about the decoded
+  identities only. This is the counterpart of Maude refusing a query whose variable names
+  collide with its fresh ones (`unsafe variable name`, `src/Higher/unificationProblem.cc`).
+  Until then the caller treats the decline word as a hard error, never as "no unifier", and
+  `exportedTotalUnify_unsatisfiable` rules it out for queries without solutions.
+- Variant certificates. `exportedSessionVariantCheck_decides` and `_complete` say that a depth
+  exists (`∃ k : Nat`) from which a call without a work limit never replies with status 3 and
+  accepts exactly the closed families. The depth argument is a 64-bit word, so the clause is
+  empty if that depth exceeds 2^64. The depth proved sufficient, `VariantCertificate.threshold`,
+  is one more than the largest rewrite height among the terms the closure test normalizes.
+  Those terms include the narrowing successors the installed unifier lists, so naming the
+  threshold in the contract would pin the narrower, the reference reducer and the unifier
+  (259 further definitions in 39 modules, measured). Acceptance and rejection are exact at
+  every depth. A nonzero work limit only declines members by an estimate of their narrowing
+  layer, so nothing bounds the time of a call.
 
 The repository includes a GitHub ruleset for the default branch. Importing it in Settings →
 Rules → Rulesets requires the GitHub Actions `lean-spec` check and code-owner approval for
-changes to the contract, ABI, acceptance harness and their build configuration. The two candidate
-directories can be changed under the fixed gate. GitHub reads CODEOWNERS from the base branch.
+changes to the contract, its two records, the audit, the ABI and their build configuration. Every
+other file has no owner and can be changed under the gate alone; the ownership file says what the
+gate does and does not enforce for them. GitHub reads CODEOWNERS from the base branch.
 Install the workflow and ownership file when activating the ruleset. [Ruleset](../.github/rulesets/lean-spec.json) ·
 [Ownership](../.github/CODEOWNERS) · [Mutation tests](Tests/check_audit.py)
 
 ## What crosses the Rust–Lean boundary
+
+This section describes the packets of every export, contract and proposer alike. The exports
+of the bounded solvers it describes (flat and sorted AC matching, operand and residual steps,
+factor checks, cancellation and DH image tables) are proposers now: the Rust backend calls them
+only while assembling a family of variants for `tamarin_session_variant_check`. Ordinary
+unification and matching go to `tamarin_unpack_conjunction`, `tamarin_total_unify`,
+`tamarin_total_unify_exists`, `tamarin_total_match` and `tamarin_total_match_exists` alone.
 
 For native-only ordinary unification, Rust first submits the original conjunction.
 It sends declarations for the symbols used in the query, a shared graph of numeric term rows, and
@@ -367,16 +473,61 @@ rapidly with the number of slots. [Partition proof](Tamarin/MixedSlotPartitions.
 
 CI requires the public entry point to return a complete, sorted family with caller-fresh
 parameters for every input, including kind-level trees. An empty family proves that the
-conjunction has no sorted unifier. [Mixed driver](Tamarin/MixedUnification.lean) · [Mandatory coverage theorem](TamarinCI.lean#L25) · [Executable cases](Tests/MixedUnification.lean)
+conjunction has no sorted unifier. [Mixed driver](Tamarin/MixedUnification.lean) · [Coverage theorem (unpinned)](TamarinProposers.lean) · [Executable cases](Tests/MixedUnification.lean)
 
 [Sort refinement](Tamarin/UnifierSorts.lean) · [Maude sort assignment](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/unificationProblem.cc#L306-L442) · [Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean) · [Maude dependency cycle](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) · [Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) · [Residual search contract](Tamarin/ResidualSearch.lean)
 
-The matcher enumerates binary partitions of the flattened operands, with both sides
-nonempty, and checks every occurrence of a captured variable. Reduction uses the same
-partitions to expose a redex with its untouched complement, just as Maude rewrites AC
-terms with extension. The variant folder checks bindings and values together before
+The matcher reads an AC subject as the bag of its flattened operands. Each rigid pattern
+operand removes one subject operand, and the bindable variables of the same application
+then share what is left, each receiving a nonempty sub-bag of its sort. Syntactically
+identical operands are interchangeable, so each assignment is listed once. Requirements
+on a shared variable are compared as branches are combined, and each surviving branch is
+one answer without a second check on the equations. Ordinary equality modulo B is the
+same procedure with no bindable variable. A variable that occurs `k` times in one
+application chooses only among `⌊m / k⌋` of every `m` equal operands. Reduction matches a
+left side against the same bag and keeps the operands it does not consume as the untouched
+complement, just as Maude rewrites AC terms with extension, and lists each one-step result
+once modulo B. A first-answer search with the same order backs the existence and
+first-match entry points without listing the remaining answers. Kind-level narrowing splits
+a product only to set unsorted factors aside. The variant folder checks bindings and values together before
 dropping a subsumed row. The source-level probes exercise both the reference and Maude.
-[AC partition proof](Tamarin/ACSplits.lean) · [Maude AC equation application](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/ACU_Theory/ACU_Symbol.cc#L91-L112) · [Maude variant folding](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantFolder.cc#L173-L217) · [Executable reference tests](Tests/ReferenceCommands.lean)
+[Bag matcher proof](Tamarin/BagMatching.lean) · [First-answer search](Tamarin/BagSearch.lean) · [Bag matcher tests](Tests/BagMatching.lean) · [Single-path reduction on certified tables](Tamarin/CertifiedReductionWire.lean) · [AC partition proof](Tamarin/ACSplits.lean) · [Maude AC equation application](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/ACU_Theory/ACU_Symbol.cc#L91-L112) · [Maude variant folding](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantFolder.cc#L173-L217) · [Executable reference tests](Tests/ReferenceCommands.lean)
+
+**Variant certificates.** A proposed family of variants is checked instead of searched for.
+Each proposed substitution is completed with the normal forms of the instantiated query.
+The family passes the closure test when every member is normal, some member subsumes the
+normalized query, and every normalized one-step narrowing successor of a member is subsumed
+by a member. On a canonical presentation such a family is a complete set of variants; the
+proof runs the descent of the folding search inside the proposed family. The narrowing layer
+uses the total unifier, so the cost of the test is one such layer per member. A product of
+sorted factors is narrowed once as a whole: only unsorted factors are ever set aside. A slot
+whose query term is a variable is not narrowed, since a step there makes the image of that
+variable reducible. Subsumption first tries a substitution found by an unverified
+left-to-right search, as Maude's folder matches one term after the other under one
+substitution, and tests it with the proved equality; the complete matcher decides only when
+no guess passes.
+
+A family that is a product is not tested member by member. The slots of the query are split
+into groups that share only variables every member sends to variables, each group gets the
+members of distinct shape on its slots as representatives, and the closure test runs on the
+representatives of each group alone. The family is accepted when, for every choice of one
+representative per group, some member restricts on each group to a row that subsumes the
+chosen representative, and the variables it shares between groups are images of keys common
+to them. The instances found group by group then join into one. Four exponentiations with
+seven variants each give 2401 members and one test on seven members per exponentiation. How the split is
+chosen is not part of the proof; a family for which it fails takes the closure test on all
+of its members.
+[Checker and proof](Tamarin/VariantCertificate.lean) · [Closure test](Tamarin/VariantClosure.lean) · [Products](Tamarin/VariantFactoring.lean) · [Guessed matching](Tamarin/GuessedMatching.lean) · [Closed families and acceptance](Tamarin/VariantClosed.lean) · [Wire contract](Tamarin/VariantCheckWire.lean) · [Decision contract](Tamarin/VariantDecisionWire.lean) · [Packet tests](Tests/CheckedCommandPackets.lean)
+
+**Single-path reduction.** On a certified table one rewrite path determines the unique
+normal form. The path is local: a rewrite at a node is taken before its arguments are
+visited, a node is looked at again only when an argument changed, and matching never
+restarts at the root of the whole term. A node rewritten after its arguments is rewritten
+further only at its root; the outermost path then confirms the result in one traversal or
+finishes it. The same path is available for a table that is only range restricted, with a
+weaker guarantee: the reply is an irreducible reduct that keeps the sorts of the input,
+and nothing says it is the only one.
+[Local normalizer](Tamarin/ReferenceReduction.lean) · [Wire contracts](Tamarin/CertifiedReductionWire.lean)
 
 **Reduction and variant references.** With an empty rule table, the total reducer returns
 its input and the total variant generator returns the identity family for every tuple and
@@ -389,7 +540,7 @@ must preserve all untouched slots and input images. Rejection leaves the query u
 This certificate checks individual concrete steps. The total reference follows Maude’s
 separate strategy of normalizing the seed and newly narrowed tuples before comparing variants.
 [Tuple closure proof](Tamarin/TupleNarrowingFrontier.lean) · [Certified checker](Tamarin/ReferenceVariantFrontier.lean) · [Maude expansion and reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L397-L490)
-[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean)
+[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [Export theorem (unpinned)](TamarinProposers.lean)
 
 **Termination of variant search.** A local narrower must prove that each branch replays one
 rewrite and that some branch covers every concrete step exposed by specializing a symbolic term.
@@ -530,8 +681,10 @@ From this directory, these commands recheck the compiled proofs, run the whole-q
 exercise the fixed contract against incorrect candidates.
 
 ```sh
-lake build TamarinCI
-lake env leanchecker TamarinCI
+lake build TamarinCI TamarinRuntime
+lake build TamarinProposers
+lake env leanchecker --fresh TamarinCI
+lake env lean --run Tests/ExportAudit.lean --sources . --unpinned TamarinProposers
 lake env lean Tests/WholeProblem.lean
 lake env lean Tests/ACRowElimination.lean
 lake env lean --run Tests/ACPivot.lean
@@ -592,9 +745,21 @@ complete kernel call including encoding from 184 to 65 µs. Full native-only pro
 on `counter`, `xor` and `NumberSubtermTests`, with median elapsed times moving by less than 3%.
 [Hybrid benchmark source](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/examples/lean_unification_bench.rs)
 
-On `ake/dh/NAXOS_eCK_PFS`, median elapsed time for the full proof was 4.12 s in
-native-only mode and 3.43 s with Maude. Each measurement used five fresh processes
-after a warm-up, with one worker. Both backends found the same 15-step trace.
+An earlier revision of this file reported 4.12 s native-only against 3.43 s with Maude
+for the full `ake/dh/NAXOS_eCK_PFS` proof. A November 2026 audit did not reproduce that
+figure at this revision or at `ef88e27`: with one worker, native-only took 21.1 s and
+Maude 2.67 s, and both found the same trace.
+
+The same audit proved the 451 example theories with one worker and a 300 s limit.
+Maude finished 448 and native-only finished 429 of those; the other
+19 were 18 timeouts and one memory abort (`ake/dh/UM_one_pass_attack`, in the reference
+matcher). No verdict differed on a theory both backends finished, apart from the
+`native_ac_marker_trace` fixture, where Maude omits AC coherence completion. Free and
+subterm-convergent theories ran at 0.4× to 1.4× of Maude's CPU time. Proof search over
+DH, bilinear pairing and XOR ran 2.6× to 9.4× slower (CRxor 2.6×, wireguard 4.5×,
+CH07 5.6×, NAXOS 7.9×, Joux 9.4×), and 28 theories that take Maude at least 1 s were
+more than twice as slow. Native-only is therefore not yet a replacement for Maude on
+those theories. The per-query measurements below are narrower than these end-to-end runs.
 
 On `experiments/A-GDH2`, generating the closed theory took a median of 1.15 s
 native-only and 15.09 s with Maude across three fresh, single-worker runs per backend

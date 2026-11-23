@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 namespace Tamarin.IdentityTable.Tests
 open Tamarin.IdentityTable

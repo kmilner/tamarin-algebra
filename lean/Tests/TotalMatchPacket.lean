@@ -24,4 +24,17 @@ private def xToA : Array UInt64 := #[0,2,1,3,0]
 #guard kernel decls terms #[0,7] #[0] == #[#[1]]
 #guard kernel decls terms #[0] #[] == #[#[0]]
 
+-- The first-answer and decision entry points agree with the full enumeration.
+private abbrev firstKernel := TotalMatchWire.runFirst
+private abbrev existsKernel := Executable.totalMatchExists
+#guard firstKernel decls terms #[3,4,0,2] #[0] == #[#[1],#[],xToA,yId]
+#guard firstKernel decls terms #[3,4,0,1] #[0] == #[#[1]]
+#guard firstKernel decls terms #[0,5] #[0] == #[#[1],#[],#[0,2,1,3,0,0,1,2,4,5,2],yId]
+#guard firstKernel decls terms #[0] #[] == #[#[0]]
+#guard existsKernel decls terms #[3,4,0,2] #[0] == 1
+#guard existsKernel decls terms #[3,4,0,1] #[0] == 2
+#guard existsKernel decls terms #[7,7] #[] == 1
+#guard existsKernel decls terms #[0,7] #[0] == 2
+#guard existsKernel decls terms #[0] #[] == 0
+
 end Tamarin.TotalMatchWireTests

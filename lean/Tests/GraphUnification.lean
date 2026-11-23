@@ -10,8 +10,8 @@ open Executable
 private def ds : Array UInt64 := #[4,7,2,2,2,2]
 private def vars : Array (Array UInt64) := #[#[0,0,2],#[0,1,2]]
 private def nodes := vars ++ #[#[4,7,0,0],#[4,7,1,1,1],#[4,7,1,0],#[4,7,0,1]]
-private def feasible := graphACFeasible 2 7 2 ds nodes
-private def run := graphHomogeneousUnify 2 7 2 ds nodes
+private def feasible := ACFeasibility.run 2 7 2 ds nodes
+private def run := GraphUnification.run 2 7 2 ds nodes
 
 -- One solution for 2x = 3y. Adding x = y eliminates it in a semigroup with no unit.
 #guard run #[2,3] == some #[#[#[0,0,0],#[0,0]]]
@@ -21,7 +21,7 @@ private def run := graphHomogeneousUnify 2 7 2 ds nodes
 #guard feasible #[4,5] == 2
 #guard feasible #[2,9] == 0
 #guard feasible #[2] == 0
-#guard graphACFeasible 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == 0
+#guard ACFeasibility.run 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == 0
 -- All 64 equations constrain the same positive ray. The least common
 -- multiple of the alternating coefficients gives sizes 2,3,2,3,... .
 private def chainVars (n : Nat) : Array (Array UInt64) :=
@@ -32,7 +32,7 @@ private def chainSides (n : Nat) : Array (Array UInt64) :=
 private def chainRoots (n : Nat) : Array UInt64 :=
   ((List.range (n-1)).flatMap fun i => [(n+i).toUInt64,(n+i+1).toUInt64]).toArray
 private def principalChain (n : Nat) :=
-  graphHomogeneousUnify n.toUInt64 7 2 ds (chainVars n ++ chainSides n) (chainRoots n)
+  GraphUnification.run n.toUInt64 7 2 ds (chainVars n ++ chainSides n) (chainRoots n)
 private def expectedRay (n : Nat) : Homogeneous.Arm :=
   (List.range n).toArray.map fun i => Array.replicate (if i%2=0 then 2 else 3) (0 : UInt64)
 #guard principalChain 65 == some #[expectedRay 65]
@@ -45,10 +45,10 @@ private def wideVars := (List.range 96).toArray.map fun i => #[0,i.toUInt64,2]
 private def wideLeft := #[4,7] ++ (List.range 31).toArray.map Nat.toUInt64
 private def wideRight := #[4,7] ++ ((List.range 65).toArray.map fun i => (31+i).toUInt64)
 private def wideNodes := wideVars ++ #[wideLeft,wideRight,wideLeft.push 0]
-#guard graphACFeasible 96 7 2 ds wideNodes #[96,97] == 2
-#guard graphACFeasible 96 7 2 ds wideNodes #[96,97,96,98] == 1
-#guard graphACFeasible 97 7 2 ds wideNodes #[96,97] == 0
-#guard graphACFeasible 4097 7 2 ds wideNodes #[96,97] == 0
+#guard ACFeasibility.run 96 7 2 ds wideNodes #[96,97] == 2
+#guard ACFeasibility.run 96 7 2 ds wideNodes #[96,97,96,98] == 1
+#guard ACFeasibility.run 97 7 2 ds wideNodes #[96,97] == 0
+#guard ACFeasibility.run 4097 7 2 ds wideNodes #[96,97] == 0
 private def groupRow (k : Fin 37 → Nat) (l : Fin 37 → Nat) : ACBasis.Row 37 := .ofWeights k l
 private def base37 := groupRow (fun i => if i.val < 19 then 1 else 0) (fun i => if 19 ≤ i.val then 1 else 0)
 private def ratio37 (a b : Nat) := groupRow (fun i => if 1 ≤ i.val ∧ i.val < 19 then a else 0)
@@ -78,14 +78,14 @@ private def reducedStress := smallRows.all fun a => smallRows.all fun b =>
 #guard run #[4,5] == none
 #guard run #[2] == none
 #guard run #[2,9] == none
-#guard graphHomogeneousUnify 1 7 2 ds nodes #[2,3] == none
-#guard graphHomogeneousUnify 3 7 2 ds nodes #[2,3] == none
-#guard graphHomogeneousUnify 2 8 2 ds nodes #[2,3] == none
-#guard graphHomogeneousUnify 2 7 0 ds nodes #[2,3] == none
+#guard GraphUnification.run 1 7 2 ds nodes #[2,3] == none
+#guard GraphUnification.run 3 7 2 ds nodes #[2,3] == none
+#guard GraphUnification.run 2 8 2 ds nodes #[2,3] == none
+#guard GraphUnification.run 2 7 0 ds nodes #[2,3] == none
 -- Public leaves are legal subsorts of Msg but cannot serve as its homogeneous variable columns.
-#guard graphHomogeneousUnify 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == none
-#guard graphHomogeneousUnify 2 7 2 ds (nodes.push #[1,0,2]) #[2,6] == none
-#guard graphHomogeneousUnify 2 7 2 ds (nodes.push #[4,7,6,0]) #[2,6] == none
+#guard GraphUnification.run 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == none
+#guard GraphUnification.run 2 7 2 ds (nodes.push #[1,0,2]) #[2,6] == none
+#guard GraphUnification.run 2 7 2 ds (nodes.push #[4,7,6,0]) #[2,6] == none
 
 -- Test both flat AC rows and nested nodes sharing their children. The expected counts
 -- come from the two variable sequences used to generate the graph.
@@ -134,10 +134,10 @@ private def coneNodes : Array (Array UInt64) :=
   let vars := #[#[0,0,2],#[0,1,2],#[0,2,2]]
   let a := #[4,7] ++ Array.replicate 131 0
   vars ++ #[a ++ #[1],#[4,7] ++ Array.replicate 137 2,a ++ #[1,1]]
-#guard graphACFeasible 3 7 2 ds coneNodes #[0,1,3,4] == 2
-#guard graphACFeasible 3 7 2 ds coneNodes #[5,4,3,4] == 1
-#guard graphACFeasible 3 7 2 ds coneNodes #[0,1,5,4,3,4] == 1
-#guard graphACFeasible 3 7 2 ds coneNodes #[3,4,0,1,3,4] == 2
+#guard ACFeasibility.run 3 7 2 ds coneNodes #[0,1,3,4] == 2
+#guard ACFeasibility.run 3 7 2 ds coneNodes #[5,4,3,4] == 1
+#guard ACFeasibility.run 3 7 2 ds coneNodes #[0,1,5,4,3,4] == 1
+#guard ACFeasibility.run 3 7 2 ds coneNodes #[3,4,0,1,3,4] == 2
 
 private def expensive : ACBasis.Row 3 := .ofWeights (fun i => #[131,1,0][i.val]!) (fun i => #[0,0,137][i.val]!)
 -- The new mandatory domain is certified independently of the execution.

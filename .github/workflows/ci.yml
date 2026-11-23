@@ -23,8 +23,18 @@ jobs:
       - name: Verify Lean implementation contract and ABI
         working-directory: lean
         run: |
-          lake build TamarinCI
-          lake env leanchecker TamarinCI
+          lake build TamarinCI TamarinRuntime
+          # Theorems outside the contract (proposer exports, library facts): built so
+          # the proofs stay alive. Nothing here is pinned or promised to a caller.
+          lake build TamarinProposers
+          # Replay every declaration of the proof root and of everything it
+          # imports in the kernel, starting from an empty environment.
+          lake env leanchecker --fresh TamarinCI
+          # Audit the compiled modules from outside: exports, their contract
+          # theorems and statements, the definitions those statements depend
+          # on (SpecManifest.txt), axioms, executable replacements, and
+          # meta-level code in any imported module.
+          lake env lean --run Tests/ExportAudit.lean --sources . --unpinned TamarinProposers
           lake env lean Tests/SpecAudit.lean
           lake env lean Tests/ExistingSpecAudit.lean
           lake env lean Tests/WeightedComposition.lean
@@ -37,6 +47,7 @@ jobs:
           lake env lean Tests/ConstantDefinitions.lean
           lake env lean Tests/TotalUnifyPacket.lean
           lake env lean Tests/TotalMatchPacket.lean
+          lake env lean Tests/BagMatching.lean
           lake env lean Tests/CheckedCommandPackets.lean
           lake env lean Tests/VariantCompositionLimit.lean
           lake env lean Tests/DHCanonical.lean

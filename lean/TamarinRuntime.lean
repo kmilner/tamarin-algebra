@@ -1,8 +1,12 @@
 import Tamarin.CertifiedTableWire
+import Tamarin.CertifiedReductionWire
+import Tamarin.VariantCheckWire
+import Tamarin.SessionTableWire
 import TamarinRuntime.Candidates.Table
 import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
+import Tamarin.TotalUnifyExists
 import Tamarin.PackedConjunction
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
@@ -47,15 +51,6 @@ namespace Tamarin.Executable
 def acBagMatch (packet : Matching.ACMatchPacket.Packet) : UInt8 :=
   Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet
 
-@[export tamarin_ac_bag_answers]
-def acBagAnswers (packet : Matching.ACMatchPacket.Packet) : Option Matching.ACMatchPacket.Answers :=
-  Matching.ACMatchPacket.runAnswersWith Matching.ACBagAnswers.run packet
-
-@[export tamarin_ac_bag_page]
-def acBagPage (packet : Matching.ACMatchPacket.Packet) (start : Array UInt64) (requested : UInt64) :
-    Option Matching.ACMatchPacket.Answers :=
-  Matching.ACPagePacket.runWith Matching.ACBagPages.run packet start requested
-
 @[export tamarin_ac_bag_typed_match]
 def acBagTypedMatch (rows limits : Matching.ACMatchPacket.Packet) : UInt8 :=
   Matching.ACSortedBagPacket.runWith Matching.ACSortedBagSearch.run rows limits
@@ -74,14 +69,6 @@ def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=
 @[export tamarin_pairing_variants]
 def pairingVariants (hasProjection : Bool) : UInt8 :=
   RuntimeCandidate.pairing.variants hasProjection
-
-@[export tamarin_pairing_project]
-def pairingProject (first : Bool) : UInt8 :=
-  RuntimeCandidate.pairing.project first
-
-@[export tamarin_reflexive_unify]
-def reflexiveUnify (recognized : Bool) : UInt8 :=
-  RuntimeCandidate.reflexive.solve recognized
 
 @[export tamarin_flat_ac_match]
 def flatACMatch (n : UInt64) (occurrences tail rhs : Array UInt64) : Array (Array (Array UInt64)) :=
@@ -125,14 +112,6 @@ def openMatchSelect (rigid subject : UInt64) : Option (Array (Array UInt64)) :=
 def sortedACMatch (acSort : UInt64) (varSort atomSort occ tail rhs : Array UInt64) :
     Option (Array (Array (Array UInt64))) :=
   SortedMatch.runWith flatACMatch acSort varSort atomSort occ tail rhs
-
-@[export tamarin_shared_offset]
-def sharedOffset (a b : UInt64) : Array (Array (Array UInt64)) :=
-  RuntimeCandidate.sharedOffset a b
-
-@[export tamarin_rigid_allocation]
-def rigidAllocation (reversed : Bool) : Array (Array (Array UInt64)) :=
-  RuntimeCandidate.rigidAllocation reversed
 
 @[export tamarin_comm_orientations]
 def commOrientations (a b c d : UInt64) (priority : UInt8) : UInt8 :=
@@ -203,9 +182,17 @@ def unpackConjunction (nodes : PackedConjunction.Rows) (limit lhs rhs : UInt64) 
 def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Array (Array UInt64) := TotalUnifyWire.run decls nodes roots
 
+@[export tamarin_total_unify_exists]
+def totalUnifyExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    UInt8 := TotalUnifyWire.runExists decls nodes roots
+
 @[export tamarin_total_match]
 def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
     Array (Array UInt64) := TotalMatchWire.run decls nodes roots ids
+
+@[export tamarin_total_match_exists]
+def totalMatchExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
+    UInt8 := TotalMatchWire.runExists decls nodes roots ids
 
 @[export tamarin_checked_reduce]
 def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules : Array UInt64)
@@ -214,6 +201,21 @@ def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules :
 @[export tamarin_general_reduce]
 def generalReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
     (root fuel : UInt64) : Array (Array UInt64) := TableCandidate.reduce ds ns rules root fuel
+
+@[export tamarin_path_reduce]
+def pathReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
+    (root fuel : UInt64) : Array (Array UInt64) := PathReductionWire.run ds ns rules root fuel
+
+@[export tamarin_session_reduce]
+def sessionReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
+    (extra : Array (Array UInt64)) (root fuel : UInt64) : Array (Array UInt64) :=
+  SessionReductionWire.run ds ns rules extra root fuel
+
+@[export tamarin_session_variant_check]
+def sessionVariantCheck (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
+    (extra : Array (Array UInt64)) (roots : Array UInt64) (family : Array (Array UInt64))
+    (fuel work : UInt64) : Array (Array UInt64) :=
+  SessionVariantCheckWire.run ds ns rules extra roots family fuel work
 
 @[export tamarin_checked_variants]
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
@@ -227,11 +229,6 @@ def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array 
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := TableCandidate.variants ds ns rules roots fuel
 
-@[export tamarin_whole_unify]
-def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :
-    Array (Array UInt64) :=
-  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations
-
 @[export tamarin_variant_overlap_agrees]
 def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=
   ACSpanOverlap.run decls nodes roots
@@ -241,22 +238,8 @@ def checkFactors (decls : Array UInt64) (nodes : Array (Array UInt64))
     (original bindings residual : Array UInt64) : Bool :=
   FactorCheck.run decls nodes original bindings residual
 
-@[export tamarin_graph_homogeneous_unify]
-def graphHomogeneousUnify (width symbol sort : UInt64) (decls : Array UInt64)
-    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Option Homogeneous.Answers :=
-  GraphUnification.run width symbol sort decls nodes roots
-
-@[export tamarin_graph_ac_feasible]
-def graphACFeasible (width symbol sort : UInt64) (decls : Array UInt64)
-    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
-  ACFeasibility.run width symbol sort decls nodes roots
-
 @[export tamarin_operand_refine]
 def operandRefine (sides : Array UInt64) : Array UInt64 := OperandRefinementCandidate.keep sides
-
-@[export tamarin_forced_operand_classes]
-def forcedOperandClasses (width : UInt64) (sides : Array (Array UInt64)) : Option (Array UInt64) :=
-  ForcedOperandClasses.run width sides
 
 @[export tamarin_operand_unify]
 def operandUnify (width : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=

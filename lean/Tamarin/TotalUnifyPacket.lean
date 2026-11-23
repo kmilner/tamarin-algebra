@@ -1,4 +1,5 @@
 import Tamarin.TotalUnifyWire
+import Tamarin.VariablePermutation
 
 /-! Independent stack interpretation of a returned binding. The statement
 for a complete packet existentially quantifies its family, allowing a future
@@ -209,24 +210,32 @@ theorem pack_exists (p : Problem d.sig) (answers : List (Substitution d.sig))
 
 abbrev Kernel := Array UInt64 → Array (Array UInt64) → Array UInt64 → Array (Array UInt64)
 
+/-- The answer adds at least `2^64 - bound` distinct variables to the query,
+where `bound` is the least identifier above every variable of the query. -/
+def Overflows (p : Problem d.sig) (σ : Substitution d.sig) : Prop :=
+  ∃ ws : List Variable, ws.Nodup ∧
+    UInt64.size - VariablePermutation.freshBound p.variables ≤ ws.length ∧
+    ∀ w ∈ ws, ¬ p.Occurs w ∧ ∃ v, p.Occurs v ∧ (σ.image v).Occurs w
+
+/-- The contract names no search. A decodable query has a complete family,
+and the reply either decodes to that family or is the decline word because
+one answer of that family adds at least `2^64 - bound` distinct variables to
+the query. -/
 structure Correct (kernel : Kernel) : Prop where
   malformed : ∀ ds ns es, input ds ns es = none → kernel ds ns es = #[#[0]]
   valid : ∀ ds ns es d p, input ds ns es = some ⟨d,p⟩ →
-    (∃ answers, Decodes p (kernel ds ns es) answers ∧ (Outcome.complete answers).CorrectIn p []) ∨
-    (kernel ds ns es = #[#[0]] ∧ ¬ Representable p ((MixedUnification.verified (s := d.sig)).solve p trivial []))
+    ∃ answers, (Outcome.complete answers).CorrectIn p [] ∧
+      (Decodes p (kernel ds ns es) answers ∨
+        (kernel ds ns es = #[#[0]] ∧ ∃ σ ∈ answers, Overflows p σ))
 
-theorem correct : Correct run where
-  malformed := fun ds ns es h => by simp [run,h]
-  valid := by
-    intro ds ns es d p hi
-    let answers := (MixedUnification.verified (s := d.sig)).solve p trivial []
-    have solved : (Outcome.complete answers).CorrectIn p [] := MixedUnification.unify_correct rfl
-    cases hw : pack p answers with
-    | some wire =>
-      have eq : run ds ns es = wire := by simp only [run,hi]; change (pack p answers).getD _ = _; rw [hw]; rfl
-      exact .inl ⟨_,eq ▸ pack_decodes _ _ _ hw,solved⟩
-    | none =>
-      have eq : run ds ns es = #[#[0]] := by simp only [run,hi]; change (pack p answers).getD _ = _; rw [hw]; rfl
-      exact .inr ⟨eq,fun fits => by obtain ⟨_,h⟩ := pack_exists _ _ fits; rw [hw] at h; contradiction⟩
+/-- The empty family is the only family that decodes from the bare status row. -/
+theorem decodes_nil (p : Problem d.sig) (wire : Array (Array UInt64)) :
+    Decodes p wire [] ↔ wire = #[#[1]] := by
+  constructor
+  · rintro ⟨rows,shape,payload⟩
+    cases payload
+    exact Array.toList_inj.mp shape
+  · rintro rfl
+    exact ⟨[],rfl,.nil⟩
 
 end Tamarin.TotalUnifyWire.Packet

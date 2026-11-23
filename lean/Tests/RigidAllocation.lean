@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 import Tamarin.FiniteOccurs
 import Tamarin.RigidAllocation
 
@@ -203,7 +203,7 @@ def run : IO Unit := do
   for literal in [(1,0), (0,1)] do
     let oracle := expected domain literal
     for reverse in [false, true] do
-      let packet := Executable.rigidAllocation reverse
+      let packet := RuntimeCandidate.rigidAllocation reverse
       let actual ← decoded packet literal domain bound
       unless actual.size == oracle.length && oracle.all actual.contains do
         throw (IO.userError s!"reverse={reverse}, literal={literal}, missing={oracle.find? (!actual.contains ·)}, expected={oracle.length}, actual={actual.size}, packet={packet}")

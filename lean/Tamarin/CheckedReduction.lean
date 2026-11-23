@@ -9,7 +9,9 @@ variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [Decidable
 
 /-- Every variable on a rule's right side must be supplied by matching its left side. -/
 def rangeBound (rs : List (Equation s)) : Bool :=
-  rs.all fun r => r.rhs.variables.all fun v => r.lhs.variables.contains v
+  rs.all fun r =>
+    let supplied := r.lhs.variables
+    r.rhs.variables.all fun v => supplied.contains v
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 theorem rangeBound_iff (rs : List (Equation s)) : rangeBound rs ↔ ReferenceReduction.Bound rs := by
@@ -17,8 +19,9 @@ theorem rangeBound_iff (rs : List (Equation s)) : rangeBound rs ↔ ReferenceRed
 
 private def next (rs : List (Equation s)) (t : Term s) := ReferenceReduction.successors rs t
 
--- The structural matcher and AC subproduct finder enumerate partitions
--- eagerly. Charge the branching heads before constructing any successor list.
+-- Charge the branching heads before constructing any successor list. The
+-- charge dates from successor lists built by splitting operands; it remains a
+-- conservative bound for the bag matcher that builds them now.
 private def branching : Term s → Nat
   | .atom _ | .var _ => 0
   | .free _ xs => (List.ofFn (fun i => branching (xs i))).sum
@@ -188,6 +191,10 @@ private theorem compare_of_within (source expected : Term s)
         have st := edge bound (children ▸ mem)
         have differs := (ih u (tree u st) (path.trans (.step st))).resolve_left bad
         exact .inr (by simpa only [differentLeaf,children] using List.any_eq_true.mpr ⟨u,mem,differs⟩)
+
+/-- A depth that bounds every rewrite path is enough for the outermost path. -/
+theorem choose_of_within (n : Nat) (t : Term s) (tree : Within rs n t) :
+    ∃ u, choose rs n t = some u := chooses_of_within bound n t tree
 
 theorem decides_settled {n : Nat} {t : Term s} (settled : Settled rs n t) :
     (∃ u, run rs n t = some u) ∨ ambiguous rs n t := by

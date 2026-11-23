@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 import Tamarin.XorFlatNormal
 
 namespace Tamarin.XorSpecAudit

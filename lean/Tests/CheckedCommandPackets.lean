@@ -56,6 +56,79 @@ private def rules : Array UInt64 := #[3,0,4,1]
 -- Same root with conflicting result positions cannot certify the table.
 #guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
 #guard Executable.checkedReduce ds ns #[3,0,3,1] 3 0 == #[#[2]]
+-- The single-path reducer follows the first branch of the checked one. On this
+-- certified table both return the same normal form for fst(pair(x,y)), a
+-- normal term is returned unchanged, and exhausted depth is reported as such.
+#guard Executable.certifyTable ds ns rules 4
+#guard CertifiedReductionWire.run ds ns rules 3 8 == Executable.generalReduce ds ns rules 3 8
+#guard (CertifiedReductionWire.run ds ns rules 3 8)[0]? == some #[1]
+#guard CertifiedReductionWire.run ds ns rules 6 8 == Executable.generalReduce ds ns rules 6 8
+#guard CertifiedReductionWire.run ds ns rules 3 0 == #[#[3]]
+#guard CertifiedReductionWire.run ds ns #[3] 3 8 == #[#[0]]
+-- Without a certificate the same path is still an irreducible reduct. A rule
+-- with an unbound right-side variable is refused.
+#guard Executable.pathReduce ds ns rules 3 8 == CertifiedReductionWire.run ds ns rules 3 8
+#guard Executable.pathReduce ds ns rules 6 8 == CertifiedReductionWire.run ds ns rules 6 8
+#guard Executable.pathReduce ds ns rules 3 0 == #[#[3]]
+#guard Executable.pathReduce ds ns #[6,0] 3 8 == #[#[2]]
+#guard Executable.pathReduce ds ns #[3] 3 8 == #[#[0]]
+
+-- A proposed family for fst(z),z. The identity and z := pair(x,y) are
+-- complete. The identity alone leaves a narrowing successor uncovered, the
+-- pair alone does not cover the query itself, and a reducible image is not a
+-- variant at all. Each row lists variable node, image node.
+private abbrev check := VariantCheckWire.run
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard check ds ns rules #[6,5] #[#[],#[5,2]] 16 0 == #[#[1]]
+#guard check ds ns rules #[6,5] #[#[5,5]] 16 0 == #[#[2,3,0]]
+#guard check ds ns rules #[6,5] #[#[5,2]] 16 0 == #[#[2,2,0]]
+#guard check ds ns rules #[6,5] #[] 16 0 == #[#[2,2,0]]
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,3]] 16 0 == #[#[2,1,1]]
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,2]] 0 0 == #[#[3]]
+#guard check ds ns rules #[6,5] #[#[5]] 16 0 == #[#[0]]
+#guard check ds ns rules #[6,5] #[#[2,5]] 16 0 == #[#[0]]
+#guard check ds ns #[6,0] #[6,5] #[#[5,5]] 16 0 == #[#[2,4,0]]
+-- A family that is a product. fst(z) and snd(w) share no variable, so the
+-- four combinations of the two variants of each are complete. A combination
+-- that reuses the witnesses of z for w, a missing combination and a factor
+-- that lacks a variant are rejected.
+private def both : Array (Array UInt64) :=
+  ns ++ #[#[0,3,2],#[2,2,7],#[0,4,2],#[0,5,2],#[2,0,9,10]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11],#[5,2,7,11]] 16 0 == #[#[1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11],#[5,2,7,2]] 16 0 == #[#[2,3,1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11]] 16 0 == #[#[2,3,1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[7,11]] 16 0 == #[#[2,3,0]]
+
+-- One certificate for the rows of the rules alone serves every call that adds
+-- rows to them. The added rows keep their node indices, an atom outside the
+-- table is an ambient name, and the replies are those of the whole packet.
+private def table : Array (Array UInt64) := ns.extract 0 5
+private def queryRows : Array (Array UInt64) := ns.extract 5 7
+private def named : Array (Array UInt64) := #[#[1,77,0],#[2,0,5,0],#[2,1,6],#[2,2,6]]
+private abbrev session := Executable.sessionReduce
+#guard Executable.certifyTable ds table rules 4
+#guard session ds table rules #[] 3 8 == CertifiedReductionWire.run ds ns rules 3 8
+#guard session ds table rules queryRows 6 8 == CertifiedReductionWire.run ds ns rules 6 8
+#guard session ds table rules named 7 8 == #[#[1],#[1,77,0]]
+#guard session ds table rules named 7 8 == CertifiedReductionWire.run ds (table ++ named) rules 7 8
+#guard session ds table rules named 8 8 == CertifiedReductionWire.run ds (table ++ named) rules 8 8
+#guard session ds table rules named 6 8 == CertifiedReductionWire.run ds (table ++ named) rules 6 8
+#guard session ds table rules named 7 0 == #[#[3]]
+#guard session ds table rules named 9 8 == #[#[0]]
+#guard session ds table rules #[#[2,1,6]] 5 8 == #[#[0]]
+#guard session ds table #[3] named 7 8 == #[#[0]]
+private abbrev sessionCheck := Executable.sessionVariantCheck
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard sessionCheck ds ns rules #[] #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5]] 16 0 == #[#[2,3,0]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,2]] 16 0 == #[#[2,2,0]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,3]] 16 0 == #[#[2,1,1]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,2]] 0 0 == #[#[3]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5]] 16 0 == #[#[0]]
+#guard sessionCheck ds table rules queryRows #[7,5] #[#[5,5]] 16 0 == #[#[0]]
+-- A variant image may be a name the table never mentions.
+#guard sessionCheck ds table rules (queryRows ++ #[#[1,77,0],#[2,0,7,7]]) #[6,5]
+  #[#[5,5],#[5,2],#[5,8]] 16 0 == #[#[1]]
 end Tamarin.DestructorPacketTests
 
 namespace Tamarin.GeneralVariantPacketTests

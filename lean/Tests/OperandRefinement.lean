@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 /-! A deleted constraint can be the only observation of a variable. The
 residual allocator must reserve it even when the output scope of the

@@ -1,4 +1,5 @@
 import Tamarin.MixedUnification
+import Tamarin.UnifyExists
 import Tamarin.WordEncoding
 import TamarinWire
 
@@ -124,6 +125,89 @@ def write {d : Dictionary} : Term d.sig → Option (List Token)
 def binding {d : Dictionary} (σ : Substitution d.sig) (v : Variable) : Option (Array UInt64) := do
   return ((← WordEncoding.pack v.id) :: sortCode v.sort :: (← write (σ.image v)).flatMap Token.words).toArray
 
+/-- Append the words of a term to a buffer, without the intermediate token lists. -/
+private def emit {d : Dictionary} : Term d.sig → Array UInt64 → Option (Array UInt64)
+  | .var v, acc => (WordEncoding.pack v.id).map fun id => ((acc.push 0).push id).push (sortCode v.sort)
+  | .atom a, acc => some (((acc.push 1).push a.val.1).push (sortCode a.val.2))
+  | .free f args, acc => do
+    let acc ← (List.finRange _).foldlM (fun acc i => emit (args i) acc) acc
+    let n ← WordEncoding.pack (d.sig.arity f)
+    return ((acc.push 2).push f.val).push n
+  | .comm f l r, acc => do
+    let acc ← emit l acc
+    let acc ← emit r acc
+    return ((acc.push 3).push f.val).push 2
+  | .ac f l r, acc => do
+    let acc ← emit l acc
+    let acc ← emit r acc
+    return ((acc.push 4).push f.val).push 2
+
+private def words (ts : List Token) : Array UInt64 := (ts.flatMap Token.words).toArray
+
+private theorem words_append (xs ys : List Token) : words (xs ++ ys) = words xs ++ words ys := by
+  simp [words]
+
+private theorem push3 (acc : Array UInt64) (a b c : UInt64) :
+    ((acc.push a).push b).push c = acc ++ #[a,b,c] := by
+  apply Array.toList_inj.mp
+  simp
+
+private theorem emit_fold {d : Dictionary} {ι : Type} (args : ι → Term d.sig)
+    (ih : ∀ i acc, emit (args i) acc = (write (args i)).map fun ts => acc ++ words ts)
+    (is : List ι) (acc : Array UInt64) :
+    is.foldlM (fun acc i => emit (args i) acc) acc =
+      (is.mapM fun i => write (args i)).map fun cs => acc ++ words cs.flatten := by
+  induction is generalizing acc with
+  | nil => simp [words]
+  | cons i is step =>
+    rw [List.foldlM_cons, List.mapM_cons, ih]
+    cases write (args i) with
+    | none => rfl
+    | some ts =>
+      simp only [Option.map_some, Option.bind_eq_bind, Option.bind_some, step]
+      cases is.mapM (fun i => write (args i)) with
+      | none => rfl
+      | some cs => simp [words_append, Array.append_assoc]
+
+private theorem emit_eq {d : Dictionary} (t : Term d.sig) (acc : Array UInt64) :
+    emit t acc = (write t).map fun ts => acc ++ words ts := by
+  induction t generalizing acc with
+  | var v =>
+    simp only [emit, write]
+    cases WordEncoding.pack v.id <;> simp [words, Token.words, push3]
+  | atom a => simp [emit, write, words, Token.words, push3]
+  | free f args ih =>
+    simp only [emit, write, bind_pure_comp, Option.bind_eq_bind]
+    rw [emit_fold args ih]
+    cases (List.finRange _).mapM (fun i => write (args i)) with
+    | none => rfl
+    | some cs =>
+      cases WordEncoding.pack (d.sig.arity f) <;> simp [words, Token.words, push3]
+  | comm f l r il ir | ac f l r il ir =>
+    simp only [emit, write, il, ir, bind_pure_comp, Option.bind_eq_bind]
+    cases write l with
+    | none => rfl
+    | some a =>
+      cases write r with
+      | none => rfl
+      | some b => simp [words, Token.words, push3]
+
+/-- `binding` writing the image straight into the row. -/
+private def bindingDirect {d : Dictionary} (σ : Substitution d.sig) (v : Variable) :
+    Option (Array UInt64) := do
+  let id ← WordEncoding.pack v.id
+  emit (σ.image v) #[id, sortCode v.sort]
+
+@[csimp] private theorem binding_eq_direct : @binding = @bindingDirect := by
+  funext d σ v
+  simp only [binding, bindingDirect, emit_eq, bind_pure_comp, Option.bind_eq_bind]
+  cases WordEncoding.pack v.id with
+  | none => rfl
+  | some id =>
+    cases write (σ.image v) with
+    | none => rfl
+    | some ts => simp [words]
+
 def arm {d : Dictionary} (vs : List Variable) (σ : Substitution d.sig) : Option (List (Array UInt64)) := do
   return #[] :: (← vs.mapM (binding σ))
 
@@ -131,11 +215,66 @@ def pack {d : Dictionary} (p : Problem d.sig) (answers : List (Substitution d.si
     Option (Array (Array UInt64)) := do
   return (#[1] :: (← answers.mapM (arm p.variables.eraseDups)).flatten).toArray
 
+/-- `pack` removing repeated variables bucket by bucket. -/
+private def packBucketed {d : Dictionary} (p : Problem d.sig) (answers : List (Substitution d.sig)) :
+    Option (Array (Array UInt64)) := do
+  return (#[1] :: (← answers.mapM (arm (Buckets.dedup Variable.id p.variables))).flatten).toArray
+
+@[csimp] private theorem pack_eq_bucketed : @pack = @packBucketed := by
+  funext d p answers
+  simp only [pack, packBucketed, Buckets.dedup_eq]
+
+/-- A variable or a product at the root. -/
+private def sumLike {d : Dictionary} : Term d.sig → Bool
+  | .var _ | .ac _ _ _ => true
+  | _ => false
+
+/-- The operands of a product at its root, counted along the right spine up
+to the given bound. -/
+private def spine {d : Dictionary} : Nat → Term d.sig → Nat
+  | 0, _ => 0
+  | fuel + 1, .ac _ _ r => 1 + spine fuel r
+  | _ + 1, _ => 1
+
+/-- Operands of a product from which a query is examined before listing. -/
+def wideProduct : Nat := 8
+
+/-- The family of the unifier, or the empty family when the linear residuals
+of the query already show that it has no unifier. Only a query between sums
+with a product of at least `wideProduct` operands and at least 32 variable
+occurrences is examined first: listing refutes another one as fast, and the
+examination would repeat its free factoring. -/
+def family {d : Dictionary} (p : Problem d.sig) : List (Substitution d.sig) :=
+  if (p.all fun e => sumLike e.lhs && sumLike e.rhs) &&
+      (p.any fun e => wideProduct ≤ spine wideProduct e.lhs || wideProduct ≤ spine wideProduct e.rhs) &&
+      32 ≤ p.variables.length &&
+      UnifyExists.fast UnifyExists.depth p == some false then []
+  else (MixedUnification.verified (s := d.sig)).solve p trivial []
+
+theorem family_correct {d : Dictionary} (p : Problem d.sig) :
+    (Outcome.complete (family p)).CorrectIn p [] := by
+  unfold family
+  split
+  · next none =>
+    refine ⟨(complete_empty_iff p).mpr fun yes => ?_, by simp [Outcome.answers], by simp [Outcome.answers]⟩
+    have verdict : UnifyExists.fast UnifyExists.depth p = some false := by
+      simpa using (Bool.and_eq_true_iff.mp none).2
+    have := (UnifyExists.fast_sound _ p false verdict).mpr yes
+    cases this
+  · exact MixedUnification.unify_correct rfl
+
+theorem family_subset {d : Dictionary} (p : Problem d.sig) :
+    ∀ σ ∈ family p, σ ∈ (MixedUnification.verified (s := d.sig)).solve p trivial [] := by
+  unfold family
+  split
+  · intro σ h; cases h
+  · exact fun _ h => h
+
 def run (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Array (Array UInt64) :=
   (do
-    let ⟨d,p⟩ ← input decls nodes roots
-    pack p ((MixedUnification.verified (s := d.sig)).solve p trivial [])).getD #[#[0]]
+    let ⟨_,p⟩ ← input decls nodes roots
+    pack p (family p)).getD #[#[0]]
 
 theorem app_free {d : Dictionary} (f : d.sig.FreeSym) (args : Fin (d.sig.arity f) → Term d.sig) :
     app d 2 f.val (List.ofFn args) = some (.free f args) := by

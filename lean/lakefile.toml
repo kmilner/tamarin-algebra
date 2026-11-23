@@ -15,3 +15,7 @@ roots = ["TamarinRuntime", "TamarinWire"]
 
 [[lean_lib]]
 name = "TamarinCI"
+
+# Theorems outside the contract: proposer exports and library facts. Not pinned.
+[[lean_lib]]
+name = "TamarinProposers"

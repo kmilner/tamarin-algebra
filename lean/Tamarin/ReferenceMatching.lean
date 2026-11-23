@@ -1,97 +1,15 @@
-import Tamarin.ACSplits
-import Tamarin.MaudeOperations
-import Tamarin.MatchingFree
-import Tamarin.Commutative
-import Tamarin.SortClash
+import Tamarin.BagSearch
 
 /-! Finite structural reference for whole-term matching. A branch records an
 image requirement at each pattern-variable occurrence. Distinct occurrences
-may constrain the same variable, even across different equations. -/
+may constrain the same variable, even across different equations.
+
+`branches` splits an AC subject in every possible way and is the plain
+specification. Equality and the matcher run on `BagMatching.rows`, which
+lists each distinct assignment once. -/
 namespace Tamarin.ReferenceMatching
 open Matching
 variable {s : Signature}
-abbrev Requirements (s : Signature) := List (Variable × Term s)
-
-private def holds (σ : Substitution s) (row : Requirements s) : Prop :=
-  ∀ v t, (v,t) ∈ row → EquivB (σ.image v) t
-
-private def combine (xs ys : List (Requirements s)) :=
-  xs.flatMap fun a => ys.map (a ++ ·)
-
-private def together : List (List (Requirements s)) → List (Requirements s)
-  | [] => [[]]
-  | xs :: rest => combine xs (together rest)
-
-private def accepts (σ : Substitution s) (rows : List (Requirements s)) : Prop :=
-  ∃ row ∈ rows, holds σ row
-
-private theorem mem_combine {xs ys : List (Requirements s)} {row} :
-    row ∈ combine xs ys ↔ ∃ a ∈ xs, ∃ b ∈ ys, a ++ b = row := by
-  simp [combine]
-
-private theorem combine_iff (σ : Substitution s) (xs ys : List (Requirements s)) :
-    accepts σ (combine xs ys) ↔ accepts σ xs ∧ accepts σ ys := by
-  constructor
-  · rintro ⟨_, member, sat⟩
-    obtain ⟨a, ha, b, hb, rfl⟩ := mem_combine.mp member
-    exact ⟨⟨a,ha,fun v t h => sat v t (List.mem_append_left _ h)⟩,
-      ⟨b,hb,fun v t h => sat v t (List.mem_append_right _ h)⟩⟩
-  · rintro ⟨⟨a,ha,sa⟩,⟨b,hb,sb⟩⟩
-    exact ⟨_, mem_combine.mpr ⟨a, ha, b, hb, rfl⟩,
-      fun v t h => (List.mem_append.mp h).elim (sa v t) (sb v t)⟩
-
-private theorem together_iff (σ : Substitution s) (xs : List (List (Requirements s))) :
-    accepts σ (together xs) ↔ ∀ rows ∈ xs, accepts σ rows := by
-  induction xs with
-  | nil => simp [accepts, together, holds]
-  | cons x xs ih => simp [together, combine_iff, ih]
-
-private theorem mentions_combine {xs ys : List (Requirements s)} {row v}
-    (member : row ∈ combine xs ys)
-    (side : (∀ part ∈ xs, ∃ u, (v, u) ∈ part) ∨ (∀ part ∈ ys, ∃ u, (v, u) ∈ part)) :
-    ∃ u, (v, u) ∈ row := by
-  obtain ⟨a, ha, b, hb, rfl⟩ := mem_combine.mp member
-  rcases side with left | right
-  · obtain ⟨u, hu⟩ := left a ha
-    exact ⟨u, List.mem_append_left _ hu⟩
-  · obtain ⟨u, hu⟩ := right b hb
-    exact ⟨u, List.mem_append_right _ hu⟩
-
-private theorem part_of_together (xs : List (List (Requirements s))) {row}
-    (member : row ∈ together xs) {ys} (hy : ys ∈ xs) :
-    ∃ part ∈ ys, part ⊆ row := by
-  induction xs generalizing row with
-  | nil => contradiction
-  | cons y xs ih =>
-    obtain ⟨a,ha,b,hb,rfl⟩ := mem_combine.mp member
-    rcases List.mem_cons.mp hy with rfl | hm
-    · exact ⟨a, ha, List.subset_append_left ..⟩
-    · obtain ⟨v,hv,sub⟩ := ih hb hm
-      exact ⟨v, hv, sub.trans (List.subset_append_right ..)⟩
-
-private theorem lookup_requirement (row : Requirements s) {v}
-    (mentioned : ∃ t, (v, t) ∈ row) : ∃ u, row.lookup v = some u ∧ (v, u) ∈ row := by
-  obtain ⟨t, member⟩ := mentioned
-  have found : (row.lookup v).isSome := List.lookup_isSome_iff.mpr ⟨(v, t), member, by simp⟩
-  obtain ⟨u, lookup⟩ := Option.isSome_iff_exists.mp found
-  obtain ⟨_, _, eq, _⟩ := List.lookup_eq_some_iff.mp lookup
-  exact ⟨u, lookup, by simp [eq]⟩
-
-private theorem mismatch {a b : Term s}
-    (ne : (headModel s).eval Head.var a ≠ (headModel s).eval Head.var b) :
-    ¬ EquivB a b := fun eq => ne eq.head_eq
-
-private def isVariable (v : Variable) : Term s → Bool
-  | .var w => v == w
-  | _ => false
-
-private theorem isVariable_iff (v : Variable) (t : Term s) :
-    isVariable v t = true ↔ EquivB (.var v) t := by
-  cases t with
-  | var w =>
-    simp only [isVariable, beq_iff_eq]
-    exact ⟨fun h => h ▸ .refl _, fun h => Head.var.inj h.head_eq⟩
-  | _ => exact ⟨nofun,fun h => nomatch h.head_eq⟩
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
@@ -188,26 +106,120 @@ private theorem mentions (p t : Term s) {row} (hr : row ∈ branches p t)
     exact mentions_combine member (hv.imp (fun av _ hit => ia l hit av) (fun bv _ hit => ib r hit bv))
 
 /-- When the left-hand variables are rigid, their required images must be
-the same variables. The same decomposition thus decides ordinary B-equality. -/
-def equal (a b : Term s) : Bool :=
+the same variables. The same decomposition thus decides ordinary B-equality.
+This is the specification used to justify `equal`; it is never run. -/
+private def equalRef (a b : Term s) : Bool :=
   (branches a b).any fun row => row.all fun (v,t) => isVariable v t
 
-theorem equal_iff (a b : Term s) : equal a b = true ↔ EquivB a b := by
+private theorem equalRef_iff (a b : Term s) : equalRef a b = true ↔ EquivB a b := by
   apply Iff.trans _ (by simpa using branches_iff (Substitution.identity : Substitution s) a b)
+  simp [equalRef, accepts, holds, isVariable_iff, Substitution.identity, Prod.forall]
+
+/-- Ordinary B-equality: every variable of the left term is rigid, so each of
+its operands removes one equal operand of the right term. No bindable variable
+occurs, hence the comparison passed to the bag matcher is never consulted. -/
+def equal (a b : Term s) : Bool :=
+  (BagMatching.rows [] (fun _ => false) equalRef a b).any fun row => row.all fun (v,t) => isVariable v t
+
+theorem equal_iff (a b : Term s) : equal a b = true ↔ EquivB a b := by
+  have rows := BagMatching.rows_iff (tab := []) (bind := fun _ => false) equalRef_iff
+    (Substitution.identity : Substitution s) a b (fun _ _ _ => rfl) (BagMatching.fits_nil _)
+  apply Iff.trans _ (by simpa using rows)
   simp [equal, accepts, holds, isVariable_iff, Substitution.identity, Prod.forall]
 
-private def queryBranches (p : Problem s) :=
-  together (p.map fun e => branches e.lhs e.rhs)
+/-- Occurrences of a variable as a direct operand of an application of `g`. -/
+private def direct (g : s.ACSym) (v : Variable) : Term s → Nat
+  | .ac f a b => if f = g then direct g v a + direct g v b else 0
+  | .var w => if w = v then 1 else 0
+  | _ => 0
 
-private theorem query_iff (p : Problem s) (σ : Substitution s) :
-    accepts σ (queryBranches p) ↔ Matches p σ := by
-  simp [queryBranches, together_iff, branches_iff, Matches]
+/-- The variables that are direct operands of an application of `g`. -/
+private def operandVariables (g : s.ACSym) : Term s → List Variable
+  | .ac f a b => if f = g then operandVariables g a ++ operandVariables g b else []
+  | .var w => [w]
+  | _ => []
 
-private theorem query_mentions (p : Problem s) {row} (member : row ∈ queryBranches p) {v}
-    (obs : Observed p v) : ∃ t, (v,t) ∈ row := by
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+open Classical in
+private theorem direct_le (g : s.ACSym) (v : Variable) (σ : Substitution s) (t : Term s)
+    (c : Cancellation.Class s) :
+    direct g v t * (Cancellation.flatten g (σ.image v)).count c ≤
+      (Cancellation.flatten g (σ.apply t)).count c := by
+  induction t with
+  | var w =>
+    by_cases same : w = v
+    · subst same
+      simp only [direct, ite_true, Nat.one_mul]
+      exact Nat.le_refl _
+    · simp [direct, same]
+  | ac f a b ia ib =>
+    by_cases same : f = g
+    · subst same
+      have shape : σ.apply (.ac f a b) = .ac f (σ.apply a) (σ.apply b) := rfl
+      simp only [direct, ite_true, shape, Cancellation.flatten_ac, List.count_append, Nat.add_mul]
+      omega
+    · simp [direct, same]
+  | _ => simp [direct]
+
+/-- Each equation between an AC application and its subject bounds the image
+of every bindable variable that is a direct operand of the application. -/
+private def recorded (bind : Variable → Bool) (p : Problem s) : List (BagMatching.Bound s) :=
+  p.flatMap fun e =>
+    match e.lhs with
+    | .ac g _ _ =>
+      let bag := ACRepresentation.flatten g e.rhs
+      ((operandVariables g e.lhs).filter bind).eraseDups.map fun v =>
+        ⟨g, v, direct g v e.lhs, bag⟩
+    | _ => []
+
+/-- The bounds that tie one variable to several equations. A single equation
+tells the search nothing beyond its own operands. -/
+private def bounds (bind : Variable → Bool) (p : Problem s) : List (BagMatching.Bound s) :=
+  match p with
+  | [] | [_] => []
+  | _ =>
+    let all := recorded bind p
+    all.filter fun b => 2 ≤ all.countP fun c => c.g = b.g && c.v == b.v
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+open Classical in
+private theorem bounds_fit (bind : Variable → Bool) (p : Problem s) (σ : Substitution s)
+    (matched : Matches p σ) : BagMatching.Fits (bounds bind p) σ := by
+  have all : BagMatching.Fits (recorded bind p) σ := by
+    intro b hb c
+    obtain ⟨e, he, inside⟩ := List.mem_flatMap.mp hb
+    split at inside
+    · next g l r shape =>
+      obtain ⟨v, _, rfl⟩ := List.mem_map.mp inside
+      have same := (Cancellation.flatten_equiv g (matched e he)).count_eq c
+      rw [BagMatching.cls_flatten]
+      exact same ▸ direct_le g v σ e.lhs c
+    · contradiction
+  unfold bounds
+  split
+  · exact BagMatching.fits_nil σ
+  · exact BagMatching.fits_nil σ
+  · exact fun b hb => all b (List.mem_filter.mp hb).1
+
+private def queryBranches (bind : Variable → Bool) (p : Problem s) :=
+  BagMatching.joined equal (p.map fun e => BagMatching.rows (bounds bind p) bind equal e.lhs e.rhs)
+
+private theorem query_complete (bind : Variable → Bool) (p : Problem s) (σ : Substitution s)
+    (matched : Matches p σ)
+    (fixed : ∀ e ∈ p, ∀ v, e.lhs.Occurs v → bind v = false → σ.image v = .var v) :
+    accepts σ (queryBranches bind p) := by
+  apply (BagMatching.joined_iff (fun a b => (equal_iff a b).mpr) σ _).mpr
+  intro rows member
+  obtain ⟨e, he, rfl⟩ := List.mem_map.mp member
+  exact (BagMatching.rows_iff equal_iff σ e.lhs e.rhs (fixed e he) (bounds_fit bind p σ matched)).mpr
+    (matched e he)
+
+private theorem query_mentions (bind : Variable → Bool) (p : Problem s) {row}
+    (member : row ∈ queryBranches bind p) {v} (obs : Observed p v) (hb : bind v = true) :
+    ∃ t, (v,t) ∈ row := by
   obtain ⟨e,he,occ⟩ := obs
-  obtain ⟨part,hp,sub⟩ := part_of_together _ member (List.mem_map_of_mem he)
-  obtain ⟨t,ht⟩ := mentions e.lhs e.rhs hp occ
+  obtain ⟨part,hp,sub⟩ := BagMatching.part_of_joined _ member (List.mem_map_of_mem he)
+  obtain ⟨t,ht⟩ := BagMatching.rows_mentions hp occ hb
   exact ⟨t,sub ht⟩
 
 private def keys (p : Problem s) (bindable : List Variable) : List Variable :=
@@ -227,14 +239,122 @@ private def assignment (row : Requirements s) (domain : List Variable) : Substit
     · next h => exact Term.checkSort_sound _ _ h.2
     · exact .var v
 
-private def valid (p : Problem s) (σ : Substitution s) : Bool :=
-  p.all (fun e => equal (σ.apply e.lhs) e.rhs)
+/-- A branch of the whole query already satisfies its own requirements: the
+requirements on one variable agree, each concerns a bindable pattern variable,
+and each image fits the sort of its variable. -/
+private theorem query_holds (p : Problem s) (bindable : List Variable) {row}
+    (member : row ∈ queryBranches (fun v => bindable.contains v) p) :
+    holds (assignment row (keys p bindable)) row := by
+  have entry {v t} (h : (v,t) ∈ row) : v ∈ keys p bindable ∧ t.checkSort v.sort = true := by
+    obtain ⟨rows,hrows,part,hp,hit⟩ := BagMatching.entry_of_joined _ member h
+    obtain ⟨e,he,rfl⟩ := List.mem_map.mp hrows
+    obtain ⟨occ,allowed,ok⟩ := BagMatching.rows_entries hp hit
+    exact ⟨by simpa [keys] using ⟨⟨e,he,occ⟩,by simpa using allowed⟩,ok⟩
+  intro v t h
+  obtain ⟨u,lookup,hit⟩ := lookup_requirement row ⟨t,h⟩
+  have same := BagMatching.consistent_pairs (fun a b => (equal_iff a b).mp)
+    (BagMatching.joined_consistent _ member) hit h
+  simpa [assignment,imageAt,lookup,(entry hit).1,(entry hit).2] using same
 
-private theorem valid_iff (p : Problem s) (σ : Substitution s) :
-    valid p σ = true ↔ Matches p σ := by simp [valid, Matches, equal_iff]
-
+/-- Each branch of the bag matcher determines one answer. No candidate is
+checked again on the equations. -/
 def solve (p : Problem s) (bindable : List Variable) : List (Substitution s) :=
-  ((queryBranches p).map fun row => assignment row (keys p bindable)).filter (valid p)
+  let domain := keys p bindable
+  (queryBranches (fun v => bindable.contains v) p).map fun row => assignment row domain
+
+/-- The first answer of `solve`, found without listing the others. -/
+def first (p : Problem s) (bindable : List Variable) : Option (Substitution s) :=
+  let domain := keys p bindable
+  let tab := bounds (fun v => bindable.contains v) p
+  BagMatching.joinedF equal
+    (p.map fun e => BagMatching.rowsF tab (fun v => bindable.contains v) equal e.lhs e.rhs)
+    fun row => some (assignment row domain)
+
+theorem first_eq (p : Problem s) (bindable : List Variable) :
+    first p bindable = (solve p bindable).head? := by
+  unfold first solve queryBranches
+  rw [BagMatching.joinedF_eq equal p _
+    (fun e => BagMatching.rows (bounds (fun v => bindable.contains v) p)
+      (fun v => bindable.contains v) equal e.lhs e.rhs)
+    (fun e _ k => BagMatching.rowsF_eq _ (fun v => bindable.contains v) equal e.lhs e.rhs k),
+    List.head?_map, BagMatching.findSome_some]
+
+private theorem around_holds (f : s.ACSym) (pattern subject : Term s)
+    {out : Requirements s × List (Term s)}
+    (member : out ∈ BagMatching.around (fun _ => true) equal f pattern subject) :
+    holds (assignment out.1 pattern.variables) out.1 := by
+  intro v t h
+  obtain ⟨u,lookup,hit⟩ := lookup_requirement out.1 ⟨t,h⟩
+  obtain ⟨occ,_,ok⟩ := BagMatching.around_entries member hit
+  have key : v ∈ pattern.variables := (Term.mem_variables ..).mpr occ
+  have same := BagMatching.consistent_pairs (fun a b => (equal_iff a b).mp)
+    (BagMatching.around_consistent member) hit h
+  simpa [assignment,imageAt,lookup,key,ok] using same
+
+/-- Instances of a pattern as a proper sub-product of an application of `f`,
+each with the product of the operands outside the instance. The subject is
+read once as a bag; no partition of its operands is enumerated. -/
+def subproducts (f : s.ACSym) (pattern subject : Term s) : List (Substitution s × Term s) :=
+  match BagMatching.around (fun _ => true) equal f pattern subject with
+  | [] => []
+  | found =>
+    let domain := pattern.variables
+    found.filterMap fun out =>
+      (ACRepresentation.decode f out.2).map fun rest => (assignment out.1 domain, rest)
+
+private theorem subproducts_eq (f : s.ACSym) (pattern subject : Term s) :
+    subproducts f pattern subject =
+      (BagMatching.around (fun _ => true) equal f pattern subject).filterMap fun out =>
+        (ACRepresentation.decode f out.2).map fun rest => (assignment out.1 pattern.variables, rest) := by
+  unfold subproducts
+  split
+  · next none_ => rw [none_]; rfl
+  · rfl
+
+theorem subproducts_sound (f : s.ACSym) (pattern subject : Term s) {θ : Substitution s} {rest : Term s}
+    (member : (θ,rest) ∈ subproducts f pattern subject) :
+    EquivB subject (.ac f (θ.apply pattern) rest) := by
+  rw [subproducts_eq] at member
+  obtain ⟨out,hout,made⟩ := List.mem_filterMap.mp member
+  obtain ⟨r,dec,eq⟩ := Option.map_eq_some_iff.mp made
+  cases eq
+  have bags := (BagMatching.around_sound (bind := fun _ => true) equal_iff _ f pattern subject
+    (fun _ _ hb => absurd hb (by simp)) hout (around_holds f pattern subject hout)).1
+  have e := Cancellation.fold_perm f bags
+  rw [Cancellation.fold_flatten,Cancellation.fold_append,Cancellation.fold_flatten,
+    BagMatching.fold_cls,dec] at e
+  exact Quotient.exact (Option.some.inj e)
+
+theorem subproducts_complete (f : s.ACSym) (pattern subject : Term s) (σ : Substitution s)
+    {rem : Term s} (h : EquivB subject (.ac f (σ.apply pattern) rem)) :
+    ∃ θ rest, (θ,rest) ∈ subproducts f pattern subject ∧
+      Substitution.AgreesOn pattern.Occurs σ θ ∧ EquivB rem rest := by
+  have bags := Cancellation.flatten_equiv f h
+  rw [Cancellation.flatten_ac] at bags
+  have some_ : Cancellation.flatten f rem ≠ [] := fun e => by
+    have folded := Cancellation.fold_flatten f rem
+    rw [e] at folded
+    cases folded
+  obtain ⟨out,hout,sat,left⟩ := BagMatching.around_complete (bind := fun _ => true) equal_iff σ f
+    pattern subject (fun _ _ hb => absurd hb (by simp)) bags some_
+  obtain ⟨r,dec,same⟩ := BagMatching.decode_of_perm f left
+  refine ⟨assignment out.1 pattern.variables,r,
+    (subproducts_eq f pattern subject).symm ▸ List.mem_filterMap.mpr ⟨out,hout,by simp [dec]⟩,
+    fun v occ => ?_,same⟩
+  have key : v ∈ pattern.variables := (Term.mem_variables ..).mpr occ
+  obtain ⟨u,lookup,hit⟩ := lookup_requirement out.1 (BagMatching.around_mentions hout occ rfl)
+  have image := sat v u hit
+  have sorted := SortClash.check_equiv image v.sort ▸ Term.checkSort_complete (σ.sorted v)
+  simpa [assignment,imageAt,lookup,key,sorted] using image
+
+/-- The first entry of `subproducts`, found without listing the others. -/
+def subproductF (f : s.ACSym) (pattern subject : Term s) : Option (Substitution s × Term s) :=
+  BagMatching.aroundF (fun _ => true) equal f pattern subject fun out =>
+    (ACRepresentation.decode f out.2).map fun rest => (assignment out.1 pattern.variables, rest)
+
+theorem subproductF_eq (f : s.ACSym) (pattern subject : Term s) :
+    subproductF f pattern subject = (subproducts f pattern subject).head? := by
+  rw [subproducts_eq, List.head?_filterMap, subproductF, BagMatching.aroundF_eq]
 
 end
 
@@ -246,26 +366,32 @@ def matcher (s : Signature) [DecidableEq s.FreeSym] [DecidableEq s.CSym]
   correct p _ bindable := by
     constructor
     · intro σ mem
-      obtain ⟨h,ok⟩ := List.mem_filter.mp mem
-      obtain ⟨row,_,rfl⟩ := List.mem_map.mp h
-      refine ⟨(valid_iff ..).mp ok, fun v frozen => ?_⟩
-      apply Substitution.outside
-      simpa [assignment,keys] using frozen
+      obtain ⟨row,member,rfl⟩ := List.mem_map.mp mem
+      have frozen (v : Variable) (off : ¬ (Observed p v ∧ v ∈ bindable)) :
+          (assignment row (keys p bindable)).image v = .var v := by
+        apply Substitution.outside
+        simpa [assignment,keys] using off
+      refine ⟨fun e he => ?_,frozen⟩
+      obtain ⟨part,hp,sub⟩ := BagMatching.part_of_joined _ member (List.mem_map_of_mem he)
+      exact BagMatching.rows_sound equal_iff _ e.lhs e.rhs
+        (fun v _ hb => frozen v (fun h => by simp [h.2] at hb))
+        ⟨part,hp,fun v t m => query_holds p bindable member v t (sub m)⟩
     · intro ρ matched scope
-      obtain ⟨row,member,sat⟩ := (query_iff p ρ).mpr matched
+      obtain ⟨row,member,sat⟩ := query_complete (fun v => bindable.contains v) p ρ matched
+        (fun e he v occ hb => scope v (fun h => by simp [h.2] at hb))
       let out := assignment row (keys p bindable)
       have agree : Substitution.AgreesOn (Observed p) ρ out := by
         intro v obs
         by_cases allowed : v ∈ bindable
         · have key : v ∈ keys p bindable := by simp [keys,obs,allowed]
-          obtain ⟨u, lookup, hit⟩ := lookup_requirement row (query_mentions p member obs)
+          obtain ⟨u, lookup, hit⟩ := lookup_requirement row
+            (query_mentions _ p member obs (by simpa using allowed))
           have same := sat v u hit
           have sorted := SortClash.check_equiv same v.sort ▸ Term.checkSort_complete (ρ.sorted v)
           simpa [out, assignment, imageAt, lookup, key, sorted] using same
         · have off : v ∉ keys p bindable := by simp [keys,allowed]
           rw [scope v (fun h => allowed h.2), out.outside v off]
           exact .refl _
-      have solved := matches_of_agrees matched (fun v hv => (agree v hv).symm)
-      exact ⟨out,List.mem_filter.mpr ⟨List.mem_map.mpr ⟨row,member,rfl⟩,(valid_iff ..).mpr solved⟩,agree⟩
+      exact ⟨out,List.mem_map.mpr ⟨row,member,rfl⟩,agree⟩
 
 end Tamarin.ReferenceMatching

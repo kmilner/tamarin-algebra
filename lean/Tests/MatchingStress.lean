@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 /-! Exhaustive finite-model test of the flat matching contract. The oracle
 represents a free commutative semigroup on two generators by pairs of natural

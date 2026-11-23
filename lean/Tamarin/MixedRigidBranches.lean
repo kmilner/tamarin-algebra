@@ -44,7 +44,8 @@ private theorem align_covers (a b : Term s) (θ : UnifierSorts.Template s)
 
 variable [DecidableEq (Term s)]
 
-private abbrev Pair (s : Signature) := Term s × Term s
+/-- Two rigid terms with their positions in the interned term table. -/
+private abbrev Pair (s : Signature) := Nat × Nat × Term s × Term s
 
 private def rigid : Term s → Bool
   | .free .. | .comm .. => true
@@ -52,13 +53,42 @@ private def rigid : Term s → Bool
 
 /-- The input term list is already interned. Only unordered pairs can give
 new obligations, and zero-arity and syntactically distinct heads never branch. -/
-private def pairs : List (Term s) → List (Pair s)
+private def pairs (i : Nat) : List (Term s) → List (Pair s)
   | [] => []
-  | t :: ts => (ts.filterMap fun u => if (align t u).isEmpty then none else some (t,u)) ++ pairs ts
+  | t :: ts =>
+    ((ts.zipIdx (i+1)).filterMap fun u =>
+      if (align t u.1).isEmpty then none else some (i,u.2,t,u.1)) ++ pairs (i+1) ts
 
-private def enabled (q : System s) (pair : Pair s) :=
-  q.slot pair.1 == q.slot pair.2 &&
-  !(align pair.1 pair.2).any (fun es => es.all fun e => q.slot e.lhs == q.slot e.rhs)
+omit [DecidableEq (Term s)] in
+private theorem pairs_at (before xs : List (Term s)) (z : Pair s) (hz : z ∈ pairs before.length xs) :
+    (before ++ xs)[z.1]? = some z.2.2.1 ∧ (before ++ xs)[z.2.1]? = some z.2.2.2 ∧
+      z.2.2.1 ∈ xs ∧ z.2.2.2 ∈ xs ∧ align z.2.2.1 z.2.2.2 ≠ [] := by
+  induction xs generalizing before with
+  | nil => contradiction
+  | cons x xs ih =>
+    rcases List.mem_append.mp hz with hm | hm
+    · obtain ⟨u,hu,eq⟩ := List.mem_filterMap.mp hm
+      split at eq
+      · contradiction
+      next h =>
+        cases eq
+        obtain ⟨le,at_u⟩ := List.mem_zipIdx_iff_le_and_getElem?_sub.mp hu
+        refine ⟨by simp,?_,List.mem_cons_self,List.mem_cons_of_mem _ (List.mem_of_getElem? at_u),
+          by simpa using h⟩
+        show (before ++ x :: xs)[u.2]? = some u.1
+        rw [List.getElem?_append_right (by omega)]
+        rw [show u.2 - before.length = (u.2 - (before.length + 1)) + 1 by omega]
+        simpa using at_u
+    · have step := ih (before ++ [x]) (by simpa using hm)
+      simp only [List.append_assoc, List.singleton_append] at step
+      obtain ⟨ia,ib,ha,hb,ok⟩ := step
+      exact ⟨ia,ib,List.mem_cons_of_mem _ ha,List.mem_cons_of_mem _ hb,ok⟩
+
+/-- The pair is identified by the current slots and not yet aligned. The
+slots of the two terms are read from the table by position. -/
+private def enabled (k : Term s → Nat) (slots : Array Nat) (pair : Pair s) :=
+  slots.getD pair.1 0 == slots.getD pair.2.1 0 &&
+  !(align pair.2.2.1 pair.2.2.2).any (fun es => es.all fun e => k e.lhs == k e.rhs)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
 private theorem inventory_append (before p : Problem s) {t} (h : t ∈ inventory p) :
@@ -66,91 +96,203 @@ private theorem inventory_append (before p : Problem s) {t} (h : t ∈ inventory
   simpa [inventory] using Or.inr (a := t ∈ before.flatMap (fun e => subterms e.lhs ++ subterms e.rhs))
     (List.mem_eraseDups.mp h)
 
-private def loop (todo : List (Pair s)) (p : Problem s)
-    (inside : ∀ z ∈ todo, z.1 ∈ inventory p ∧ z.2 ∈ inventory p ∧ align z.1 z.2 ≠ []) :
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem slot_at (table : Array (Term s)) (k : Term s → Nat) (i : Nat) (t : Term s)
+    (h : table[i]? = some t) : (table.map k).getD i 0 = k t := by
+  simp [Array.getD_eq_getD_getElem?, h]
+
+private abbrev Known (table : Array (Term s)) (p : Problem s) (z : Pair s) : Prop :=
+  table[z.1]? = some z.2.2.1 ∧ table[z.2.1]? = some z.2.2.2 ∧
+    z.2.2.1 ∈ inventory p ∧ z.2.2.2 ∈ inventory p ∧ align z.2.2.1 z.2.2.2 ≠ []
+
+/-- One alternative for every pair, joined. -/
+private def combine : List (List (Problem s)) → List (Problem s)
+  | [] => [[]]
+  | alts :: rest => alts.flatMap fun a => (combine rest).map (a ++ ·)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem combine_covers (θ : UnifierSorts.Template s) (xs : List (List (Problem s)))
+    (each : ∀ alts ∈ xs, ∃ a ∈ alts, Solves a θ) : ∃ extra ∈ combine xs, Solves extra θ := by
+  induction xs with
+  | nil => exact ⟨[],List.mem_singleton_self _,fun _ h => nomatch h⟩
+  | cons alts rest ih =>
+    obtain ⟨a,ha,sa⟩ := each alts List.mem_cons_self
+    obtain ⟨extra,he,se⟩ := ih (fun x hx => each x (List.mem_cons_of_mem _ hx))
+    exact ⟨a ++ extra,List.mem_flatMap.mpr ⟨a,ha,List.mem_map_of_mem he⟩,
+      (append_iff ..).mpr ⟨sa,se⟩⟩
+
+/-- Align at once every pair that the current slots identify and that has a
+single alignment. The number of passes over those pairs is then the depth of
+the congruence, not the number of identified pairs, and a pass reads the slot
+of each rigid term once. A pair with several alignments is taken alone, and
+only when no pair with a single alignment is left: each of its alignments
+changes the slots, which usually settles the other pairs of its class. Taking
+all of them at once would multiply their alternatives. -/
+private def loop (table : Array (Term s)) (todo : List (Pair s)) (p : Problem s)
+    (inside : ∀ z ∈ todo, Known table p z) :
     {ps : List (Problem s) // (∀ child ∈ ps, ∀ e ∈ p, e ∈ child) ∧
       ∀ θ, Solves p θ → ∃ child ∈ ps, Solves child θ} := by
-  let q := purify p
-  match hit : todo.find? (enabled q) with
-  | none => exact ⟨[p],⟨by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩⟩
-  | some z =>
-    have hz := List.mem_of_find?_eq_some hit
-    let rest := todo.filter (· != z)
-    have lt : rest.length < todo.length :=
-      List.length_filter_lt_length_iff_exists.mpr ⟨z,hz,by simp⟩
-    let visit (extra : Problem s) := loop rest (extra ++ p) (fun t ht => by
-      obtain ⟨ha,hb,ok⟩ := inside t (List.mem_filter.mp ht).1
-      exact ⟨inventory_append _ _ ha,inventory_append _ _ hb,ok⟩)
-    refine ⟨(align z.1 z.2).flatMap (fun es => (visit es).val),?_,?_⟩
+  -- Nothing to align: the slots are not needed.
+  if todo.isEmpty then exact ⟨[p],⟨by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩⟩ else
+  let q := slotsOnly p
+  let slots := table.map q.slot
+  let hits := todo.filter (enabled q.slot slots)
+  match found : hits with
+  | [] => exact ⟨[p],⟨by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩⟩
+  | first :: more =>
+    let forced := hits.any fun z => (align z.2.2.1 z.2.2.2).length ≤ 1
+    let pick (z : Pair s) : Bool := enabled q.slot slots z &&
+      (if forced then decide ((align z.2.2.1 z.2.2.2).length ≤ 1)
+       else z.1 == first.1 && z.2.1 == first.2.1)
+    let batch := todo.filter pick
+    have member (z : Pair s) (hz : z ∈ batch) : z ∈ todo ∧ enabled q.slot slots z = true := by
+      obtain ⟨mem,yes⟩ := List.mem_filter.mp hz
+      exact ⟨mem,(Bool.and_eq_true_iff.mp yes).1⟩
+    have some : ∃ z ∈ todo, pick z = true := by
+      have firstHit : first ∈ todo ∧ enabled q.slot slots first = true := by
+        have : first ∈ hits := by rw [found]; exact List.mem_cons_self
+        exact List.mem_filter.mp this
+      cases hf : forced with
+      | true =>
+        obtain ⟨z,hz,short⟩ := List.any_eq_true.mp hf
+        obtain ⟨mem,yes⟩ := List.mem_filter.mp hz
+        exact ⟨z,mem,by simp only [pick,yes,hf,Bool.true_and,ite_true]; exact short⟩
+      | false => exact ⟨first,firstHit.1,by simp [pick,firstHit.2,hf]⟩
+    let rest := todo.filter (fun z => !(pick z))
+    have lt : rest.length < todo.length := by
+      obtain ⟨z,hz,yes⟩ := some
+      exact List.length_filter_lt_length_iff_exists.mpr ⟨z,hz,by simp [yes]⟩
+    let visit (extra : Problem s) := loop table rest (extra ++ p) (fun t ht => by
+      obtain ⟨ia,ib,ha,hb,ok⟩ := inside t (List.mem_filter.mp ht).1
+      exact ⟨ia,ib,inventory_append _ _ ha,inventory_append _ _ hb,ok⟩)
+    refine ⟨(combine (batch.map fun z => align z.2.2.1 z.2.2.2)).flatMap
+      (fun es => (visit es).val),?_,?_⟩
     · intro child hc e he
       obtain ⟨es,_,hmem⟩ := List.mem_flatMap.mp hc
       exact (visit es).property.1 child hmem e (List.mem_append_right _ he)
     · intro θ sol
       obtain ⟨V,hV⟩ := inventory_values p θ sol
-      obtain ⟨ha,hb,ok⟩ := inside z hz
-      have yes := List.find?_some hit
-      simp only [enabled,Bool.and_eq_true,beq_iff_eq] at yes
-      have same : q.slot z.1 = q.slot z.2 := yes.1
-      have eq := hV _ ha
-      change EquivB _ (V (q.slot z.1)) at eq
-      rw [same] at eq
-      obtain ⟨extra,he,hs⟩ := align_covers _ _ θ ok (eq.trans (hV _ hb).symm)
+      have each : ∀ alts ∈ batch.map (fun z => align z.2.2.1 z.2.2.2),
+          ∃ a ∈ alts, Solves a θ := by
+        intro alts ha
+        obtain ⟨z,hz,rfl⟩ := List.mem_map.mp ha
+        obtain ⟨ia,ib,ha,hb,ok⟩ := inside z (member z hz).1
+        have yes := (member z hz).2
+        simp only [enabled,Bool.and_eq_true,beq_iff_eq] at yes
+        have same : (purify p).slot z.2.2.1 = (purify p).slot z.2.2.2 := by
+          have left := slot_at table q.slot _ _ ia
+          have right := slot_at table q.slot _ _ ib
+          exact left.symm.trans (yes.1.trans right)
+        have eq := hV _ ha
+        change EquivB _ (V ((purify p).slot z.2.2.1)) at eq
+        rw [same] at eq
+        exact align_covers _ _ θ ok (eq.trans (hV _ hb).symm)
+      obtain ⟨extra,he,hs⟩ := combine_covers θ _ each
       obtain ⟨c,hc,hsol⟩ := (visit extra).property.2 θ ((append_iff ..).mpr ⟨hs,sol⟩)
       exact ⟨c,List.mem_flatMap.mpr ⟨extra,he,hc⟩,hsol⟩
 termination_by todo.length
+decreasing_by exact lt
 
 def refineProblem (p : Problem s) :
     {ps : List (Problem s) // (∀ child ∈ ps, ∀ e ∈ p, e ∈ child) ∧
       ∀ θ, Solves p θ → ∃ child ∈ ps, Solves child θ} := by
   let ts := (inventory p).filter rigid
-  have members (xs : List (Term s)) (z : Pair s) (hz : z ∈ pairs xs) :
-      z.1 ∈ xs ∧ z.2 ∈ xs ∧ align z.1 z.2 ≠ [] := by
-    induction xs with
-    | nil => contradiction
-    | cons x xs ih =>
-      rcases List.mem_append.mp hz with hm | hm
-      · obtain ⟨y,hy,eq⟩ := List.mem_filterMap.mp hm
-        split at eq
-        · contradiction
-        next h =>
-          cases eq
-          exact ⟨List.mem_cons_self,List.mem_cons_of_mem _ hy,by simpa using h⟩
-      · obtain ⟨ha,hb,ok⟩ := ih hm
-        exact ⟨List.mem_cons_of_mem _ ha,List.mem_cons_of_mem _ hb,ok⟩
-  exact loop (pairs ts) p (fun z hz => by
-    obtain ⟨ha,hb,ok⟩ := members ts z hz
-    exact ⟨(List.mem_filter.mp ha).1,(List.mem_filter.mp hb).1,ok⟩)
+  exact loop ts.toArray (pairs 0 ts) p (fun z hz => by
+    obtain ⟨ia,ib,ha,hb,ok⟩ := pairs_at [] ts z hz
+    exact ⟨by simpa using ia,by simpa using ib,(List.mem_filter.mp ha).1,(List.mem_filter.mp hb).1,ok⟩)
+
+/-- The answers of each child in order, or `none` at the first child that
+does not complete. The loop carries the finished children, so its stack does
+not grow with their number. -/
+private def gather {ι α : Type} (run : ι → Option (List α)) :
+    List ι → List (List α) → Option (List (List α))
+  | [], done => some done.reverse
+  | x :: xs, done =>
+    match run x with
+    | none => none
+    | some a => gather run xs (a :: done)
+
+private theorem gather_eq {ι α : Type} (run : ι → Option (List α)) (xs : List ι)
+    (done : List (List α)) :
+    gather run xs done = (xs.mapM run).map (done.reverse ++ ·) := by
+  induction xs generalizing done with
+  | nil => simp [gather]
+  | cons x xs ih =>
+    cases hx : run x with
+    | none => simp [gather, hx]
+    | some a =>
+      simp only [gather, hx, ih, List.mapM_cons, Option.bind_eq_bind, Option.bind_some,
+        List.reverse_cons, List.append_assoc, List.singleton_append]
+      cases xs.mapM run <;> simp
+
+private theorem mapM_some {ι α : Type} (run : ι → Option (List α)) :
+    ∀ (xs : List ι) (ys : List (List α)), xs.mapM run = some ys →
+      (∀ x ∈ xs, ∃ a, run x = some a ∧ a ∈ ys) ∧
+      (∀ a ∈ ys, ∃ x ∈ xs, run x = some a)
+  | [], ys, h => by
+    obtain rfl : [] = ys := by simpa using h
+    simp
+  | x :: xs, ys, h => by
+    cases hx : run x with
+    | none => simp [hx] at h
+    | some a =>
+      cases ht : xs.mapM run with
+      | none => simp [hx, ht] at h
+      | some tail =>
+        obtain rfl : a :: tail = ys := by simpa [hx, ht] using h
+        obtain ⟨fwd, back⟩ := mapM_some run xs tail ht
+        constructor
+        · intro i hi
+          rcases List.mem_cons.mp hi with rfl | hi
+          · exact ⟨a, hx, List.mem_cons_self⟩
+          · obtain ⟨b, hb, mem⟩ := fwd i hi
+            exact ⟨b, hb, List.mem_cons_of_mem _ mem⟩
+        · intro b hb
+          rcases List.mem_cons.mp hb with rfl | hb
+          · exact ⟨x, List.mem_cons_self, hx⟩
+          · obtain ⟨i, hi, eq⟩ := back b hb
+            exact ⟨i, List.mem_cons_of_mem _ hi, eq⟩
 
 /-- A family of search children completes only if every child completes. -/
-def collect {ι α : Type} (run : ι → Option (List α)) : (xs : List ι) →
+def collect {ι α : Type} (run : ι → Option (List α)) (xs : List ι) :
     Option {ys : List α //
       (∀ x ∈ xs, ∃ a, run x = some a ∧ a ⊆ ys) ∧
-      (∀ y ∈ ys, ∃ x ∈ xs, ∃ a, run x = some a ∧ y ∈ a)}
-  | [] => some ⟨[],by simp⟩
-  | x :: xs => do
-    let a ← (run x).attach
-    let b ← collect run xs
-    return ⟨a.val ++ b.val,by
+      (∀ y ∈ ys, ∃ x ∈ xs, ∃ a, run x = some a ∧ y ∈ a)} :=
+  match h : gather run xs [] with
+  | none => none
+  | some parts => some ⟨parts.flatten, by
+      have all : xs.mapM run = some parts := by
+        rw [gather_eq] at h
+        cases hm : xs.mapM run with
+        | none => simp [hm] at h
+        | some ys => simpa [hm] using h
+      obtain ⟨fwd, back⟩ := mapM_some run xs parts all
       constructor
-      · intro i hi
-        rcases List.mem_cons.mp hi with rfl | hi
-        · exact ⟨_,a.property,fun _ hm => List.mem_append_left _ hm⟩
-        · obtain ⟨out,hr,sub⟩ := b.property.1 i hi
-          exact ⟨out,hr,fun _ hm => List.mem_append_right _ (sub hm)⟩
+      · intro x hx
+        obtain ⟨a, ha, mem⟩ := fwd x hx
+        exact ⟨a, ha, fun _ hy => List.mem_flatten.mpr ⟨a, mem, hy⟩⟩
       · intro y hy
-        rcases List.mem_append.mp hy with ha | hb
-        · exact ⟨_,List.mem_cons_self,_,a.property,ha⟩
-        · obtain ⟨i,hi,out,hr,mem⟩ := b.property.2 y hb
-          exact ⟨i,List.mem_cons_of_mem _ hi,out,hr,mem⟩⟩
+        obtain ⟨a, mem, ya⟩ := List.mem_flatten.mp hy
+        obtain ⟨x, hx, eq⟩ := back a mem
+        exact ⟨x, hx, a, eq, ya⟩⟩
 
 theorem collect_completes {ι α : Type} (run : ι → Option (List α)) (xs : List ι)
     (h : ∀ i ∈ xs, (run i).isSome) : (collect run xs).isSome := by
-  induction xs with
-  | nil => rfl
-  | cons x xs ih =>
-    obtain ⟨a,ha⟩ := Option.isSome_iff_exists.mp (h x List.mem_cons_self)
-    obtain ⟨b,hb⟩ := Option.isSome_iff_exists.mp (ih (fun i hi => h i (List.mem_cons_of_mem _ hi)))
-    simp [collect,ha,hb,Option.attach]
+  have total : ∀ (ys : List ι) (done : List (List α)), (∀ i ∈ ys, (run i).isSome) →
+      (gather run ys done).isSome := by
+    intro ys
+    induction ys with
+    | nil => intro done _; rfl
+    | cons y ys ih =>
+      intro done hy
+      obtain ⟨a,ha⟩ := Option.isSome_iff_exists.mp (hy y List.mem_cons_self)
+      simp only [gather, ha]
+      exact ih _ (fun i hi => hy i (List.mem_cons_of_mem _ hi))
+  obtain ⟨parts,hp⟩ := Option.isSome_iff_exists.mp (total xs [] h)
+  unfold collect
+  split
+  · next none => rw [hp] at none; cases none
+  · rfl
 
 abbrev Certified (p : Problem s) := {r : Option (List (UnifierSorts.Template s)) //
   ∀ rows, r = some rows → UnifierSorts.CompleteTemplates p rows}

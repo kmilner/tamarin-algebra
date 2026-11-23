@@ -63,6 +63,13 @@ private theorem heads_of_solution (a b : Term s) (σ : Substitution s)
   have root := eq.head_eq
   cases a <;> cases b <;> simp_all [heads,Substitution.apply,Term.subst,Model.eval,headModel]
 
+/-- Rigid outer constructors that no instance identifies. -/
+def clash (a b : Term s) : Bool := !(heads a b)
+
+theorem no_clash (a b : Term s) (σ : Substitution s)
+    (eq : EquivB (σ.apply a) (σ.apply b)) : clash a b = false := by
+  simp [clash, heads_of_solution a b σ eq]
+
 def impossible (e : Equation s) :=
   !(heads e.lhs e.rhs) || sortClash e.lhs e.rhs || sortClash e.rhs e.lhs
 
@@ -78,6 +85,61 @@ equations. The supplied solver handles the entire remaining conjunction. -/
 def unifier (u : VerifiedUnifier s (fun _ => True)) : VerifiedUnifier s (fun _ => True) where
   solve p hp avoid := if p.any impossible then [] else u.solve p hp avoid
   correct p hp avoid := by split <;> first | exact refutes ‹_› | exact u.correct p hp avoid
+  domain p hp avoid := by split <;> first | simp | exact u.domain p hp avoid
+  fresh p hp avoid := by split <;> first | simp | exact u.fresh p hp avoid
+
+/-- The outer constructor admits the sort. -/
+private def rootPossible : Term s → SortId → Bool
+  | .var v, k => Subsort.check v.sort k || Subsort.check k v.sort
+  | .atom a, k => Subsort.check (s.atomSort a) k
+  | .free f _, k => Subsort.check (s.outputSort f) k
+  | .comm f _ _, k => Subsort.check (s.cSort f) k
+  | .ac f _ _, k => Subsort.check (s.acSort f) k
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+private theorem rootPossible_of_possible (t : Term s) (k : SortId) (h : possible t k = true) :
+    rootPossible t k = true := by
+  cases t <;> simp_all [possible, rootPossible]
+
+/-- A variable equated with a term whose outer constructor lies outside its sort. -/
+private def shallow : Term s → Term s → Bool
+  | .var v, b => !(rootPossible b v.sort)
+  | _, _ => false
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+private theorem sortClash_of_shallow (a b : Term s) (h : shallow a b = true) : sortClash a b = true := by
+  cases a with
+  | var v =>
+    have root : rootPossible b v.sort = false := by simpa [shallow] using h
+    have deep : possible b v.sort = false := by
+      cases hp : possible b v.sort with
+      | false => rfl
+      | true => rw [rootPossible_of_possible _ _ hp] at root; cases root
+    have self : Subsort.check v.sort v.sort = true := (Subsort.check_iff ..).mpr (.refl _)
+    simp [sortClash, Term.checkSort, Term.rootSort, deep, self]
+  | _ => simp [shallow] at h
+
+/-- The clashes visible at the roots of an equation, found without traversing either side. -/
+def quick (e : Equation s) : Bool :=
+  !(heads e.lhs e.rhs) || shallow e.lhs e.rhs || shallow e.rhs e.lhs
+
+theorem impossible_of_quick {e : Equation s} (h : quick e = true) : impossible e = true := by
+  simp only [quick, Bool.or_eq_true] at h
+  simp only [impossible, Bool.or_eq_true]
+  rcases h with (h | h) | h
+  · exact .inl (.inl h)
+  · exact .inl (.inr (sortClash_of_shallow _ _ h))
+  · exact .inr (sortClash_of_shallow _ _ h)
+
+theorem quick_refutes {p : Problem s} (h : p.any quick) : CompleteSet p [] := by
+  obtain ⟨e,he,bad⟩ := List.any_eq_true.mp h
+  exact refutes (List.any_eq_true.mpr ⟨e,he,impossible_of_quick bad⟩)
+
+/-- Early rejection by the root constructors alone. The check costs one
+comparison per equation, so it suits inputs that are decomposed afterwards. -/
+def rootUnifier (u : VerifiedUnifier s (fun _ => True)) : VerifiedUnifier s (fun _ => True) where
+  solve p hp avoid := if p.any quick then [] else u.solve p hp avoid
+  correct p hp avoid := by split <;> first | exact quick_refutes ‹_› | exact u.correct p hp avoid
   domain p hp avoid := by split <;> first | simp | exact u.domain p hp avoid
   fresh p hp avoid := by split <;> first | simp | exact u.fresh p hp avoid
 

@@ -10,23 +10,58 @@ open Rewriting RootNarrowing ACSubproductReduction ContextualReduction
 open ACRepresentation
 variable {s : Signature} [DecidableEq s.ACSym]
 
+/-- No sorted variable can stand for this factor of an application of `f`. -/
+private def unsorted (f : s.ACSym) (t : Term s) : Bool := !t.checkSort (s.acSort f)
+
+/-- The whole product, and every split whose set-aside side consists of
+unsorted factors only. Sorted factors never need to be set aside: the rest
+variable of an extended rule can stand for them. A product of sorted factors
+therefore has a single view. -/
 private def views (f : s.ACSym) (t : Term s) : List (Term s × Option (Term s)) :=
-  (t,none) :: (ACSplits.splits f t).map fun (a,b) => (a,some b)
+  (t,none) ::
+    if (flatten f t).any (unsorted f) then
+      ((ACSplits.splits f t).filter fun (_,b) => (flatten f b).all (unsorted f)).map fun (a,b) => (a,some b)
+    else []
 
 private theorem view_sound {f : s.ACSym} {t : Term s} {v}
     (h : v ∈ views f t) : EquivB t (plug f v.2 v.1) := by
   rcases List.mem_cons.mp h with rfl|hm
   · exact .refl _
-  · obtain ⟨⟨a,b⟩,mem,rfl⟩ := List.mem_map.mp hm
-    exact ACSplits.sound f t mem
+  · split at hm
+    · obtain ⟨⟨a,b⟩,mem,rfl⟩ := List.mem_map.mp hm
+      exact ACSplits.sound f t (List.mem_filter.mp mem).1
+    · contradiction
+
+omit [DecidableEq s.ACSym] in
+private theorem unsorted_class {f : s.ACSym} {x y : Term s}
+    (same : Cancellation.classOf x = Cancellation.classOf y) : unsorted f x = unsorted f y := by
+  unfold unsorted
+  rw [SortClash.check_equiv (Quotient.exact same)]
 
 private theorem view_cover {f : s.ACSym} {t a : Term s} {k}
-    (h : EquivB t (plug f k a)) : ∃ v ∈ views f t, EquivB a v.1 := by
+    (h : EquivB t (plug f k a))
+    (aside : ∀ b ∈ k, ∀ y, Cancellation.classOf y ∈ Cancellation.flatten f b → unsorted f y = true) :
+    ∃ v ∈ views f t, EquivB a v.1 := by
   cases k with
   | none => exact ⟨_,List.mem_cons_self,h.symm⟩
   | some b =>
-    obtain ⟨l,r,mem,eq,_⟩ := ACSplits.complete f h
-    exact ⟨(l,some r),List.mem_cons_of_mem _ (List.mem_map.mpr ⟨(l,r),mem,rfl⟩),eq⟩
+    obtain ⟨l,r,mem,eq,er⟩ := ACSplits.complete f h
+    have right : ∀ z ∈ flatten f r, unsorted f z = true := by
+      intro z hz
+      apply aside b rfl z
+      have bags := Cancellation.flatten_equiv f er
+      rw [DHProduct.classes f r] at bags
+      exact bags.mem_iff.mpr (List.mem_map_of_mem hz)
+    have whole := Cancellation.flatten_equiv f (ACSplits.sound f t mem)
+    rw [Cancellation.flatten_ac,DHProduct.classes f t,DHProduct.classes f r] at whole
+    obtain ⟨z,hz⟩ := List.exists_mem_of_ne_nil _ (flatten_nonempty f r)
+    obtain ⟨x,hx,same⟩ := List.mem_map.mp
+      (whole.mem_iff.mpr (List.mem_append_right _ (List.mem_map_of_mem hz)))
+    have some_ : (flatten f t).any (unsorted f) = true :=
+      List.any_eq_true.mpr ⟨x,hx,(unsorted_class same).trans (right z hz)⟩
+    refine ⟨(l,some r),List.mem_cons_of_mem _ ?_,eq⟩
+    rw [ite_eq_left some_]
+    exact List.mem_map.mpr ⟨(l,r),List.mem_filter.mpr ⟨mem,List.all_eq_true.mpr right⟩,rfl⟩
 
 /-- Remove prescribed factors one at a time. Each can be removed with its
 entire source block, regardless of duplicate values and occurrence order. -/
@@ -34,10 +69,11 @@ private theorem peel {α β γ : Type} (block : α → List β) (key : γ → β
     (xs : List α) (inside : List β) (outside : List γ)
     (single : ∀ x ∈ xs, ∀ b ∈ outside, key b ∈ block x → block x = [key b])
     (layout : (xs.flatMap block).Perm (inside ++ outside.map key)) :
-    ∃ kept rest, xs.Perm (kept ++ rest) ∧ (kept.flatMap block).Perm inside := by
+    ∃ kept rest, xs.Perm (kept ++ rest) ∧ (kept.flatMap block).Perm inside ∧
+      ∀ x ∈ rest, ∃ b ∈ outside, block x = [key b] := by
   classical
   induction outside generalizing xs with
-  | nil => exact ⟨xs,[],by simp,by simpa using layout⟩
+  | nil => exact ⟨xs,[],by simp,by simpa using layout,fun _ hx => nomatch hx⟩
   | cons b bs ih =>
     have move := List.perm_cons_append_cons (key b) (List.Perm.refl (inside ++ bs.map key))
     have start := layout.trans move.symm
@@ -45,10 +81,16 @@ private theorem peel {α β γ : Type} (block : α → List β) (key : γ → β
     have take := List.perm_cons_erase hx
     have blocks := take.flatMap_right block
     rw [List.flatMap_cons,single x hx b List.mem_cons_self hit,List.singleton_append] at blocks
-    obtain ⟨kept,rest,partition,factors⟩ := ih (xs.erase x)
+    have one := single x hx b List.mem_cons_self hit
+    obtain ⟨kept,rest,partition,factors,origin⟩ := ih (xs.erase x)
       (fun y hy c hc => single y (List.mem_of_mem_erase hy) c (List.mem_cons_of_mem b hc))
       ((blocks.symm.trans start).cons_inv)
-    exact ⟨kept,x::rest,take.trans (List.perm_cons_append_cons x partition),factors⟩
+    refine ⟨kept,x::rest,take.trans (List.perm_cons_append_cons x partition),factors,?_⟩
+    intro y hy
+    rcases List.mem_cons.mp hy with rfl | later
+    · exact ⟨b,List.mem_cons_self,one⟩
+    · obtain ⟨c,hc,e⟩ := origin y later
+      exact ⟨c,List.mem_cons_of_mem _ hc,e⟩
 
 private noncomputable def factors (f : s.ACSym) (ρ : Substitution s) (ts : List (Term s)) :=
   ts.flatMap fun t => Cancellation.flatten f (ρ.apply t)
@@ -126,6 +168,16 @@ private theorem one_bad (f : s.ACSym) (t : Term s) (ρ : Substitution s)
       simp [Substitution.apply,Term.subst,Cancellation.flatten,eq]
   | _ => exact singleton _ rfl
 
+private theorem atoms_flat (f : s.ACSym) (t : Term s) (xs : List (Term s))
+    (inside : ∀ x ∈ xs, x ∈ flatten f t) :
+    xs.flatMap (Cancellation.flatten f) = xs.map Cancellation.classOf := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [List.flatMap_cons,List.map_cons,
+      DHProduct.atom_factors f t x (inside x List.mem_cons_self),List.singleton_append,
+      ih (fun y hy => inside y (List.mem_cons_of_mem _ hy))]
+
 /-- Move whole source factors outside until the concrete remainder of the
 chosen view has a sort and can be represented by an ordinary variable. -/
 private theorem focus (f : s.ACSym) (t : Term s) (ρ : Substitution s) (p : Term s) (k : Option (Term s))
@@ -151,7 +203,7 @@ private theorem focus (f : s.ACSym) (t : Term s) (ρ : Substitution s) (p : Term
   have all : ((flatten f t).flatMap bagOf).Perm (need ++ bad.map Cancellation.classOf) := by
     simpa only [factors,bagOf,need,good,bad,List.append_assoc,List.map_append] using
       layout.trans (split.append_left (Cancellation.flatten f p))
-  obtain ⟨kept,rest,partition,pick⟩ := peel bagOf Cancellation.classOf (flatten f t) need bad (by
+  obtain ⟨kept,rest,partition,pick,origin⟩ := peel bagOf Cancellation.classOf (flatten f t) need bad (by
     intro x hx b hb mem
     have no := (List.mem_filter.mp hb).2
     exact one_bad f t ρ hx b (fun hs => by simp [Term.checkSort_complete hs] at no) mem) all
@@ -175,7 +227,32 @@ private theorem focus (f : s.ACSym) (t : Term s) (ρ : Substitution s) (p : Term
     have source := source_bag f (.identity (sig := s)) t
     simp only [factors,Substitution.apply_identity] at source
     rw [source]; exact regroup
-  obtain ⟨v,member,e⟩ := view_cover original
+  have atomicRest : rest.flatMap (Cancellation.flatten f) = rest.map Cancellation.classOf :=
+    atoms_flat f t rest (fun x hx => partition.mem_iff.mpr (List.mem_append_right _ hx))
+  have aside : ∀ b ∈ decode f rest, ∀ y,
+      Cancellation.classOf y ∈ Cancellation.flatten f b → unsorted f y = true := by
+    intro b hb y hy
+    have layoutRest := plain_bag f rest
+    rw [show decode f rest = some b from hb] at layoutRest
+    change Cancellation.flatten f b = _ at layoutRest
+    rw [layoutRest,atomicRest] at hy
+    obtain ⟨x,hx,same⟩ := List.mem_map.mp hy
+    obtain ⟨c,hc,single⟩ := origin x hx
+    have image : Cancellation.classOf (ρ.apply x) = Cancellation.classOf c := by
+      have folded := Cancellation.fold_flatten f (ρ.apply x)
+      change Cancellation.flatten f (ρ.apply x) = [Cancellation.classOf c] at single
+      rw [single] at folded
+      exact (Option.some.inj folded).symm
+    have badC : unsorted f c = true := (List.mem_filter.mp hc).2
+    rw [← unsorted_class same]
+    cases sorted : x.checkSort (s.acSort f) with
+    | false => simp [unsorted,sorted]
+    | true =>
+      have typed : HasSort x (s.acSort f) := Term.checkSort_sound _ _ sorted
+      have lifted := Term.checkSort_complete (typed.subst ρ.image ρ.sorted)
+      have wrong : unsorted f (ρ.apply x) = true := (unsorted_class image).trans badC
+      simp [unsorted,Substitution.apply,lifted] at wrong
+  obtain ⟨v,member,e⟩ := view_cover original aside
   let inner := decode f good
   have typed (u) (hu : u ∈ inner) : HasSort u (s.acSort f) := by
     have sorts (x) (hx : x ∈ good) := Term.checkSort_sound x _ (List.mem_filter.mp hx).2
@@ -287,6 +364,66 @@ theorem roots_cover (u : VerifiedUnifier s (fun _ => True)) {rules : List (Equat
   have hit : AtRoot (ruleRoot (ACEquationExtensions.extended rules)) (ρ.apply v.1) (plug f inner q) :=
     ⟨_,_,focusEq,extend_root bound vars f fire hd inner typed,.refl _⟩
   obtain ⟨row,hr,δ,agree,value⟩ := TableNarrowing.roots_cover u (ACEquationExtensions.bound bound) context v.1 ρ hit
+  refine ⟨_,List.mem_flatMap.mpr ⟨v,hv,List.mem_map_of_mem hr⟩,δ,?_,rebuild.symm.trans ?_⟩
+  · intro w hw
+    apply agree w ∘ Or.inr
+    rcases hw with ht|⟨a,ha,hw⟩
+    · exact ⟨_,List.mem_cons_self,ht⟩
+    · exact ⟨_,List.mem_cons_of_mem _ (List.mem_append_right _ ha),hw⟩
+  · change EquivB (plug f (v.2.map ρ.apply) (plug f inner q))
+      (δ.apply (plug f (v.2.map row.subst.apply) row.value))
+    cases split : v.2 with
+    | none => exact value
+    | some a =>
+      apply EquivB.ac_congr f value
+      have ctx : a ∈ context := by simp [context,observed,split]
+      change EquivB (ρ.apply a) (δ.apply (row.subst.apply a))
+      rw [← Substitution.apply_compose]
+      exact a.subst_equiv ρ.image (δ.compose row.subst).image (fun w hw => agree w (.inr ⟨a,ctx,hw⟩))
+
+/-- `roots` over another table. The table must have every root step of the
+extended rules and no step that the rules do not have. -/
+def rootsIn (u : VerifiedUnifier s (fun _ => True)) {table : List (Equation s)}
+    (tb : ReferenceReduction.Bound table) (f : s.ACSym) (anchors : List (Term s)) (t : Term s) :
+    List (Branch s) :=
+  (views f t).flatMap fun v =>
+    (TableNarrowing.roots u tb (observed t v.2 anchors) v.1).map (restore f v.2)
+
+theorem rootsIn_genuine (u : VerifiedUnifier s (fun _ => True)) {rules table : List (Equation s)}
+    (tb : ReferenceReduction.Bound table)
+    (inside : ∀ a b, StepModulo (ruleRoot table) a b → StepModulo (ruleRoot rules) a b)
+    (f : s.ACSym) (anchors : List (Term s)) (t : Term s) (b : Branch s)
+    (hb : b ∈ rootsIn u tb f anchors t) : StepModulo (ruleRoot rules) (b.subst.apply t) b.value := by
+  obtain ⟨v,hv,hm⟩ := List.mem_flatMap.mp hb
+  obtain ⟨row,hr,rfl⟩ := List.mem_map.mp hm
+  have eq := (view_sound hv).subst row.subst.image
+  change EquivB (row.subst.apply t) (row.subst.apply (plug f v.2 v.1)) at eq
+  rw [apply_plug] at eq
+  obtain ⟨l,r,entry,step,exit⟩ := lift_step f (v.2.map row.subst.apply)
+    (inside _ _ (TableNarrowing.roots_genuine u tb _ _ _ hr))
+  exact ⟨l,r,eq.trans entry,step,exit⟩
+
+theorem rootsIn_cover (u : VerifiedUnifier s (fun _ => True)) {rules table : List (Equation s)}
+    (bound : ReferenceReduction.Bound rules) (tb : ReferenceReduction.Bound table)
+    (has : ∀ a b, AtRoot (ruleRoot (ACEquationExtensions.extended rules)) a b → AtRoot (ruleRoot table) a b)
+    (vars : Normalized (ruleRoot rules) Substitution.identity)
+    (f : s.ACSym) (anchors : List (Term s)) (t : Term s) (ρ : Substitution s) {result}
+    (step : Occurrence (ruleRoot rules) f (ρ.apply t) result) :
+    ∃ b ∈ rootsIn u tb f anchors t,
+      FitsOn (fun w => t.Occurs w ∨ Observed anchors w) ρ result b.subst b.value := by
+  obtain ⟨p,q,k,hd,fire,before,after⟩ := step
+  obtain ⟨v,hv,inner,typed,focusEq⟩ := focus f t ρ p k before
+  let outer := v.2.map ρ.apply
+  let context := observed t v.2 anchors
+  obtain ⟨merged,join⟩ := compose_plug f outer inner
+  have source := (view_sound hv).subst ρ.image
+  change EquivB (ρ.apply t) (ρ.apply (plug f v.2 v.1)) at source
+  rw [apply_plug] at source
+  have shape := source.trans ((plug_congr f outer focusEq).trans (join _))
+  have rebuild := (join q).trans ((same_context f shape before (.refl _) q).trans after)
+  have hit : AtRoot (ruleRoot (ACEquationExtensions.extended rules)) (ρ.apply v.1) (plug f inner q) :=
+    ⟨_,_,focusEq,extend_root bound vars f fire hd inner typed,.refl _⟩
+  obtain ⟨row,hr,δ,agree,value⟩ := TableNarrowing.roots_cover u tb context v.1 ρ (has _ _ hit)
   refine ⟨_,List.mem_flatMap.mpr ⟨v,hv,List.mem_map_of_mem hr⟩,δ,?_,rebuild.symm.trans ?_⟩
   · intro w hw
     apply agree w ∘ Or.inr
