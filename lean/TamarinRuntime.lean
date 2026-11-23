@@ -8,6 +8,7 @@ import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
 import Tamarin.TotalUnifyExists
+import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
@@ -210,6 +211,21 @@ def totalUnify (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Arr
 def totalUnifyExists (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : UInt8 :=
   Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots
+
+/-- Tables that name the variables a family of unifiers adds to its query:
+see `Tamarin.UnifierNames`. -/
+@[export tamarin_name_unifiers]
+def nameUnifiers (names heads : Array UInt64) (ranges proposal : Array (Array UInt64))
+    (nat low : Bool) : Array (Array UInt64) :=
+  UnifierNames.run names heads ranges proposal nat low
+
+/-- The reading of a reply of the unifier through the tables of
+`nameUnifiers`, as the caller's reader has to produce it. The caller's tests
+compare the two. `#[#[0]]` when there is no reading. -/
+@[export tamarin_apply_names]
+def applyNames (tables : Array (Array UInt64)) (nat : Bool) (reply : Array (Array UInt64)) :
+    Array (Array UInt64) :=
+  (UnifierNames.apply tables nat reply).getD #[#[0]]
 
 @[export tamarin_total_match]
 def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :

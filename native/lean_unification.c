@@ -403,6 +403,46 @@ void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *r
                         atom_array(equations.data, equations.size)));
 }
 
+extern lean_object *tamarin_name_unifiers(lean_object *, lean_object *, lean_object *, lean_object *,
+                                          uint8_t, uint8_t);
+
+/* Tables that name the variables a family of unifiers adds to its query. The reply of
+   tamarin_lean_total_unify is read through them; no other reading of it is specified.
+   names holds two words for each variable row of the request, by the identifier of the row: the
+   caller's identifier of the variable's name hint and its index. heads holds the identifier and
+   sort words of the query variables in the order of the rows of every arm. ranges holds one row
+   for each arm of the reply, with the identifier and sort words of the variables of its range in
+   the order of first occurrence. proposal is empty or holds one row for each arm the caller keeps,
+   with a hint and an index for each variable of the arm's range. nat is 0 when the caller's module
+   has no sort of natural numbers; arms with a variable of that sort then get no table. Without a
+   proposal the names have the hint 0 and indices above every index of the query; low lets the
+   export use indices the query does not use where none are left above it.
+   The reply is {0} (declined) or the status row {1}, the row heads and, for each arm that is kept,
+   {arm, (identifier, sort, 0, hint, index | identifier, sort, 1, row, 0)...}: the variable becomes
+   the variable with that hint and index, or it stands for the query variable in that row of the arm,
+   whose binding is left out. */
+void *tamarin_lean_name_unifiers(whole_word_slice names, whole_word_slice heads,
+                                 const whole_word_slice *ranges, size_t range_count,
+                                 const whole_word_slice *proposal, size_t proposal_count,
+                                 uint8_t nat, uint8_t low) {
+    return wrap_rows(tamarin_name_unifiers(atom_array(names.data, names.size),
+                     atom_array(heads.data, heads.size), word_rows(ranges, range_count),
+                     word_rows(proposal, proposal_count), nat != 0, low != 0));
+}
+
+extern lean_object *tamarin_apply_names(lean_object *, uint8_t, lean_object *);
+
+/* The reply of tamarin_lean_total_unify read through the tables of tamarin_lean_name_unifiers, in
+   words: {0} when there is no reading, or the status row {1} and then, for each arm with a table,
+   an empty row and one row {variable row, sort, tokens...} for each query variable the arm binds.
+   A token {5 + sort, index, hint} is a variable of the range; the other tokens are those of
+   tamarin_lean_total_unify. The caller's reader is tested against this function. */
+void *tamarin_lean_apply_names(const whole_word_slice *tables, size_t table_count, uint8_t nat,
+                               const whole_word_slice *reply, size_t reply_count) {
+    return wrap_rows(tamarin_apply_names(word_rows(tables, table_count), nat != 0,
+                                        word_rows(reply, reply_count)));
+}
+
 extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
                                        uint64_t, uint64_t);
 

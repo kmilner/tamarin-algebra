@@ -22,6 +22,7 @@ import Tamarin.TableConfluence
 import Tamarin.CheckedVariantsPacket
 import Tamarin.TotalUnifyPacket
 import Tamarin.TotalUnifyDecline
+import Tamarin.UnifierNames
 import Tamarin.TotalMatchPacket
 import Tamarin.SignatureExtension
 import Tamarin.MatchingSignatureExtension
@@ -44,11 +45,11 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the nine exports whose reply the Rust backend uses as the
+export, one of the ten exports whose reply the Rust backend uses as the
 answer, or states a property of the specification itself:
 
-* `totalUnify`, `totalUnifyExists`, `unpackConjunction`, `totalMatch`,
-  `totalMatchExists`;
+* `totalUnify`, `totalUnifyExists`, `nameUnifiers`, `unpackConjunction`,
+  `totalMatch`, `totalMatchExists`;
 * `certifyTable`, `sessionReduce`, `pathReduce`;
 * `sessionVariantCheck`.
 
@@ -517,6 +518,69 @@ theorem exportedTotalUnify_unsatisfiable {poll : Unit → Bool} (quiet : poll ()
   · exact (TotalUnifyWire.Packet.decodes_nil p _).mp hp
   · exact (List.not_mem_nil hσ).elim
 
+/-- The tables of the naming export name the variables that a family of
+unifiers adds to its query. A reply of the unifier that decodes to a family
+of a query is read through them (`UnifierNames.apply`), and when it can be
+read the reading decodes to a family that is the given one, or its members
+without a variable of the sort of natural numbers, up to an injective
+renaming of the range of each member. Every variable of the range has a
+label that no query variable of its sort has. Without a proposal it has the
+hint `0` and an index of no query variable, which is above every index of
+the query unless the caller settled for less. The export does not see the
+reply, and nothing is assumed about what the caller tells it. -/
+theorem exportedNameUnifiers_correct : UnifierNames.Correct Executable.nameUnifiers :=
+  UnifierNames.correct
+
+/-- The reply of the unifier read through the tables of the naming export is
+a complete family of unifiers of the query, with every variable of its range
+named apart from the query. The hypothesis is one the caller observes: its
+reader succeeded. -/
+theorem exportedNameUnifiers_total {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+    (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
+    (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
+    (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal true low) true
+      (Executable.totalUnify poll ds ns es) = some named) :
+    ∃ answers, UnifierNames.Decodes p named answers ∧
+      (Outcome.complete answers).CorrectIn p [] ∧
+      (answers ≠ [] → UnifierNames.Labelled names p) ∧
+      (∀ σ ∈ answers, UnifierNames.Fresh names p σ) ∧
+      (proposal = #[] → ∀ σ ∈ answers, UnifierNames.Unused names p σ) ∧
+      (proposal = #[] → low = false → ∀ σ ∈ answers, UnifierNames.Above names p σ) := by
+  obtain ⟨raw,ok,hp | ⟨declined,_⟩⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
+  · obtain ⟨answers,packet,labelled,refines,fresh,unused,above⟩ :=
+      exportedNameUnifiers_correct.valid _ _ _ names heads ranges proposal true low _ _ _ raw named
+        decoded hp read
+    exact ⟨answers,packet,refines.preserves_correct ok.mathematical,labelled,fresh,unused,above⟩
+  · rw [declined,UnifierNames.apply_declined] at read
+    cases read
+
+/-- For a module without the sort of natural numbers the reading leaves out
+the members with a variable of that sort. It still decides every solution
+whose images have no such variable: such a solution solves the query exactly
+when it is an instance of a member that is read. -/
+theorem exportedNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+    (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
+    (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
+    (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal false low) false
+      (Executable.totalUnify poll ds ns es) = some named) :
+    ∃ answers, UnifierNames.Decodes p named answers ∧
+      (∀ σ ∈ answers, DomainRestricted p σ) ∧
+      (∀ ρ : Substitution d.sig, (∀ v, p.Occurs v → UnavailableSort.marked .nat (ρ.image v) = false) →
+        (p.Solves ρ ↔ ∃ σ ∈ answers, Substitution.InstanceOn p.Occurs ρ σ)) ∧
+      (answers ≠ [] → UnifierNames.Labelled names p) ∧
+      (∀ σ ∈ answers, UnifierNames.Fresh names p σ) ∧
+      (proposal = #[] → ∀ σ ∈ answers, UnifierNames.Unused names p σ) ∧
+      (proposal = #[] → low = false → ∀ σ ∈ answers, UnifierNames.Above names p σ) := by
+  obtain ⟨raw,ok,hp | ⟨declined,_⟩⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
+  · obtain ⟨answers,packet,labelled,refines,fresh,unused,above⟩ :=
+      exportedNameUnifiers_correct.valid _ _ _ names heads ranges proposal false low _ _ _ raw named
+        decoded hp read
+    refine ⟨answers,packet,refines.domain,fun ρ clean => ?_,labelled,fresh,unused,above⟩
+    rw [UnavailableSort.filterNat_iff p ok.mathematical ρ clean]
+    exact refines.equivalent ρ
+  · rw [declined,UnifierNames.apply_declined] at read
+    cases read
+
 end Tamarin
 
 open Lean Meta in
@@ -587,6 +651,7 @@ run_cmd do
     (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalUnifyExists, `tamarin_total_unify_exists),
+    (``Tamarin.Executable.nameUnifiers, `tamarin_name_unifiers),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
     (``Tamarin.Executable.totalMatchExists, `tamarin_total_match_exists),
     (``Tamarin.Executable.pathReduce, `tamarin_path_reduce),
@@ -638,7 +703,8 @@ run_cmd do
     (``Tamarin.Executable.constructorVariant, `tamarin_constructor_variant),
     (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),
     (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
-    (``Tamarin.Executable.foldVariants, `tamarin_fold_variants)]
+    (``Tamarin.Executable.foldVariants, `tamarin_fold_variants),
+    (``Tamarin.Executable.applyNames, `tamarin_apply_names)]
   let expectedExports := contractExports ++ proposerExports
   for (name, symbol) in expectedExports do
     unless getExportNameFor? env name == some symbol do

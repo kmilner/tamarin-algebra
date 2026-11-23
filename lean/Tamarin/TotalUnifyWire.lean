@@ -301,4 +301,153 @@ theorem leaf_atom {d : Dictionary} (a : d.sig.Atom) :
   rcases a with ⟨⟨i,k⟩,h⟩
   cases k <;> simp [leaf,atom,sortCode,sortOf,h,guard]
 
+omit [Interrupt] in
+/-- A variable or an atom is all a leaf can be. -/
+theorem leaf_subst {d : Dictionary} (ρ : Variable → Term d.sig) (k id arg : UInt64) (t : Term d.sig)
+    (h : leaf d k id arg = some t) (rigid : (k == 0) = false) : t.subst ρ = t := by
+  unfold leaf at h
+  by_cases fits : arg ≤ 4
+  · simp only [fits, guard, ↓reduceIte, rigid, Bool.false_eq_true, pure, bind, Option.bind] at h
+    by_cases one : (k == 1) = true
+    · simp only [one, ↓reduceIte] at h
+      cases found : atom d id (sortOf arg) with
+      | none => simp [found] at h
+      | some a =>
+        simp only [found, Option.some.injEq] at h
+        subst h
+        rfl
+    · simp [one] at h
+  · simp [fits, guard, failure] at h
+
+omit [Interrupt] in
+/-- Building an application commutes with a substitution of its children. -/
+theorem app_subst {d : Dictionary} (ρ : Variable → Term d.sig) (k id : UInt64) (cs : List (Term d.sig)) :
+    app d k id (cs.map (Term.subst ρ)) = (app d k id cs).map (Term.subst ρ) := by
+  unfold app
+  by_cases free : (k == 2) = true
+  · simp only [free, ↓reduceIte, bind, Option.bind]
+    cases resolve d.decls 2 id with
+    | none => rfl
+    | some f =>
+      by_cases len : cs.length = d.sig.arity f
+      · simp only [List.length_map, len, ↓reduceDIte, pure, Option.map_some, Option.some.injEq, Term.subst]
+        congr 1
+        funext i
+        simp
+      · simp [len]
+  · by_cases comm : (k == 3) = true
+    · simp only [free, comm, Bool.false_eq_true, ↓reduceIte, bind, Option.bind]
+      cases resolve d.decls 3 id with
+      | none => rfl
+      | some f =>
+        match cs with
+        | [] | [_] | _ :: _ :: _ :: _ => rfl
+        | [l, r] => rfl
+    · by_cases ac : (k == 4) = true
+      · simp only [free, comm, ac, Bool.false_eq_true, ↓reduceIte, bind, Option.bind]
+        cases resolve d.decls 4 id with
+        | none => rfl
+        | some f =>
+          match cs with
+          | [] | [_] => rfl
+          | l :: r :: rs =>
+            simp only [List.map_cons, pure, Option.map_some, Option.some.injEq, Term.subst]
+            congr 1
+            induction rs generalizing r with
+            | nil => rfl
+            | cons x xs ih => simp only [List.map_cons, ACRepresentation.fold, Term.subst, ih]
+      · simp [free, comm, ac]
+
+omit [Interrupt] in
+/-- The variables of an application are those of its children. -/
+theorem app_occurs {d : Dictionary} {k id : UInt64} {cs : List (Term d.sig)} {t : Term d.sig}
+    (h : app d k id cs = some t) (w : Variable) : t.Occurs w ↔ ∃ c ∈ cs, c.Occurs w := by
+  unfold app at h
+  by_cases free : (k == 2) = true
+  · simp only [free, ↓reduceIte, bind, Option.bind] at h
+    cases found : resolve d.decls 2 id with
+    | none => simp [found] at h
+    | some f =>
+      simp only [found] at h
+      by_cases len : cs.length = d.sig.arity f
+      · simp only [len, ↓reduceDIte, pure, Option.some.injEq] at h
+        subst h
+        constructor
+        · rintro ⟨i, occ⟩
+          exact ⟨_, List.get_mem _ _, occ⟩
+        · rintro ⟨c, mem, occ⟩
+          obtain ⟨n, rfl⟩ := List.mem_iff_get.mp mem
+          exact ⟨⟨n.val, len ▸ n.isLt⟩, occ⟩
+      · simp [len] at h
+  · by_cases comm : (k == 3) = true
+    · simp only [free, comm, Bool.false_eq_true, ↓reduceIte, bind, Option.bind] at h
+      cases found : resolve d.decls 3 id with
+      | none => simp [found] at h
+      | some f =>
+        simp only [found] at h
+        match cs, h with
+        | [l, r], h =>
+          simp only [pure, Option.some.injEq] at h
+          subst h
+          simp [Term.Occurs]
+    · by_cases ac : (k == 4) = true
+      · simp only [free, comm, ac, Bool.false_eq_true, ↓reduceIte, bind, Option.bind] at h
+        cases found : resolve d.decls 4 id with
+        | none => simp [found] at h
+        | some f =>
+          simp only [found] at h
+          match cs, h with
+          | l :: r :: rs, h =>
+            simp only [pure, Option.some.injEq] at h
+            subst h
+            have fold : ∀ (a : Term d.sig) (as : List (Term d.sig)),
+                (ACRepresentation.fold f a as).Occurs w ↔ a.Occurs w ∨ ∃ c ∈ as, c.Occurs w := by
+              intro a as
+              induction as generalizing a with
+              | nil => simp [ACRepresentation.fold]
+              | cons b bs ih => simp [ACRepresentation.fold, Term.Occurs, ih]
+            simp [Term.Occurs, fold]
+      · simp [free, comm, ac] at h
+
+omit [Interrupt] in
+/-- A leaf of kind 0 is the variable its words name. -/
+theorem leaf_zero {d : Dictionary} {k id arg : UInt64} {t : Term d.sig}
+    (h : leaf d k id arg = some t) (zero : (k == 0) = true) : t = .var ⟨id.toNat, sortOf arg⟩ := by
+  unfold leaf at h
+  by_cases fits : arg ≤ 4
+  · simp only [fits, guard, ↓reduceIte, zero, pure, bind, Option.bind, Option.some.injEq] at h
+    exact h.symm
+  · simp [fits, guard, failure] at h
+
+omit [Interrupt] in
+/-- A leaf of another kind has no variable. -/
+theorem leaf_rigid {d : Dictionary} {k id arg : UInt64} {t : Term d.sig}
+    (h : leaf d k id arg = some t) (rigid : (k == 0) = false) (w : Variable) : ¬ t.Occurs w := by
+  unfold leaf at h
+  by_cases fits : arg ≤ 4
+  · simp only [fits, guard, ↓reduceIte, rigid, Bool.false_eq_true, pure, bind, Option.bind] at h
+    by_cases one : (k == 1) = true
+    · simp only [one, ↓reduceIte] at h
+      cases found : atom d id (sortOf arg) with
+      | none => simp [found] at h
+      | some a =>
+        simp only [found, Option.some.injEq] at h
+        subst h
+        exact fun occ => occ
+    · simp [one] at h
+  · simp [fits, guard, failure] at h
+
+omit [Interrupt] in
+/-- Only the kinds 2, 3 and 4 build an application. -/
+theorem app_kind {d : Dictionary} {k id : UInt64} {cs : List (Term d.sig)} {t : Term d.sig}
+    (h : app d k id cs = some t) : (k == 2) = true ∨ (k == 3) = true ∨ (k == 4) = true := by
+  unfold app at h
+  by_cases free : (k == 2) = true
+  · exact .inl free
+  · by_cases comm : (k == 3) = true
+    · exact .inr (.inl comm)
+    · by_cases ac : (k == 4) = true
+      · exact .inr (.inr ac)
+      · simp [free, comm, ac] at h
+
 end Tamarin.TotalUnifyWire

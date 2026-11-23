@@ -98,7 +98,7 @@ and distinguish exhaustion, interruption and unsupported input from a complete a
 
 The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManifest.txt).
 
-**Contract exports** are the nine whose reply the Rust backend uses as the answer. Each is
+**Contract exports** are the ten whose reply the Rust backend uses as the answer. Each is
 mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
 are the whole of what is promised to a caller.
 
@@ -106,6 +106,7 @@ are the whole of what is promised to a caller.
 | --- | --- | --- |
 | `tamarin_total_unify` | The reply decodes to a complete, sound, domain-restricted family of unifiers of the decoded query, also in every extension of the caller's signature (`exportedTotalUnify_correct`, `_ambient`). | `#[#[0]]` on a malformed packet, or when one answer of the family adds at least `2^64 - bound` distinct variables to the query, `bound` being the least identifier above the query's variables (`TotalUnifyWire.Packet.Overflows`): the unifier names the variables it adds by consecutive identifiers from that bound (`UnifierDensity.verified_dense`). Never on a query without solutions (`_unsatisfiable`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_total_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`exportedTotalUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets (reply 0). 4 exactly when the caller's `poll` says stop (`_interrupted`). |
+| `tamarin_name_unifiers` | Tables that name the variables a family of unifiers adds to its query. The caller reads the reply of `tamarin_total_unify` through them and in no other way; the reading is specified (`UnifierNames.apply`). A reply that decodes to a family and can be read through the tables reads as that family, or as its members without a variable of the sort of natural numbers, up to an injective renaming of the range of each member, and no name of the range is the name of a query variable of its sort (`exportedNameUnifiers_correct`). With `tamarin_total_unify`'s own reply the reading is a complete family of unifiers (`_total`), and for a module without natural numbers it decides every solution without such a variable (`_natFree`). Without a proposal every name has the hint 0 and an index of no query variable, above every index of the query unless the caller set `low`. The export sees the labels of the query variables and what the caller says the range variables are, never the reply, and the statement assumes nothing about what it is told. | **No limit**: `#[#[0]]` may be the reply to any call. It is the reply when two query variables of one sort have one label, and when no index is left above the query and `low` is not set. A proposal that fails the test of the tables is replaced by the default names. |
 | `tamarin_unpack_conjunction` | The rows are the conjunction the packed command denotes, or the clash header (`exportedUnpackConjunction_correct`). | Malformed packets only. |
 | `tamarin_total_match`, `tamarin_total_match_exists` | The complete set of scoped matches, and 1 or 2 exactly as one exists, also in every signature extension. | Malformed packets only. |
 | `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` is the reply to a malformed packet. It is never the reply to a decoded table of constructor-pattern rules whose results are subterms or constants (`exportedCertifyTable_subterm`, class `SubtermTable.Presentation`, below), nor to three concrete packets (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). On any other table it carries no information. |
@@ -177,6 +178,9 @@ the proposer for a sorted query that no specialised solver covers. The latter ru
 certificate checker: a successor that is an instance of a retained variant is dropped, a
 successor that is kept evicts the retained variants it subsumes other than its ancestors, and a
 layer is listed when it is complete ([`Tamarin/VariantFold.lean`](Tamarin/VariantFold.lean)).
+`tamarin_apply_names` is the specified reading of a reply through the tables of
+`tamarin_name_unifiers`, as a function the Rust tests compare the backend's reader with;
+production does not call it.
 A call stops with status 3 beyond a given number of narrowing sites, and the caller retries with a
 larger number. It takes a `poll` like the interruptible contract exports, so a call also stops
 when the caller cancels. They carry no contract. The Rust backend
@@ -201,7 +205,7 @@ modules without importing them into its own elaboration. It fails unless:
 - every contract export has a theorem of the proof root, and the kernel statement of every
   public theorem of the proof root is the recorded one (SHA-256 of a canonical encoding);
 - every definition those statements depend on, in whatever module it is defined, is the one
-  recorded in [`SpecManifest.txt`](SpecManifest.txt) (351 constants: terms, signatures,
+  recorded in [`SpecManifest.txt`](SpecManifest.txt) (422 constants: terms, signatures,
   substitutions, the rewrite relation, the reply specifications and the wire decoders);
 - no theorem of the proof root mentions a proposer, and no proposer is in that closure;
 - no module, proposer code included, defines macros, syntax, elaborators or initializers, imports
@@ -383,12 +387,37 @@ The reference switch sends these roots directly to the total export. The default
 path tries the bounded solvers first and sends the original roots when they defer.
 Hybrid also uses it for existence queries. Ordered hybrid enumeration retains Maude as its
 fallback. The total export accepts arity-correct kind-level trees. It returns one numeric
-row per input variable per answer, with term constructors in postfix order. Rust checks
-the row structure, symbol identities, arities and image sorts and gives each answer its
-own fresh witnesses. Lean proves that the resulting family covers substitutions containing
-additional symbols from the caller’s signature and that removing Nat witnesses is sound for
-modules without Nat. The exhaustive search can be expensive for large answer families.
-[Packet contract](Tamarin/TotalUnifyPacket.lean) · [Signature extension](Tamarin/SignatureExtension.lean) · [Sort restriction](Tamarin/UnavailableSort.lean) · [Rust decoder](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification/whole/total.rs)
+row per input variable per answer, with term constructors in postfix order. Lean proves
+that the family covers substitutions containing additional symbols from the caller’s
+signature. The exhaustive search can be expensive for large answer families.
+[Packet contract](Tamarin/TotalUnifyPacket.lean) · [Signature extension](Tamarin/SignatureExtension.lean) · [Rust reader](https://github.com/kmilner/tamarin-rs/blob/774b0c35f7422b3fa2be54c713ef5f8c5d16a59b/crates/tamarin-term/src/lean_unification/whole/total.rs)
+
+**Names of the range.** The variables in the range of an answer are numbered by the
+unifier in the space of request rows, and the caller reads the range of an answer as fresh:
+none of its variables may be one the caller holds. Rust decides nothing about them. It
+sends `tamarin_name_unifiers` the label of every query variable (the identifier of its name
+hint, and its index), the identifier and sort words of the query variables as the rows of an
+arm list them, and for each arm the range variables in the order of first occurrence. The
+reply holds a table for each arm that is kept, with a target for each range variable: a
+label, or a row of the arm. Rust reads the reply of the unifier through the tables, as
+`UnifierNames.apply` specifies: a variable token is the variable its label names, and a row
+that binds a query variable to a variable whose target is that row is left out, so the
+variable stays unbound. A variable without a target, a row target anywhere else, an arm that
+lists other query variables than the tables do, or an arm without a table that has no
+variable of the sort of natural numbers in a module with that sort has no reading, and is
+an error. The reading is therefore safe whatever Rust told the export about the range.
+
+By default a range variable gets the hint 0, which Rust spells `x`, and the least indices
+the query does not use, moved up together so that the first is the least index above the
+query. That is the numbering of the Maude reply decoder and keeps a range variable apart
+from every variable the caller keeps below that bound. Rust can instead propose a label for
+every range variable; it proposes the names the Maude backend composes, which carry the
+name hints of query variables. The export takes a proposal when no two variables of an arm
+get one target at one sort, where the label of a query variable of that sort means that
+variable's row; otherwise the whole family gets the default names. Arms with a variable of
+the sort of natural numbers get no table when the caller's module lacks that sort
+([Sort restriction](Tamarin/UnavailableSort.lean)).
+[Tables, reading and proof](Tamarin/UnifierNames.lean) · [Renaming preserves a complete family](Tamarin/CallerFreshening.lean) · [Packet tests](Tests/UnifierNames.lean)
 
 The general matcher adds the IDs of bindable pattern variables to the same packet. It
 returns literal subject-variable IDs on the right side of a binding. For reduction and

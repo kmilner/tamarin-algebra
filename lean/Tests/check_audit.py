@@ -166,6 +166,7 @@ UNPACK_RUN = "PackedConjunction.run nodes limit lhs rhs"
 PATH_REDUCE = "@PathReductionWire.run i ds ns rules root fuel"
 SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
 SESSION_CHECK = "@SessionVariantCheckWire.run i ds ns rules extra roots family fuel work"
+NAME_RUN = "UnifierNames.run names heads ranges proposal nat low"
 EXPORT_MUTATIONS = [
     ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem exportedCertifyTable_sound"),
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
@@ -217,6 +218,14 @@ EXPORT_MUTATIONS = [
      "Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work",
      "sessionVariantCheckFor Interrupt.never ds ns rules extra roots family fuel work",
      "theorem exportedSessionVariantCheck_interrupted"),
+    ("names_untested_proposal", NAME_RUN,
+     "(((UnifierNames.query names heads).bind fun q => UnifierNames.tablesFor q heads ranges "
+     "(some proposal.toList) nat low).getD #[#[0]])",
+     "theorem exportedNameUnifiers_correct"),
+    ("names_settle_for_low_indices", NAME_RUN, "UnifierNames.run names heads ranges proposal nat true",
+     "theorem exportedNameUnifiers_correct"),
+    ("names_ignore_the_labels", NAME_RUN, "UnifierNames.run #[] heads ranges proposal nat low",
+     "theorem exportedNameUnifiers_correct"),
 ]
 
 
