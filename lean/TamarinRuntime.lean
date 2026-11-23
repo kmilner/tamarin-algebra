@@ -219,10 +219,6 @@ def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids 
 def totalMatchExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
     UInt8 := TotalMatchWire.runExists decls nodes roots ids
 
-@[export tamarin_checked_reduce]
-def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := CheckedReductionWire.run decls nodes rules root fuel
-
 @[export tamarin_path_reduce]
 def pathReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
@@ -234,11 +230,16 @@ def sessionReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array 
     Array (Array UInt64) :=
   Interrupt.run poll #[#[4]] fun i => sessionReduceFor i ds ns rules extra root fuel
 
+@[noinline] def sessionVariantCheckFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (roots : Array UInt64)
+    (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
+  @SessionVariantCheckWire.run i ds ns rules extra roots family fuel work
+
 @[export tamarin_session_variant_check]
-def sessionVariantCheck (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (extra : Array (Array UInt64)) (roots : Array UInt64) (family : Array (Array UInt64))
-    (fuel work : UInt64) : Array (Array UInt64) :=
-  SessionVariantCheckWire.run ds ns rules extra roots family fuel work
+def sessionVariantCheck (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (roots : Array UInt64)
+    (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work
 
 @[export tamarin_checked_variants]
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
@@ -252,9 +253,14 @@ def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array 
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := TableCandidate.variants ds ns rules roots fuel
 
+@[noinline] def foldVariantsFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules roots : Array UInt64) (fuel work : UInt64) : Array (Array UInt64) :=
+  @FoldVariantsWire.run i ds ns rules roots fuel work
+
 @[export tamarin_fold_variants]
-def foldVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64)
-    (fuel work : UInt64) : Array (Array UInt64) := FoldVariantsWire.run ds ns rules roots fuel work
+def foldVariants (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules roots : Array UInt64) (fuel work : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => foldVariantsFor i ds ns rules roots fuel work
 
 @[export tamarin_variant_overlap_agrees]
 def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=

@@ -55,7 +55,11 @@ private def rules : Array UInt64 := #[3,0,4,1]
     reply.any (fun row => match row.toList with | [2,2,0,x,2,0,y,2,2,0,2] => x != y | _ => false)
 -- Same root with conflicting result positions cannot certify the table.
 #guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
-#guard Executable.checkedReduce ds ns #[3,0,3,1] 3 0 == #[#[2]]
+#guard CheckedReductionWire.run ds ns #[3,0,3,1] 3 0 == #[#[2]]
+-- The two projections are a table of the class the certifier has to accept
+-- (`exportedCertifyTable_subterm`). The conflicting pair is outside it.
+#guard Executable.certifyTable ds ns rules 0
+#guard !Executable.certifyTable ds ns #[3,0,3,1] 0
 -- The single-path reducer follows the first branch of the checked one. On this
 -- certified table both return the same normal form for fst(pair(x,y)), a
 -- normal term is returned unchanged, and exhausted depth is reported as such.
@@ -121,7 +125,7 @@ private abbrev session := Executable.sessionReduce fun _ => false
 #guard session ds table rules named 9 8 == #[#[0]]
 #guard session ds table rules #[#[2,1,6]] 5 8 == #[#[0]]
 #guard session ds table #[3] named 7 8 == #[#[0]]
-private abbrev sessionCheck := Executable.sessionVariantCheck
+private abbrev sessionCheck := Executable.sessionVariantCheck fun _ => false
 #guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
 #guard sessionCheck ds ns rules #[] #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
 #guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5]] 16 0 == #[#[2,3,0]]
@@ -161,11 +165,11 @@ private def rules : Array UInt64 := #[2,3,3,4,4,5,5,6,6,7,10,12,14,0,15,1]
 -- The folding proposer lists the two variants in the order of Maude's layers, the
 -- identity first. A budget that does not suffice is reported as unfinished, whether
 -- it bounds the narrowing sites or the rewrite steps, and a malformed packet as such.
-#guard Executable.foldVariants ds ns rules #[2,0] 64 0 ==
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 64 0 ==
   #[#[1],#[],#[0,2,0,0,2],#[],#[0,2,2,9,0]]
-#guard Executable.foldVariants ds ns rules #[2,0] 64 1 == #[#[3]]
-#guard Executable.foldVariants ds ns rules #[2,0] 2 0 == #[#[3]]
-#guard Executable.foldVariants ds ns rules #[99,0] 64 0 == #[#[0]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 64 1 == #[#[3]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 2 0 == #[#[3]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[99,0] 64 0 == #[#[0]]
 -- A competing normal endpoint for the same specialized input invalidates the family.
 #guard Executable.checkedVariants ds ns (rules ++ #[10,8]) #[2,0] 4 == #[#[2]]
 end Tamarin.GeneralVariantPacketTests

@@ -7,6 +7,7 @@ import Tamarin.XorTableWire
 import Tamarin.GroupTable
 import Tamarin.BilinearTableWire
 import Tamarin.UserAC
+import Tamarin.SubtermTable
 
 /-! Certify the decoded table in its full ambient signature. Symbol and variable
 IDs may vary with the query. Matching a characteristic rule only proposes an
@@ -112,5 +113,19 @@ theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
       exact GroupTable.accepts_sound typed distinct accepted
     · exact PresentationComponents.independent_complete otherOK
   · exact PresentationComponents.independent_complete ok
+
+/-- The certifier accepts every table of constructor-pattern rules whose
+results are subterms or constants, at every depth. -/
+theorem admits_subterm {rs : Problem d.sig} (cls : SubtermTable.Presentation rs) (fuel : Nat) :
+    admits rs fuel = true := by
+  have plain : rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) = false := by
+    apply List.any_eq_false.mpr
+    intro r hr
+    obtain ⟨f,xs,shape,_⟩ := cls.patterns r hr
+    rw [shape]
+    simp
+  unfold admits
+  simp only [plain]
+  exact SubtermTable.accepted cls fuel
 
 end Tamarin.CertifiedTable

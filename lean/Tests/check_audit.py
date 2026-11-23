@@ -163,11 +163,9 @@ TOTAL_RUN = "@TotalUnifyWire.run i decls nodes roots"
 MATCH_RUN = "TotalMatchWire.run decls nodes roots ids"
 EXISTS_RUN = "TotalMatchWire.runExists decls nodes roots ids"
 UNPACK_RUN = "PackedConjunction.run nodes limit lhs rhs"
-CHECKED_REDUCE = "CheckedReductionWire.run decls nodes rules root fuel"
 PATH_REDUCE = "@PathReductionWire.run i ds ns rules root fuel"
 SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
-SESSION_CHECK = "SessionVariantCheckWire.run ds ns rules extra roots family fuel work"
-CHECKED_VARIANTS = "CheckedVariantsWire.run ds ns rules roots fuel"
+SESSION_CHECK = "@SessionVariantCheckWire.run i ds ns rules extra roots family fuel work"
 EXPORT_MUTATIONS = [
     ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem exportedCertifyTable_sound"),
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
@@ -179,6 +177,10 @@ EXPORT_MUTATIONS = [
     ("refuses_bilinear_table", CERTIFY_RUN,
      "(ds != BilinearWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
      "theorem exportedPhysicalBilinearTable_admitted"),
+    ("refuses_subterm_tables", CERTIFY_RUN,
+     "((ds == XorConstructorWire.declarations || ds == JointGroupWire.declarations || "
+     "ds == BilinearWire.declarations) && CertifiedTableWire.run ds ns rules fuel)",
+     "theorem exportedCertifyTable_subterm"),
     # An interruptible export is tied to its search by one equation, on which
     # its contract theorems rest: a wrong search breaks that equation.
     ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),
@@ -199,18 +201,6 @@ EXPORT_MUTATIONS = [
     ("packed_conjunction_drops_rhs", UNPACK_RUN, "PackedConjunction.run nodes limit lhs lhs",
      "theorem exportedUnpackConjunction_correct"),
     ("packed_conjunction_drops_leaves", UNPACK_RUN, "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
-    ("checked_reduce_ignores_rules", CHECKED_REDUCE, "CheckedReductionWire.run decls nodes #[] root fuel",
-     "theorem exportedCheckedReduce_sound"),
-    ("checked_reduce_answers_malformed", CHECKED_REDUCE,
-     "(if (TableWire.input decls nodes rules #[root]).isNone then #[#[2]] "
-     "else CheckedReductionWire.run decls nodes rules root fuel)",
-     "theorem exportedCheckedReduce_malformed"),
-    # Declining is allowed in general, but not on the two floor classes.
-    ("checked_reduce_defers_definitions", CHECKED_REDUCE, "#[#[2]]", "theorem exportedDefinitionReduce_ambient"),
-    ("checked_reduce_defers_destructors", CHECKED_REDUCE,
-     "(if (TableWire.input decls nodes rules #[root]).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
-     "then #[#[2]] else CheckedReductionWire.run decls nodes rules root fuel)",
-     "theorem exportedDestructorReduce_ambient"),
     ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem pathReduce_quiet"),
     ("path_reduce_omits_table", PATH_REDUCE, "@PathReductionWire.run i ds ns #[] root fuel",
      "theorem pathReduce_quiet"),
@@ -218,17 +208,15 @@ EXPORT_MUTATIONS = [
     ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem sessionReduce_quiet"),
     ("session_reduce_ignores_term_rows", SESSION_REDUCE, "@SessionReductionWire.run i ds ns rules #[] root fuel",
      "theorem sessionReduce_quiet"),
-    ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem exportedSessionVariantCheck_correct"),
+    ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem sessionVariantCheck_quiet"),
     ("variant_check_ignores_family", SESSION_CHECK,
-     "SessionVariantCheckWire.run ds ns rules extra roots #[] fuel work",
-     "theorem exportedSessionVariantCheck_correct"),
-    ("variant_check_never_accepts", SESSION_CHECK, "#[#[3]]", "theorem exportedSessionVariantCheck_decides"),
-    ("variants_returns_incomplete_success", CHECKED_VARIANTS, "#[#[1]]", "theorem exportedCheckedVariants_sound"),
-    ("variants_ignores_active_rules", CHECKED_VARIANTS, "CheckedVariantsWire.run ds ns #[] roots fuel",
-     "theorem exportedCheckedVariants_sound"),
-    ("variants_answers_malformed", CHECKED_VARIANTS,
-     "(if (TableWire.input ds ns rules roots).isNone then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel)",
-     "theorem exportedCheckedVariants_malformed"),
+     "@SessionVariantCheckWire.run i ds ns rules extra roots #[] fuel work",
+     "theorem sessionVariantCheck_quiet"),
+    ("variant_check_never_accepts", SESSION_CHECK, "#[#[3]]", "theorem sessionVariantCheck_quiet"),
+    ("variant_check_ignores_its_caller",
+     "Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work",
+     "sessionVariantCheckFor Interrupt.never ds ns rules extra roots family fuel work",
+     "theorem exportedSessionVariantCheck_interrupted"),
 ]
 
 

@@ -44,13 +44,13 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the eleven exports whose reply the Rust backend uses as the
-answer:
+export, one of the nine exports whose reply the Rust backend uses as the
+answer, or states a property of the specification itself:
 
 * `totalUnify`, `totalUnifyExists`, `unpackConjunction`, `totalMatch`,
   `totalMatchExists`;
-* `certifyTable`, `sessionReduce`, `checkedReduce`, `pathReduce`;
-* `sessionVariantCheck`, `checkedVariants`.
+* `certifyTable`, `sessionReduce`, `pathReduce`;
+* `sessionVariantCheck`.
 
 A statement here says what a reply means in terms of the decoded packet and
 the rewrite relation. No statement names a search, a classifier or a
@@ -96,6 +96,11 @@ private theorem session_answers {d : TotalUnifyWire.Dictionary} (u : Term (Table
 private theorem sessionReduce_quiet {poll : Unit → Bool} (quiet : poll () = false) :
     Executable.sessionReduce poll = SessionReductionWire.run := by
   funext ds ns es extra root n
+  exact Interrupt.run_quiet quiet _ _
+
+private theorem sessionVariantCheck_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.sessionVariantCheck poll = SessionVariantCheckWire.run := by
+  funext ds ns es extra roots family fuel work
   exact Interrupt.run_quiet quiet _ _
 
 /-- Every arity-correct query has a complete family on its declared signature,
@@ -229,63 +234,17 @@ theorem exportedTotalMatchExists_ambient {ds ns es d p} (ids)
   · refine ⟨fun yes => by simp [no] at yes,fun hit => ?_⟩
     exact (miss (here.mp (same.mp (lifted.mpr hit)))).elim
 
-theorem exportedCheckedReduce_malformed {ds ns es root n}
-    (malformed : TableWire.input ds ns es #[root] = none) :
-    Executable.checkedReduce ds ns es root n = #[#[0]] :=
-  CheckedReductionWire.correct.malformed _ _ _ _ _ malformed
-
-/-- What a reply of the checked reducer means. A status 1 reply decodes to
-the normal form of the term: a reduct that is irreducible, and to which every
-other normal form of the term is equal modulo the declared C and AC laws, in
-the dictionary of the packet and in every extension of it by further caller
-symbols. The only other reply to a decoded packet is the decline `#[#[2]]`.
-
-Nothing here limits declining. The reducer declines by a resource policy (a
-table-derived depth and a work limit on the rewrite graph) that has no
-counterpart in the rewrite relation: the cost it guards against is the number
-of matches of a rule against a wide AC product, which no property of the
-rewrite relation bounds. The two floors below are the only limits. A caller
-that needs an answer where this export declines uses `pathReduce`, whose
-replies are all specified by the rewrite relation and which claims no
-uniqueness. -/
-theorem exportedCheckedReduce_sound {ds ns es root n d t rs}
-    (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) :
-    GeneralReductionWire.Answer d rs t (Executable.checkedReduce ds ns es root n) ∨
-      Executable.checkedReduce ds ns es root n = #[#[2]] := by
-  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ decoded with ⟨u,packet,reply⟩ | ⟨declined,_⟩
-  · suffices bound : ReferenceReduction.Bound rs from
-      .inl ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
-    obtain ⟨words,_,shape,_⟩ := packet
-    cases defs : CheckedReductionWire.definitions rs with
-    | true => exact ConstantDefinitions.bound (Bool.and_eq_true_iff.mp defs).1
-    | false =>
-      cases proj : CheckedReductionWire.destructors rs with
-      | true =>
-        exact TableDecrease.bound ((DestructorTable.accepts_iff rs).mp (Bool.and_eq_true_iff.mp proj).1).decreasing
-      | false =>
-        cases ok : CheckedReductionWire.admitted rs t n with
-        | true =>
-          have parts : (CheckedReduction.rangeBound rs ∧ TableDecrease.sorted rs) ∧
-              CheckedReduction.affordable rs (CheckedReductionWire.fuel rs t n) 100000 t := by
-            simpa only [CheckedReductionWire.admitted,Bool.and_eq_true] using ok
-          exact (CheckedReduction.rangeBound_iff _).mp parts.1.1
-        | false =>
-          have stop : CheckedReductionWire.run ds ns es root n = #[#[2]] := by
-            simp [CheckedReductionWire.run,decoded,defs,proj,ok]
-          rw [stop] at shape
-          simp at shape
-  · exact .inr declined
-
 /-- What `true` means: the packet decodes and its table is certified, that is,
 range restricted, a canonical presentation (terminating and confluent modulo
 the declared C and AC laws) and with the finite variant property, over the
 dictionary of the packet extended by all ambient names.
 
-`false` carries no information. It is the reply to a malformed packet, and
-the checker may also return it for any table, certified or not: termination,
-confluence and the finite variant property are undecidable, so no statement
-limits declining in general. The only limits are the three concrete packets
-below. Which user tables are accepted is guarded by the corpus, not here. -/
+`false` carries no information in general. It is the reply to a malformed
+packet, and the checker may also return it for a table that is certified:
+termination, confluence and the finite variant property are undecidable, so
+no statement limits declining on every table. It is limited on the class of
+`exportedCertifyTable_subterm` and on the three concrete packets below. Which
+other user tables are accepted is guarded by the corpus, not here. -/
 theorem exportedCertifyTable_sound {ds ns es fuel}
     (hit : Executable.certifyTable ds ns es fuel = true) :
     ∃ d rs, TableWire.input ds ns es #[] = some ⟨d,rs,[]⟩ ∧ CertifiedTableWire.Certified rs := by
@@ -299,9 +258,28 @@ theorem exportedCertifyTable_sound {ds ns es fuel}
     exact ⟨d,rs,decoded.symm.trans (TableWire.withoutObservations decoded),
       CertifiedTableWire.sound CertifiedTableWire.correct decoded hit⟩
 
+/-- The class the certifier has to accept. A decoded table is certified, at
+every budget, when it consists of constructor-pattern rules whose results are
+subterms or constants (`SubtermTable.Presentation`): every left side is a
+free application whose arguments contain no head of a left side; the rules of
+one head either all return the subterm at one common position below the root
+of their left side, or all return one closed term without a head of a left
+side that has fewer symbols than the left side; and every result has the sort
+of its left side. These are the equations of pairing, symmetric and
+asymmetric encryption and signatures, and user equations of that shape.
+
+Outside this class and the three packets below, `false` stays unlimited:
+termination, confluence and the finite variant property are undecidable, so
+no certifier accepts every certified table. -/
+theorem exportedCertifyTable_subterm {ds ns es d rs q}
+    (decoded : TableWire.input ds ns es #[] = some ⟨d,rs,q⟩)
+    (cls : SubtermTable.Presentation rs) (fuel : UInt64) :
+    Executable.certifyTable ds ns es fuel = true :=
+  CertifiedTableWire.subterm decoded cls fuel
+
 /-- Coverage floors: these three production packets (XOR with the destructor
 table, the joint group table, the bilinear pairing table) are accepted at
-budget zero. A replacement of the checker may decline anything else. -/
+budget zero. -/
 theorem exportedPhysicalXorTable_admitted :
     Executable.certifyTable XorConstructorWire.declarations XorConstructorWire.nodes
       XorConstructorWire.ruleRoots 0 = true :=
@@ -314,22 +292,6 @@ theorem exportedPhysicalJointGroupTable_admitted :
 theorem exportedPhysicalBilinearTable_admitted :
     Executable.certifyTable BilinearWire.declarations BilinearWire.nodes BilinearWire.ruleRoots 0 = true :=
   BilinearWire.admitted
-
-theorem exportedCheckedVariants_malformed {ds ns es roots n}
-    (malformed : TableWire.input ds ns es roots = none) :
-    Executable.checkedVariants ds ns es roots n = #[#[0]] :=
-  CheckedVariantsWire.correct.malformed _ _ _ _ _ malformed
-
-/-- What a reply of the checked variant generator means. A reply other than
-the decline `#[#[2]]` decodes to a complete set of variants of the decoded
-observations with unique values, over the dictionary of the packet extended
-by all ambient names. The table needs no certificate: the generator returns
-a family only where it established this itself. Nothing limits declining. -/
-theorem exportedCheckedVariants_sound {ds ns es roots n d rs q}
-    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩) :
-    CheckedVariantsWire.Decodes rs q (Executable.checkedVariants ds ns es roots n) ∨
-      Executable.checkedVariants ds ns es roots n = #[#[2]] :=
-  (CheckedVariantsWire.correct.valid _ _ _ _ n _ _ _ decoded).imp_right And.left
 
 /-- On any decoded table a status 1 reply of the single-path reducer is an
 irreducible reduct that keeps the sorts of the input. Convergence of the table
@@ -412,86 +374,120 @@ theorem exportedSessionReduce_complete {poll : Unit → Bool} (quiet : poll () =
       (SessionReductionWire.input_table decoded) hit) n within
 
 /-- The session variant checker accepts with status 1 only. -/
-theorem exportedSessionVariantCheck_correct :
-    SessionVariantCheckWire.Correct Executable.sessionVariantCheck :=
-  SessionVariantCheckWire.correct
+theorem exportedSessionVariantCheck_correct {poll : Unit → Bool} (quiet : poll () = false) :
+    SessionVariantCheckWire.Correct (Executable.sessionVariantCheck poll) :=
+  sessionVariantCheck_quiet quiet ▸ SessionVariantCheckWire.correct
+
+/-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
+says stop. It decides nothing about the family. -/
+theorem exportedSessionVariantCheck_interrupted (poll : Unit → Bool)
+    (ds ns es extra roots family fuel work) :
+    Executable.sessionVariantCheck poll ds ns es extra roots family fuel work = #[#[4]] ↔
+      poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      cases decoded : SessionVariantCheckWire.input ds ns es extra roots family with
+      | none =>
+        rw [(exportedSessionVariantCheck_correct quiet).malformed _ _ _ _ _ _ fuel work decoded] at reply
+        cases reply
+      | some packet =>
+        obtain ⟨d,rs,q,members⟩ := packet
+        rcases (exportedSessionVariantCheck_correct quiet).status _ _ _ _ _ _ fuel work _ _ _ _ decoded with
+          yes | ⟨reason,index,no⟩ | out
+        · rw [yes] at reply
+          cases reply
+        · rw [no] at reply
+          cases reply
+        · rw [out] at reply
+          cases reply
+  · exact fun stop => Interrupt.run_stopped stop _ _
 
 /-- Once `certifyTable` accepts the rules-only packet `ds ns es`, a family
 accepted on a call that adds node rows to that packet is a complete set of
 variants of the observations the rows denote, with exactly the proposed
 substitutions on the variables of the observations. -/
-theorem exportedSessionVariantCheck_certified
+theorem exportedSessionVariantCheck_certified {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra roots family fuel work d rs q members budget}
     (decoded : SessionVariantCheckWire.input ds ns es extra roots family = some ⟨d,rs,q,members⟩)
     (hit : Executable.certifyTable ds ns es budget = true)
-    (accepted : Executable.sessionVariantCheck ds ns es extra roots family fuel work = #[#[1]]) :
+    (accepted : Executable.sessionVariantCheck poll ds ns es extra roots family fuel work = #[#[1]]) :
     ∃ rows, MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) q [] rows ∧
       rows.length = members.length ∧
       ∀ pair ∈ members.zip rows, ∀ v, Rewriting.Observed q v →
         pair.2.subst.image v = pair.1.image v := by
   obtain ⟨_,can,_⟩ := CertifiedTableWire.sound CertifiedTableWire.correct
     (SessionVariantCheckWire.input_table decoded) hit
-  exact exportedSessionVariantCheck_correct.accepted _ _ _ _ _ _ _ _ _ _ _ _ decoded accepted can
+  exact (exportedSessionVariantCheck_correct quiet).accepted _ _ _ _ _ _ _ _ _ _ _ _ decoded accepted can
 
 /-- On a canonical presentation the session variant checker accepts closed
 families only, and a rejection names a clause of closedness that fails and
-the member that violates it. On a range-restricted canonical presentation
-there is a depth from which a call without a work limit never reports an
-exhausted budget and accepts every closed family.
+the member that violates it. A reply with status 3 is limited: a term the
+check has to normalize has a rewrite path at least as long as the depth, or
+the work limit is nonzero and below the number of positions at which the
+narrowing layers of the members look for steps (`exhausts`).
 
-Known weak clause: that depth is only said to exist (`∃ k : Nat`), while the
-argument is a 64-bit word, so the clause is empty if the depth exceeds
-`2^64`. The depth that is proved to suffice (`VariantCertificate.threshold`)
-is one more than the largest rewrite height among the terms the checker
-normalizes, and those include the narrowing successors that the installed
-unifier enumerates. Naming it here would pin the narrower, the reference
-reducer and the unifier (about 260 further definitions), so it stays
-existential. Acceptance and rejection are unaffected: they are exact at every
-depth. -/
-theorem exportedSessionVariantCheck_decides :
-    SessionVariantCheckWire.Decides Executable.sessionVariantCheck :=
-  SessionVariantCheckWire.decides
+The terms a check has to normalize (`VariantCertificate.Demand`) are the
+terms of the query, their instances by the members, and the values of the
+most general narrowing successors of the members. All of this is stated
+through the rewrite relation and subsumption modulo the declared laws: no
+unifier, narrower or reducer is named. -/
+theorem exportedSessionVariantCheck_decides {poll : Unit → Bool} (quiet : poll () = false) :
+    SessionVariantCheckWire.Decides (Executable.sessionVariantCheck poll) :=
+  sessionVariantCheck_quiet quiet ▸ SessionVariantCheckWire.decides
 
-/-- Once `certifyTable` accepts the rules-only packet `ds ns es`, there is a
-depth from which a call without a work limit replies with status 1 exactly
-when the family is closed, and never with status 3. The depth is existential
-for the reason given at `exportedSessionVariantCheck_decides`. -/
-theorem exportedSessionVariantCheck_complete
+/-- Once `certifyTable` accepts the rules-only packet `ds ns es`, a call
+whose depth exceeds every rewrite path from the terms the check has to
+normalize, and whose work limit is zero or covers the narrowing layers of the
+members, never replies with status 3, and replies with status 1 exactly when
+the family is closed. -/
+theorem exportedSessionVariantCheck_complete {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra roots family d rs q members budget}
     (decoded : SessionVariantCheckWire.input ds ns es extra roots family = some ⟨d,rs,q,members⟩)
-    (hit : Executable.certifyTable ds ns es budget = true) :
-    ∃ k : Nat, ∀ fuel : UInt64, k ≤ fuel.toNat →
-      Executable.sessionVariantCheck ds ns es extra roots family fuel 0 ≠ #[#[3]] ∧
-      (Executable.sessionVariantCheck ds ns es extra roots family fuel 0 = #[#[1]] ↔
+    (hit : Executable.certifyTable ds ns es budget = true) (fuel work : UInt64)
+    (deep : ∀ t, VariantCertificate.Demand (Rewriting.ruleRoot (TableAmbient.liftRules rs)) q members t →
+      CheckedReduction.Within (TableAmbient.liftRules rs) fuel.toNat t)
+    (funded : work = 0 ∨ ¬VariantCertificate.Overcharged
+      (Rewriting.ruleRoot (TableAmbient.liftRules rs)) q members work.toNat) :
+    Executable.sessionVariantCheck poll ds ns es extra roots family fuel work ≠ #[#[3]] ∧
+      (Executable.sessionVariantCheck poll ds ns es extra roots family fuel work = #[#[1]] ↔
         VariantCertificate.Closed (Rewriting.ruleRoot (TableAmbient.liftRules rs)) q members) := by
   obtain ⟨bound,can,_⟩ := CertifiedTableWire.sound CertifiedTableWire.correct
     (SessionVariantCheckWire.input_table decoded) hit
-  have decision := exportedSessionVariantCheck_decides _ _ _ _ _ _ _ _ _ _ decoded
-  obtain ⟨k,enough⟩ := decision.accepts bound can
-  exact ⟨k,fun fuel large => ⟨(enough fuel large).1,decision.closed fuel 0 can,(enough fuel large).2⟩⟩
+  have decision := exportedSessionVariantCheck_decides quiet _ _ _ _ _ _ _ _ _ _ decoded
+  have open_ : Executable.sessionVariantCheck poll ds ns es extra roots family fuel work ≠ #[#[3]] := by
+    intro out
+    rcases decision.exhausts fuel work can out with ⟨t,needed,long⟩ | ⟨limited,short⟩
+    · exact long (deep t needed)
+    · exact funded.elim limited (fun enough => enough short)
+  refine ⟨open_,decision.closed fuel work can,fun closed => ?_⟩
+  rcases (exportedSessionVariantCheck_correct quiet).status _ _ _ _ _ _ fuel work _ _ _ _ decoded with
+    yes | ⟨reason,index,no⟩ | out
+  · exact yes
+  · exfalso
+    obtain ⟨i,_,⟨_,σ,at_i,bad⟩ | ⟨_,bad⟩ | ⟨_,σ,at_i,bad⟩ | ⟨_,bad⟩⟩ :=
+      decision.rejects fuel work reason index can no
+    · exact bad (closed.normal σ (List.mem_of_getElem? at_i))
+    · exact bad closed.start
+    · exact bad (closed.step σ (List.mem_of_getElem? at_i))
+    · exact bad ⟨bound,(VariantCertificate.nonvar_iff _).mp (VariantCertificate.nonvar_canonical can)⟩
+  · exact absurd out open_
 
-/-- Floor: on a sorted table of constructor definitions the checked reducer
-never declines. Every input gets its normal form, at every depth. -/
-theorem exportedDefinitionReduce_ambient {ds ns es root n d t rs}
-    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : ConstantDefinitions.Presentation rs)
-    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
-    GeneralReductionWire.Answer d rs t (Executable.checkedReduce ds ns es root n) := by
-  have sorted := (DefinitionCertificate.sorted_iff cls).mpr typed
-  have ok := (ConstantDefinitions.accepts_iff rs).mpr cls
-  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,reject,_⟩
-  · exact ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs (ConstantDefinitions.bound ok) t u reply⟩
-  · simp [CheckedReductionWire.definitions,ok,sorted] at reject
-
-/-- Floor: on a sorted table of constructor-pattern projections the checked
-reducer never declines, including on kind-level contexts. -/
-theorem exportedDestructorReduce_ambient {ds ns es root n d t rs}
-    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : DestructorTable.Presentation rs)
-    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
-    GeneralReductionWire.Answer d rs t (Executable.checkedReduce ds ns es root n) := by
-  have sorted := cls.sorted_iff.mpr typed
-  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,reject,_⟩
-  · exact ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs (TableDecrease.bound cls.decreasing) t u reply⟩
-  · simp [CheckedReductionWire.destructors,(DestructorTable.accepts_iff rs).mpr cls,sorted] at reject
+/-- The limit on status 3 is not empty: on a range-restricted canonical
+presentation one depth bounds every rewrite path from every term a check of
+the family has to normalize. -/
+theorem variantDemand_bounded {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] {rules : List (Equation s)}
+    (bound : ReferenceReduction.Bound rules)
+    (canonical : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot rules)) (q : List (Term s))
+    (family : List (Substitution s)) :
+    ∃ k : Nat, ∀ t, VariantCertificate.Demand (Rewriting.ruleRoot rules) q family t →
+      CheckedReduction.Within rules k t :=
+  ⟨_,VariantCertificate.demand_within canonical ((CheckedReduction.rangeBound_iff rules).mpr bound)
+    (VariantCertificate.nonvar_canonical canonical) q family⟩
 
 /-- The packet dictionary may contain only the query's symbols. Every reply
 other than the decline word still covers caller solutions involving other
@@ -588,7 +584,6 @@ run_cmd do
   let moduleNames := env.header.moduleNames
   -- Exports with a contract: each is mentioned by a theorem of this file.
   let contractExports : List (Name × Name) := [
-    (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
     (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalUnifyExists, `tamarin_total_unify_exists),
@@ -597,8 +592,7 @@ run_cmd do
     (``Tamarin.Executable.pathReduce, `tamarin_path_reduce),
     (``Tamarin.Executable.certifyTable, `tamarin_certify_table),
     (``Tamarin.Executable.sessionReduce, `tamarin_session_reduce),
-    (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check),
-    (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants)]
+    (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check)]
   -- Proposer exports carry no contract. The caller uses their output only as a
   -- proposal that `tamarin_session_variant_check` has to accept, so no theorem of
   -- this file may mention them. Their theorems are in `TamarinProposers.lean`.
@@ -642,6 +636,7 @@ run_cmd do
     (``Tamarin.Executable.excludeACFactors, `tamarin_exclude_ac_factors),
     (``Tamarin.Executable.excludeRoot, `tamarin_exclude_root),
     (``Tamarin.Executable.constructorVariant, `tamarin_constructor_variant),
+    (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),
     (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
     (``Tamarin.Executable.foldVariants, `tamarin_fold_variants)]
   let expectedExports := contractExports ++ proposerExports

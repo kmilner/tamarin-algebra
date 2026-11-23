@@ -11,6 +11,7 @@ namespace Tamarin.VariantCertificate
 open Rewriting VariantJoin MaudeOperations ReferenceVariantFrontier TupleNarrowingFrontier
 variable {s : Signature} {n : Nat} {rules : List (Equation s)} {query : Fin n → Term s}
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- The checker. `fuel` bounds the length of every rewrite path that is
 followed; `work`, when nonzero, bounds the number of positions at which the

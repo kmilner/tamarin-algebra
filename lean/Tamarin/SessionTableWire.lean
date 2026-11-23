@@ -619,6 +619,8 @@ theorem input_table {ds ns es extra roots family d rs q members}
             cases eq_of_heq h
             simp [eqs]
 
+variable [Interrupt]
+
 def run (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UInt64)
     (extra : Array (Array UInt64)) (roots : Array UInt64) (family : Array (Array UInt64))
     (fuel work : UInt64) : Array (Array UInt64) :=

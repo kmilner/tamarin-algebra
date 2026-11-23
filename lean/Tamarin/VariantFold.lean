@@ -23,6 +23,7 @@ open Rewriting VariantJoin MaudeOperations ReferenceVariantFrontier TupleNarrowi
 open VariantCertificate
 variable {s : Signature} {n : Nat} {rules : List (Equation s)}
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- A retained variant: its number, the number of the variant it was narrowed
 from, and the terms it is compared on (images of the keys, then values). -/
@@ -98,13 +99,16 @@ def expand (bound : ReferenceReduction.Bound rules) (query : Fin n → Term s) (
       found.2.foldl (fun (st : Search rules bound n) b =>
         if st.failed then st
         else
-          match quietCells rules b.subst st.memo.2 keyCells with
-          | (more,true) =>
-            let st := { st with memo := (st.memo.1,more) }
-            match settleF rules fuel more j b valueCells with
-            | none => { st with failed := true }
-            | some values => insert query keys e.id st (imagesF b.subst keyCells) values
-          | (more,false) => { st with memo := (st.memo.1,more) }) st) st
+          -- The caller is asked before every successor. A search that is
+          -- told to stop fails, and its result is discarded.
+          Interrupt.guard { st with failed := true } fun _ =>
+            match quietCells rules b.subst st.memo.2 keyCells with
+            | (more,true) =>
+              let st := { st with memo := (st.memo.1,more) }
+              match settleF rules fuel more j b valueCells with
+              | none => { st with failed := true }
+              | some values => insert query keys e.id st (imagesF b.subst keyCells) values
+            | (more,false) => { st with memo := (st.memo.1,more) }) st) st
 
 /-- The layers, each listed when it is complete. `work`, when nonzero, bounds
 the positions at which root branches are looked for plus the branches found. -/
@@ -115,9 +119,11 @@ def layers (bound : ReferenceReduction.Bound rules) (query : Fin n → Term s) (
     let st := frontier.foldl (fun (st : Search rules bound n) id =>
       if st.failed || (work != 0 && decide (work < st.spent)) then st
       else
-        match st.live.find? fun e => e.id == id with
-        | none => st
-        | some e => expand bound query keys fuel { st with spent := st.spent + charge query e.point } e)
+        Interrupt.guard { st with failed := true } fun _ =>
+          match st.live.find? fun e => e.id == id with
+          | none => st
+          | some e =>
+            expand bound query keys fuel { st with spent := st.spent + charge query e.point } e)
       { st with fresh := #[] }
     if st.failed || (work != 0 && decide (work < st.spent)) then .exhausted
     else
@@ -150,6 +156,7 @@ end Tamarin.VariantFold
 
 namespace Tamarin.FoldVariantsWire
 open TotalUnifyWire ReferenceVariantFrontier
+variable [Interrupt]
 
 /-- The reply of the variant proposer in the form of the other variant
 exports: status 1 with one row of bindings per variant, status 2 when the

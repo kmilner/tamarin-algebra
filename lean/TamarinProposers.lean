@@ -308,12 +308,95 @@ theorem exportedCheckedReduce_ambient {ds ns es root n d t rs}
     (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (admitted : CheckedReductionWire.admitted rs t n)
     (bound : ReferenceReduction.Bound rs)
     (completes : CheckedReduction.run rs (CheckedReductionWire.fuel rs t n) t ≠ none) :
-    ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
+    ∃ u, CheckedReductionWire.Decodes d (CheckedReductionWire.run ds ns es root n) u ∧
       ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
         (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
   rcases CheckedReductionWire.correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,_,stop⟩
   · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
   · exact (stop.elim (fun bad => by simp [bad] at admitted) completes).elim
+
+/-! The all-paths reducer `CheckedReductionWire.run` was the export
+`tamarin_checked_reduce`. It is a library procedure now: no caller needs it,
+since a session reduces along one path (`tamarin_session_reduce` on a table
+the certifier accepted, `tamarin_path_reduce` otherwise). What was stated of
+the export is kept for the procedure. -/
+
+theorem checkedReduce_malformed {ds ns es root n}
+    (malformed : TableWire.input ds ns es #[root] = none) :
+    CheckedReductionWire.run ds ns es root n = #[#[0]] :=
+  CheckedReductionWire.correct.malformed _ _ _ _ _ malformed
+
+/-- A status 1 reply of the all-paths reducer decodes to the normal form of
+the term, in the dictionary of the packet and in every extension of it. The
+only other reply to a decoded packet is the decline `#[#[2]]`. -/
+theorem checkedReduce_sound {ds ns es root n d t rs}
+    (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) :
+    GeneralReductionWire.Answer d rs t (CheckedReductionWire.run ds ns es root n) ∨
+      CheckedReductionWire.run ds ns es root n = #[#[2]] := by
+  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ decoded with ⟨u,packet,reply⟩ | ⟨declined,_⟩
+  · suffices bound : ReferenceReduction.Bound rs from
+      .inl ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
+    obtain ⟨words,_,shape,_⟩ := packet
+    cases defs : CheckedReductionWire.definitions rs with
+    | true => exact ConstantDefinitions.bound (Bool.and_eq_true_iff.mp defs).1
+    | false =>
+      cases proj : CheckedReductionWire.destructors rs with
+      | true =>
+        exact TableDecrease.bound ((DestructorTable.accepts_iff rs).mp (Bool.and_eq_true_iff.mp proj).1).decreasing
+      | false =>
+        cases ok : CheckedReductionWire.admitted rs t n with
+        | true =>
+          have parts : (CheckedReduction.rangeBound rs ∧ TableDecrease.sorted rs) ∧
+              CheckedReduction.affordable rs (CheckedReductionWire.fuel rs t n) 100000 t := by
+            simpa only [CheckedReductionWire.admitted,Bool.and_eq_true] using ok
+          exact (CheckedReduction.rangeBound_iff _).mp parts.1.1
+        | false =>
+          have stop : CheckedReductionWire.run ds ns es root n = #[#[2]] := by
+            simp [CheckedReductionWire.run,decoded,defs,proj,ok]
+          rw [stop] at shape
+          simp at shape
+  · exact .inr declined
+
+/-- On a sorted table of constructor definitions the all-paths reducer never
+declines. -/
+theorem definitionReduce_ambient {ds ns es root n d t rs}
+    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : ConstantDefinitions.Presentation rs)
+    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
+    GeneralReductionWire.Answer d rs t (CheckedReductionWire.run ds ns es root n) := by
+  have sorted := (DefinitionCertificate.sorted_iff cls).mpr typed
+  have ok := (ConstantDefinitions.accepts_iff rs).mpr cls
+  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,reject,_⟩
+  · exact ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs (ConstantDefinitions.bound ok) t u reply⟩
+  · simp [CheckedReductionWire.definitions,ok,sorted] at reject
+
+/-- On a sorted table of constructor-pattern projections the all-paths
+reducer never declines, including on kind-level contexts. -/
+theorem destructorReduce_ambient {ds ns es root n d t rs}
+    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : DestructorTable.Presentation rs)
+    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
+    GeneralReductionWire.Answer d rs t (CheckedReductionWire.run ds ns es root n) := by
+  have sorted := cls.sorted_iff.mpr typed
+  rcases CheckedReductionWire.correct.valid _ _ _ _ n _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,reject,_⟩
+  · exact ⟨u,packet,reply,fun extra => SignatureExtension.reduction extra rs (TableDecrease.bound cls.decreasing) t u reply⟩
+  · simp [CheckedReductionWire.destructors,(DestructorTable.accepts_iff rs).mpr cls,sorted] at reject
+
+/-! `tamarin_checked_variants` is a proposer: the Rust backend uses its family
+only after `tamarin_session_variant_check` accepted it. What was promised of
+it as a contract export still holds and is kept here, unpinned. -/
+
+theorem exportedCheckedVariants_malformed {ds ns es roots n}
+    (malformed : TableWire.input ds ns es roots = none) :
+    Executable.checkedVariants ds ns es roots n = #[#[0]] :=
+  CheckedVariantsWire.correct.malformed _ _ _ _ _ malformed
+
+/-- A reply of the bounded narrowing search other than the decline `#[#[2]]`
+decodes to a complete set of variants of the decoded observations with unique
+values, over the dictionary of the packet extended by all ambient names. -/
+theorem exportedCheckedVariants_sound {ds ns es roots n d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩) :
+    CheckedVariantsWire.Decodes rs q (Executable.checkedVariants ds ns es roots n) ∨
+      Executable.checkedVariants ds ns es roots n = #[#[2]] :=
+  (CheckedVariantsWire.correct.valid _ _ _ _ n _ _ _ decoded).imp_right And.left
 
 /-- Filtering witnesses of an unavailable sort preserves coverage on actual
 module substitutions, including all the values of a packed query. -/

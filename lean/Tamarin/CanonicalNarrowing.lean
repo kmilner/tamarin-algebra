@@ -14,6 +14,7 @@ namespace Tamarin.VariantCertificate
 open Rewriting
 variable {s : Signature} {rules : List (Equation s)}
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- Whether no rule rewrites the term. The search stops at the first redex. -/
 def quiet (rules : List (Equation s)) (t : Term s) : Bool :=
@@ -108,6 +109,7 @@ theorem number_occurs (vs : List Variable) (t : Term s) (w : Variable) :
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- The root branches of a term that stands alone: those of a subproduct for
 an AC product, those of the whole term otherwise. -/
@@ -126,6 +128,7 @@ theorem rootsAt_genuine (bound : ReferenceReduction.Bound rules) (t : Term s) (b
   · exact roots_genuine _ bound [] _ b hb
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem alone {t : Term s} {ρ μ : Substitution s} {u value : Term s}
     (h : FitsOn (fun w => t.Occurs w ∨ Observed ([] : List (Term s)) w) ρ u μ value) : FitsOn t.Occurs ρ u μ value := by
   obtain ⟨η,agree,out⟩ := h
@@ -158,6 +161,7 @@ def Above (ws : List Variable) (a b : Branch s) : Prop :=
     EquivB b.value (θ.apply a.value)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 theorem Above.refl (ws : List Variable) (a : Branch s) : Above ws a a :=
   ⟨.identity,fun _ _ => by rw [Substitution.apply_identity]; exact .refl _,
     by rw [Substitution.apply_identity]; exact .refl _⟩
@@ -190,6 +194,7 @@ def canonicalRoots (bound : ReferenceReduction.Bound rules) (anchors : List (Ter
     (place (anchors.flatMap Term.variables) vs)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
 private theorem listed (t : Term s) (v : Variable) : v ∈ t.variables.eraseDups ↔ t.Occurs v := by
   rw [List.mem_eraseDups,Term.mem_variables]
 

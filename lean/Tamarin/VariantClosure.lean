@@ -213,6 +213,7 @@ def Formed (rules : List (Equation s)) (query : Fin n → Term s) (p : Point s n
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- The normal forms of a tuple, each computed once along its first rewrite
 path. That path is the one the reference reducer takes, so the result does
@@ -227,7 +228,7 @@ theorem follow_reduce (bound : ReferenceReduction.Bound rules)
   rw [CertifiedReductionWire.follow_eq] at h
   exact CertifiedReductionWire.choose_exact bound canonical fuel t u h
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 /-- The terms of two points side by side: the images of each key, then the
 values of each slot. -/
 theorem zip_terms (keys : List Variable) (g t : Point s n) : (terms keys g).zip (terms keys t) =
@@ -235,7 +236,7 @@ theorem zip_terms (keys : List Variable) (g t : Point s n) : (terms keys g).zip 
       List.ofFn (fun i => (g.value i,t.value i)) := by
   simp [terms,List.zip_eq_zipWith,List.zipWith_append,List.zipWith_map,List.zipWith_self,zipWith_ofFn]
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 /-- A substitution that turns the terms of one point into those of another
 makes the first row subsume the second. -/
 theorem rows_subsume {keys : List Variable} {g t : Point s n} {θ : Substitution s}
@@ -269,6 +270,7 @@ test. `false` does not mean that there is no such substitution. -/
 def guessedInstance (general specific : List (Term s)) : Bool :=
   (GuessedMatching.find (general.zip specific)).isSome
 
+omit [Interrupt] in
 theorem guessedInstance_sound {keys : List Variable} {g t : Point s n}
     (h : guessedInstance (terms keys g) (terms keys t) = true) : (g.row keys).Subsumes (t.row keys) := by
   obtain ⟨θ,found⟩ := Option.isSome_iff_exists.mp h
@@ -331,6 +333,7 @@ theorem covered_sound {keys : List Variable} {members : List (Point s n)} {c : P
     obtain ⟨m,hm,rfl⟩ := List.mem_map.mp hg
     exact ⟨m,hm,instanceOf_sound ok⟩
 
+omit [Interrupt] in
 theorem admissible_iff (bound : ReferenceReduction.Bound rules) (p : Point s n) :
     FoldingNarrowing.admissible rules query p = true ↔
       ∀ i : Key (keysOf query), Normal (ruleRoot rules) (p.assignment.image i.val) := by
@@ -353,7 +356,7 @@ theorem normalOn_eq (p : Point s n) :
     normalOn rules (keysOf query) p.assignment = FoldingNarrowing.admissible rules query p := by
   simp [normalOn,FoldingNarrowing.admissible,quiet_eq]
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 /-- A substitution with normal images on the keys, together with normal
 forms of the instantiated query, is a sound variant. -/
 theorem sound_member (vars : Normalized (ruleRoot rules) Substitution.identity) (p : Point s n)
@@ -394,13 +397,118 @@ def childOk (rules : List (Equation s)) (keys : List Variable) (fuel : Nat)
       covered rows (images ++ values)
   else some true
 
-/-- One member's narrowing layer: every admissible successor, normalized, must
-be an instance of a row. -/
-def closedAt (rules : List (Equation s)) (query : Fin n → Term s) (keys : List Variable)
+/-- One member's narrowing layer, read in order: every admissible successor,
+normalized, must be an instance of a row. The first successor that is not, or
+whose normal form the depth does not reach, ends the scan. -/
+def strictAt (rules : List (Equation s)) (query : Fin n → Term s) (keys : List Variable)
     (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
     (rows : List (List (Term s))) (p : Point s n) : Option Bool :=
   every (fun j => if idle (query j) then some true
     else every (childOk rules keys fuel rows p j) (branches p j)) (List.finRange n)
+
+/-- The successor of a member along one branch, before normalization. -/
+abbrev successor (p : Point s n) (j : Fin n) (b : RootNarrowing.Branch s) : Point s n :=
+  ⟨b.subst.compose p.assignment,replace (fun i => b.subst.apply (p.value i)) j b.value⟩
+
+/-- The branches of the slots that are narrowed. -/
+def layer (query : Fin n → Term s) (branches : Point s n → Fin n → List (RootNarrowing.Branch s))
+    (p : Point s n) : List (Fin n × RootNarrowing.Branch s) :=
+  (List.finRange n).flatMap fun j => if idle (query j) then [] else (branches p j).map fun b => (j,b)
+
+/-- The whole layer of a member whose scan the depth ended. A successor that
+is not an instance of a row still rejects. A successor whose normal form the
+depth does not reach is passed over when it is an instance of another
+successor of the member that was normalized and found to be an instance of a
+row: it is then no most general successor, and the descent that proves
+coverage goes through the more general one. -/
+def rescue (rules : List (Equation s)) (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
+    (rows : List (List (Term s))) (p : Point s n) : Option Bool :=
+  let outcomes := (layer query branches p).map fun e => (e,childOk rules keys fuel rows p e.1 e.2)
+  if outcomes.any (fun e => e.2 == some false) then some false
+  else
+    let good := (outcomes.filter fun e => e.2 == some true &&
+      (keys.map (e.1.2.subst.compose p.assignment).image).all (quiet rules)).map fun e =>
+        terms keys (successor p e.1.1 e.1.2)
+    if (outcomes.filter fun e => e.2 == none).all fun e =>
+        good.any fun g => instanceOf g (terms keys (successor p e.1.1 e.1.2)) then some true
+    else none
+
+/-- One member's narrowing layer: every admissible successor, normalized, must
+be an instance of a row, unless it is an instance of another successor for
+which this was established. -/
+def closedAt (rules : List (Equation s)) (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
+    (rows : List (List (Term s))) (p : Point s n) : Option Bool :=
+  match strictAt rules query keys branches fuel rows p with
+  | none => rescue rules query keys branches fuel rows p
+  | other => other
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem mem_layer {branches : Point s n → Fin n → List (RootNarrowing.Branch s)} {p : Point s n}
+    {j : Fin n} {b : RootNarrowing.Branch s} :
+    (j,b) ∈ layer query branches p ↔ idle (query j) = false ∧ b ∈ branches p j := by
+  unfold layer
+  rw [List.mem_flatMap]
+  constructor
+  · rintro ⟨i,_,inside⟩
+    split at inside
+    · exact nomatch inside
+    · next live =>
+      obtain ⟨c,hc,eq⟩ := List.mem_map.mp inside
+      obtain ⟨rfl,rfl⟩ := Prod.mk.inj eq
+      exact ⟨by simpa using live,hc⟩
+  · rintro ⟨live,hb⟩
+    exact ⟨j,List.mem_finRange j,by simp [live,hb]⟩
+
+/-- What a layer that passes has established for each of its successors:
+it was normalized and found to be an instance of a row, or it is an instance
+of another successor of the layer for which that holds and whose images on
+the keys are normal. -/
+theorem closedAt_true {keys : List Variable}
+    {branches : Point s n → Fin n → List (RootNarrowing.Branch s)} {fuel : Nat}
+    {rows : List (List (Term s))} {p : Point s n}
+    (h : closedAt rules query keys branches fuel rows p = some true) (j : Fin n)
+    (live : idle (query j) = false) (b : RootNarrowing.Branch s) (hb : b ∈ branches p j) :
+    childOk rules keys fuel rows p j b = some true ∨
+      ∃ j0 b0, idle (query j0) = false ∧ b0 ∈ branches p j0 ∧
+        childOk rules keys fuel rows p j0 b0 = some true ∧
+        (keys.map (b0.subst.compose p.assignment).image).all (quiet rules) = true ∧
+        instanceOf (terms keys (successor p j0 b0)) (terms keys (successor p j b)) = true := by
+  unfold closedAt at h
+  split at h
+  · unfold rescue at h
+    dsimp only at h
+    split at h
+    · cases h
+    · next clean =>
+      split at h
+      · next all =>
+        cases outcome : childOk rules keys fuel rows p j b with
+        | none =>
+          have inside : ((j,b),(none : Option Bool)) ∈ ((layer query branches p).map fun e =>
+              (e,childOk rules keys fuel rows p e.1 e.2)).filter fun e => e.2 == none :=
+            List.mem_filter.mpr ⟨List.mem_map.mpr ⟨(j,b),mem_layer.mpr ⟨live,hb⟩,by rw [outcome]⟩,rfl⟩
+          obtain ⟨g,hg,sub⟩ := List.any_eq_true.mp (List.all_eq_true.mp all _ inside)
+          obtain ⟨e,he,rfl⟩ := List.mem_map.mp hg
+          obtain ⟨made,ok⟩ := List.mem_filter.mp he
+          obtain ⟨⟨j0,b0⟩,hl,rfl⟩ := List.mem_map.mp made
+          obtain ⟨live0,hb0⟩ := mem_layer.mp hl
+          simp only [Bool.and_eq_true,beq_iff_eq] at ok
+          exact .inr ⟨j0,b0,live0,hb0,ok.1,ok.2,sub⟩
+        | some value =>
+          cases value with
+          | true => exact .inl rfl
+          | false =>
+            exfalso
+            apply clean
+            exact List.any_eq_true.mpr ⟨((j,b),some false),
+              List.mem_map.mpr ⟨(j,b),mem_layer.mpr ⟨live,hb⟩,by rw [outcome]⟩,rfl⟩
+      · cases h
+  · unfold strictAt at h
+    have slot := every_true h j (List.mem_finRange j)
+    rw [live] at slot
+    exact .inl (every_true slot b hb)
 
 /-- A number that terms of the same form share. Symbols and names do not
 enter it, so different terms may share it too. -/
@@ -453,6 +561,7 @@ def everyS {α σ : Type} (f : σ → α → σ × Option Bool) : σ → List α
     | (next,some true) => everyS f next xs
     | other => other
 
+omit [Interrupt] in
 theorem everyS_eq {α σ : Type} {f : σ → α → σ × Option Bool} {g : α → Option Bool}
     (h : ∀ state x, (f state x).2 = g x) (state : σ) (xs : List α) :
     (everyS f state xs).2 = every g xs := by
@@ -483,6 +592,7 @@ def flatMapS {α β σ : Type} (f : σ → α → σ × List β) : σ → List �
     let tail := flatMapS f head.1 xs
     (tail.1,head.2 ++ tail.2)
 
+omit [Interrupt] in
 theorem flatMapS_eq {α β σ : Type} {f : σ → α → σ × List β} {g : α → List β}
     (h : ∀ state x, (f state x).2 = g x) (state : σ) (xs : List α) :
     (flatMapS f state xs).2 = xs.flatMap g := by
@@ -515,7 +625,7 @@ def positionsS {σ : Type} (roots : σ → Term s → σ × List (RootNarrowing.
     let right := positionsS roots left.1 b
     (right.1,top.2 ++ (left.2.map (below (.ac f (some b))) ++ right.2.map (below (.ac f (some a)))))
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 theorem positionsS_eq {σ : Type} {roots : σ → Term s → σ × List (RootNarrowing.Branch s)}
     {plain : Term s → List (RootNarrowing.Branch s)} (h : ∀ state t, (roots state t).2 = plain t)
     (state : σ) (t : Term s) : (positionsS roots state t).2 = TableNarrowing.positions plain t := by
@@ -591,7 +701,7 @@ theorem rootsS_eq (bound : ReferenceReduction.Bound rules) (anchors : List (Term
 /-- Whether a substitution with this support keeps a term with these variables. -/
 def untouched (support vars : List Variable) : Bool := vars.all fun v => decide (v ∉ support)
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 theorem apply_untouched (μ : Substitution s) (t : Term s)
     (h : untouched μ.support t.variables = true) : μ.apply t = t := by
   have same := Term.subst_eq_of_agree μ.image Term.var t fun v hv =>
@@ -734,11 +844,13 @@ def childF (rules : List (Equation s)) (fuel : Nat) (rows : List (List (Term s))
     (keyCells : List (Term s × List Variable × Bool))
     (valueCells : List (Fin n × Term s × List Variable × Option (Term s))) (j : Fin n)
     (made : Quiets rules) (b : RootNarrowing.Branch s) : Quiets rules × Option Bool :=
-  match quietCells rules b.subst made keyCells with
-  | (more,true) =>
-    (more,(settleF rules fuel more j b valueCells).map fun values =>
-      covered rows (imagesF b.subst keyCells ++ values))
-  | (more,false) => (more,some true)
+  -- The caller is asked before every successor.
+  Interrupt.guard (made,none) fun _ =>
+    match quietCells rules b.subst made keyCells with
+    | (more,true) =>
+      (more,(settleF rules fuel more j b valueCells).map fun values =>
+        covered rows (imagesF b.subst keyCells ++ values))
+    | (more,false) => (more,some true)
 
 theorem childF_eq (bound : ReferenceReduction.Bound rules) (keys : List Variable) (fuel : Nat) (rows : List (List (Term s))) (p : Point s n)
     (j : Fin n) (made : Quiets rules) (b : RootNarrowing.Branch s) :
@@ -771,7 +883,7 @@ abbrev Memo (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
 
 /-- `closedAt` for the narrower of the checker, with the root branches and
 the normality tests looked up. -/
-def closedAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+def strictAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
     (query : Fin n → Term s) (keys : List Variable) (fuel : Nat) (rows : List (List (Term s)))
     (state : Memo rules bound) (p : Point s n) : Memo rules bound × Option Bool :=
   let keyCells := (keys.map p.assignment.image).map (keyCell rules)
@@ -784,13 +896,13 @@ def closedAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rule
       let done := everyS (childF rules fuel rows keyCells valueCells j) st.2 found.2
       ((found.1,done.1),done.2)) state (List.finRange n)
 
-theorem closedAtF_eq (bound : ReferenceReduction.Bound rules)
+theorem strictAtF_eq (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel : Nat)
     (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
-    (closedAtF rules bound query (keysOf query) fuel rows state p).2 =
-      closedAt rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
+    (strictAtF rules bound query (keysOf query) fuel rows state p).2 =
+      strictAt rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
         fuel rows p := by
-  unfold closedAtF closedAt
+  unfold strictAtF strictAt
   dsimp only
   apply everyS_eq
   intro st j
@@ -800,6 +912,33 @@ theorem closedAtF_eq (bound : ReferenceReduction.Bound rules)
     rw [everyS_eq (childF_eq bound (keysOf query) fuel rows p j),
       positionsS_eq (rootsS_eq bound (TableNarrowing.cells (keysOf query) p))]
     rfl
+
+/-- `closedAt` for the narrower of the checker. The ordered scan looks its
+root branches and normality tests up; the whole layer is read again, without
+them, only when the depth ended the scan. -/
+def closedAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
+    (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
+    Memo rules bound × Option Bool :=
+  match strictAtF rules bound query keys fuel rows state p with
+  | (next,none) => (next,rescue rules query keys branches fuel rows p)
+  | other => other
+
+theorem closedAtF_eq (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel : Nat)
+    (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
+    (closedAtF rules bound query (keysOf query) (TableNarrowing.checking bound vars query).branches
+        fuel rows state p).2 =
+      closedAt rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
+        fuel rows p := by
+  unfold closedAtF closedAt
+  have head := strictAtF_eq (query := query) bound vars fuel rows state p
+  generalize strictAtF rules bound query (keysOf query) fuel rows state p = result at head ⊢
+  obtain ⟨next,value⟩ := result
+  change value = _ at head
+  rw [← head]
+  cases value <;> rfl
 
 /-- The number of positions of a term that are not variables. -/
 def sites : Term s → Nat
@@ -876,21 +1015,27 @@ def saturated (rules : List (Equation s)) (bound : ReferenceReduction.Bound rule
 /-- `closure` for the narrower of the checker, with what one member computed
 handed to the next. -/
 def closureF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
-    (query : Fin n → Term s) (keys : List Variable) (fuel work limit : Nat)
+    (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel work limit : Nat)
     (rows : List (List (Term s))) : Memo rules bound → List (Point s n) → Nat → Verdict
   | _, [], _ => .accepted
   | state, p :: rest, index =>
     if work != 0 && decide (limit ≤ index) then .exhausted
     else
-      match closedAtF rules bound query keys fuel rows state p with
-      | (_,none) => .exhausted
-      | (next,some true) => closureF rules bound query keys fuel work limit rows next rest (index + 1)
-      | (_,some false) => .rejected 3 index
+      -- The caller is asked before every member. Its reply is `false` for
+      -- every caller that is a function, so this is the plain computation.
+      Interrupt.guard .exhausted fun _ =>
+        match closedAtF rules bound query keys branches fuel rows state p with
+        | (_,none) => .exhausted
+        | (next,some true) =>
+          closureF rules bound query keys branches fuel work limit rows next rest (index + 1)
+        | (_,some false) => .rejected 3 index
 
 theorem closureF_eq (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel work limit : Nat)
     (rows : List (List (Term s))) (state : Memo rules bound) (todo : List (Point s n)) (index : Nat) :
-    closureF rules bound query (keysOf query) fuel work limit rows state todo index =
+    closureF rules bound query (keysOf query) (TableNarrowing.checking bound vars query).branches
+        fuel work limit rows state todo index =
       closure rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
         fuel work limit rows todo index := by
   induction todo generalizing state index with
@@ -898,7 +1043,8 @@ theorem closureF_eq (bound : ReferenceReduction.Bound rules)
   | cons p rest ih =>
     rw [closureF,closure]
     have head := closedAtF_eq (query := query) bound vars fuel rows state p
-    generalize closedAtF rules bound query (keysOf query) fuel rows state p = result at head ⊢
+    generalize closedAtF rules bound query (keysOf query)
+      (TableNarrowing.checking bound vars query).branches fuel rows state p = result at head ⊢
     obtain ⟨next,value⟩ := result
     change value = _ at head
     rw [← head]
@@ -913,7 +1059,7 @@ theorem closureF_eq (bound : ReferenceReduction.Bound rules)
 /-- `saturated` with the root branches and the normality tests kept from one
 member to the next. -/
 def saturatedFast (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
-    (_ : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
     (fuel work : Nat) (members : List (Point s n)) : Verdict :=
   let keys := keysOf query
   match settle rules fuel query with
@@ -921,14 +1067,155 @@ def saturatedFast (rules : List (Equation s)) (bound : ReferenceReduction.Bound 
   | some first =>
     let rows := members.map (terms keys)
     if covered rows (keys.map (Substitution.identity (sig := s)).image ++ first) then
-      closureF rules bound query keys fuel work (admitted work 0 (members.map (charge query))) rows
+      closureF rules bound query keys (TableNarrowing.checking bound vars query).branches fuel work
+        (admitted work 0 (members.map (charge query))) rows
         (Array.replicate 4096 [],Array.replicate 4096 []) members 0
     else .rejected 2 0
 
+omit [Interrupt] in
 @[csimp] theorem saturated_fast : @saturated = @saturatedFast := by
-  funext s n _ _ _ _ rules bound vars query fuel work members
+  funext s n _ _ _ _ _ rules bound vars query fuel work members
   unfold saturated saturatedFast
   simp only [closureF_eq bound vars]
+
+omit [Interrupt] in
+private theorem sum_strict {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) (j : Fin n) (lt : a j < b j) :
+    (List.ofFn a).sum < (List.ofFn b).sum := by
+  induction n with
+  | zero => exact j.elim0
+  | succ n ih =>
+    rw [List.ofFn_succ,List.ofFn_succ (f := b),List.sum_cons,List.sum_cons]
+    cases j using Fin.cases with
+    | zero => exact Nat.add_lt_add_of_lt_of_le lt (FoldingNarrowing.sum_mono (fun i => le i.succ))
+    | succ k => exact Nat.add_lt_add_of_le_of_lt (le 0) (ih (fun i => le i.succ) k lt)
+
+omit [Interrupt] in
+/-- Coverage from a list of members in which every admissible successor of a
+member is an instance of a successor of that member whose normal form a
+member subsumes. The descent is on the rewrite heights of the instantiated
+values: an instance of the more general successor is one rewrite step below
+the instance of the member. -/
+theorem covers_layers (bound : ReferenceReduction.Bound rules)
+    (canonical : CanonicalPresentation (ruleRoot rules))
+    (narrow : FoldingNarrowing.Narrower rules query) (members : List (Point s n))
+    (valid : ∀ p ∈ members, VariantSaturation.Sound rules query p)
+    (closed : ∀ p ∈ members, ∀ c ∈ expand p (narrow.branches p),
+      (∀ i : Key (keysOf query), Normal (ruleRoot rules) (c.assignment.image i.val)) →
+      ∃ c0 ∈ expand p (narrow.branches p), (c0.row (keysOf query)).Subsumes (c.row (keysOf query)) ∧
+        ∃ m ∈ members, (m.row (keysOf query)).Subsumes
+          ((⟨c0.assignment,fun i => (ReferenceReduction.reducer rules bound canonical).reduce (c0.value i)⟩ :
+            Point s n).row (keysOf query)))
+    (start : ∃ m ∈ members, ∃ θ : Substitution s,
+      ∀ i : Key (keysOf query), EquivB (.var i.val) (θ.apply (m.assignment.image i.val)))
+    (ρ : Substitution s) (norm : Normalized (ruleRoot rules) ρ) (out : Fin n → Term s)
+    (forms : ∀ i, NormalForm (ruleRoot rules) (ρ.apply (query i)) (out i)) :
+    ∃ p, p ∈ members ∧ ∃ δ, Fits (p.row (keysOf query)) (fun i => ρ.image i.val) out δ := by
+  classical
+  let keys := keysOf query
+  let r := ReferenceReduction.reducer rules bound canonical
+  let height := ReductionHeight.height bound canonical.terminating
+  have go (k : Nat) : ∀ p, p ∈ members → ∀ δ : Substitution s,
+      (∀ i : Key keys, EquivB (ρ.image i.val) (δ.apply (p.assignment.image i.val))) →
+      (List.ofFn fun i => height (δ.apply (p.value i))).sum = k →
+      ∃ q, q ∈ members ∧ ∃ η, Fits (q.row keys) (fun i => ρ.image i.val) out η := by
+    induction k using Nat.strongRecOn with
+    | ind k smaller =>
+      intro p hp δ inputs rank
+      have hn (i : Key keys) : Normal (ruleRoot rules) (δ.apply (p.assignment.image i.val)) :=
+        (normal_equiv _ (inputs i)).mp (norm i.val)
+      by_cases done : ∀ i, Normal (ruleRoot rules) (δ.apply (p.value i))
+      · exact ⟨p,hp,δ,inputs,
+          VariantSaturation.endpoint canonical p (valid p hp) ρ δ out forms inputs done⟩
+      · obtain ⟨j,u,step⟩ : ∃ j u, StepModulo (ruleRoot rules) (δ.apply (p.value j)) u := by
+          simpa only [Normal,Classical.not_forall,Classical.not_not] using done
+        obtain ⟨_,hm,η,fit⟩ := expand_covers keys p (narrow.branches p) (narrow.lifts p (valid p hp))
+          δ hn j u step
+        obtain ⟨c,hc,rfl⟩ := List.mem_map.mp hm
+        obtain ⟨c0,_,⟨θ0,sub0⟩,m,hm,θ,sub⟩ := closed p hp c hc fun i =>
+          normal_of_instance ((normal_equiv _ (fit.inputs i)).mp (hn i))
+        let δ' := (η.compose θ0).compose θ
+        have each (i) : height (δ'.apply (m.value i)) ≤
+            height (replace (fun k => δ.apply (p.value k)) j u i) := by
+          have a : EquivB (δ'.apply (m.value i)) ((η.compose θ0).apply (r.reduce (c0.value i))) := by
+            rw [Substitution.apply_compose]
+            exact ((sub.values i).subst (η.compose θ0).image).symm
+          have b : height ((η.compose θ0).apply (r.reduce (c0.value i))) ≤
+              height ((η.compose θ0).apply (c0.value i)) :=
+            ReductionHeight.reduces bound canonical.terminating
+              (SpecializedFresh.reduces_subst rules _ (r.correct (c0.value i)).normalForm.1)
+          have c' : EquivB ((η.compose θ0).apply (c0.value i)) (η.apply (c.value i)) := by
+            rw [Substitution.apply_compose]
+            exact ((sub0.values i).subst η.image).symm
+          exact Nat.le_trans (Nat.le_of_eq (ReductionHeight.equiv bound canonical.terminating a))
+            (Nat.le_trans b (Nat.le_of_eq ((ReductionHeight.equiv bound canonical.terminating c').trans
+              (ReductionHeight.equiv bound canonical.terminating (fit.values i)).symm)))
+        have strict : height (δ'.apply (m.value j)) < height (δ.apply (p.value j)) :=
+          Nat.lt_of_le_of_lt (by simpa [replace] using each j) (ReductionHeight.step bound _ step)
+        have less : (List.ofFn fun i => height (δ'.apply (m.value i))).sum <
+            (List.ofFn fun i => height (δ.apply (p.value i))).sum := by
+          apply sum_strict _ j strict
+          intro i
+          by_cases same : i = j
+          · exact same ▸ Nat.le_of_lt strict
+          · simpa [replace,same] using each i
+        apply smaller _ (rank ▸ less) m hm δ' _ rfl
+        intro i
+        change EquivB _ (((η.compose θ0).compose θ).apply _)
+        rw [Substitution.apply_compose,Substitution.apply_compose]
+        exact (inputs i).trans ((fit.inputs i).trans
+          (((sub0.inputs i).trans ((sub.inputs i).subst θ0.image)).subst η.image))
+  obtain ⟨first,hfirst,θ,image⟩ := start
+  apply go _ first hfirst (ρ.compose θ) _ rfl
+  intro i
+  rw [Substitution.apply_compose]
+  exact (image i).subst ρ.image
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+/-- A successor at a slot whose query term is a variable makes the image of
+that variable reducible. -/
+theorem idle_reducible (vars : Normalized (ruleRoot rules) Substitution.identity)
+    (narrow : FoldingNarrowing.Narrower rules query) {p : Point s n} (formed : Formed rules query p)
+    {j : Fin n} (still : idle (query j) = true) {b : RootNarrowing.Branch s}
+    (hb : b ∈ narrow.branches p j) :
+    ¬∀ i : Key (keysOf query), Normal (ruleRoot rules) ((successor p j b).assignment.image i.val) := by
+  intro live
+  cases at_j : query j with
+  | var v =>
+    have key : v ∈ keysOf query := (observed query v).mpr
+      ⟨_,List.mem_ofFn.mpr ⟨j,rfl⟩,by rw [at_j]; rfl⟩
+    have reply := formed.2 j
+    rw [at_j] at reply
+    have same : EquivB (p.assignment.image v) (p.value j) :=
+      normal_reduces_equiv reply.1 (formed.1 ⟨v,key⟩)
+    have step := narrow.genuine p (sound_member vars p formed) j b hb
+    exact ((normal_equiv _ (same.subst b.subst.image)).mp (live ⟨v,key⟩)) _ step
+  | atom _ => rw [at_j] at still; cases still
+  | free _ _ => rw [at_j] at still; cases still
+  | comm _ _ _ => rw [at_j] at still; cases still
+  | ac _ _ _ => rw [at_j] at still; cases still
+
+/-- A successor that was normalized and found to be an instance of a row is
+subsumed by a member, with the reference normal forms as its values. -/
+theorem childOk_hit (bound : ReferenceReduction.Bound rules)
+    (canonical : CanonicalPresentation (ruleRoot rules)) {fuel : Nat} {members : List (Point s n)}
+    {p : Point s n} {j : Fin n} {b : RootNarrowing.Branch s}
+    (child : childOk rules (keysOf query) fuel (members.map (terms (keysOf query))) p j b = some true)
+    (live : ((keysOf query).map (b.subst.compose p.assignment).image).all (quiet rules) = true) :
+    ∃ m, m ∈ members ∧ (m.row (keysOf query)).Subsumes
+      ((⟨(successor p j b).assignment,fun i =>
+        (ReferenceReduction.reducer rules bound canonical).reduce ((successor p j b).value i)⟩ :
+          Point s n).row (keysOf query)) := by
+  unfold childOk at child
+  dsimp only at child
+  simp only [live,↓reduceIte] at child
+  obtain ⟨values,made,sub⟩ := Option.map_eq_some_iff.mp child
+  obtain ⟨k,rfl,each⟩ := mapM_ofFn _ made
+  obtain ⟨m,hm,θ,fit⟩ := covered_sound (c := ⟨b.subst.compose p.assignment,k⟩) sub
+  refine ⟨m,hm,θ,fit.inputs,fun i => ?_⟩
+  have value := fit.values i
+  change EquivB (k i) _ at value
+  rw [follow_reduce bound canonical (each i)] at value
+  exact value
 
 /-- On a canonical presentation the members of a list that passes the closure
 test cover every normal substitution: its images on the keys and the normal
@@ -946,7 +1233,6 @@ theorem saturated_hits (bound : ReferenceReduction.Bound rules)
   let narrow := TableNarrowing.checking bound vars query
   let keys := keysOf query
   let r := ReferenceReduction.reducer rules bound canonical
-  let g := FoldingNarrowing.expansion bound canonical vars r narrow
   split at h
   · contradiction
   · next first seeded =>
@@ -954,59 +1240,35 @@ theorem saturated_hits (bound : ReferenceReduction.Bound rules)
     · next start_ =>
       have sound (p) (hp : p ∈ members) : VariantSaturation.Sound rules query p :=
         sound_member vars p (formed p hp)
-      have settled {raw : Fin n → Term s} {values : List (Term s)}
-          (made : settle rules fuel raw = some values) (τ : Substitution s)
-          (sub : covered (members.map (terms keys)) (keys.map τ.image ++ values) = true) :
-          ∃ m, m ∈ members ∧ (m.row keys).Subsumes
-            ((⟨τ,fun i => r.reduce (raw i)⟩ : Point s n).row keys) := by
-        obtain ⟨k,rfl,each⟩ := mapM_ofFn _ made
-        obtain ⟨m,hm,θ,fit⟩ := covered_sound (c := ⟨τ,k⟩) sub
-        refine ⟨m,hm,θ,fit.inputs,fun i => ?_⟩
-        have value := fit.values i
-        change EquivB (k i) _ at value
-        rw [follow_reduce bound canonical (each i)] at value
-        exact value
-      have closed (p) (hp : p ∈ members) (c) (hc : c ∈ g.next p) :
-          ∃ m, m ∈ members ∧ (m.row keys).Subsumes (c.row keys) := by
-        have layer := closure_accepted h p hp
-        obtain ⟨raw,hraw,rfl⟩ := List.mem_map.mp
-          (show c ∈ ((expand p (narrow.branches p)).filter
-            (FoldingNarrowing.admissible rules query)).map _ from hc)
-        obtain ⟨inside,live⟩ := List.mem_filter.mp hraw
-        obtain ⟨j,_,hj⟩ := List.mem_flatMap.mp inside
+      have quietKeys {τ : Substitution s}
+          (live : ∀ i : Key keys, Normal (ruleRoot rules) (τ.image i.val)) :
+          (keys.map τ.image).all (quiet rules) = true := by
+        have ok := (admissible_iff (query := query) bound ⟨τ,query⟩).mpr live
+        rw [← normalOn_eq (rules := rules) (query := query) ⟨τ,query⟩] at ok
+        simpa [normalOn,List.all_map] using ok
+      have closed (p) (hp : p ∈ members) (c) (hc : c ∈ expand p (narrow.branches p))
+          (live : ∀ i : Key keys, Normal (ruleRoot rules) (c.assignment.image i.val)) :
+          ∃ c0 ∈ expand p (narrow.branches p), (c0.row keys).Subsumes (c.row keys) ∧
+            ∃ m ∈ members, (m.row keys).Subsumes
+              ((⟨c0.assignment,fun i => r.reduce (c0.value i)⟩ : Point s n).row keys) := by
+        have layer_ := closure_accepted h p hp
+        obtain ⟨j,_,hj⟩ := List.mem_flatMap.mp hc
         obtain ⟨b,hb,rfl⟩ := List.mem_map.mp hj
-        have slot := every_true layer j (List.mem_finRange j)
-        split at slot
-        · next still =>
-          exfalso
-          cases at_j : query j with
-          | var v =>
-            have key : v ∈ keys := (observed query v).mpr
-              ⟨_,List.mem_ofFn.mpr ⟨j,rfl⟩,by rw [at_j]; rfl⟩
-            have reply := (formed p hp).2 j
-            rw [at_j] at reply
-            have same : EquivB (p.assignment.image v) (p.value j) :=
-              normal_reduces_equiv reply.1 ((formed p hp).1 ⟨v,key⟩)
-            have step := narrow.genuine p (sound p hp) j b hb
-            exact ((normal_equiv _ (same.subst b.subst.image)).mp
-              ((admissible_iff bound _).mp live ⟨v,key⟩)) _ step
-          | atom _ => rw [at_j] at still; cases still
-          | free _ _ => rw [at_j] at still; cases still
-          | comm _ _ _ => rw [at_j] at still; cases still
-          | ac _ _ _ => rw [at_j] at still; cases still
-        · have child := every_true slot b hb
-          unfold childOk at child
-          dsimp only at child
-          split at child
-          · obtain ⟨values,made,sub⟩ := Option.map_eq_some_iff.mp child
-            exact settled made _ sub
-          · next bad =>
-            have := (normalOn_eq (rules := rules) (query := query)
-              ⟨b.subst.compose p.assignment,replace (fun i => b.subst.apply (p.value i)) j b.value⟩).trans live
-            exact absurd (by simpa [normalOn,List.all_map] using this) bad
-      have start : ∃ m, m ∈ members ∧ (m.row keys).Subsumes (g.seed.row keys) :=
-        settled seeded _ start_
-      exact covers g canonical (· ∈ members) sound closed start ρ norm out forms
+        have moving : idle (query j) = false := by
+          cases still : idle (query j) with
+          | false => rfl
+          | true => exact absurd live (idle_reducible vars narrow (formed p hp) still hb)
+        rcases closedAt_true layer_ j moving b hb with child | ⟨j0,b0,_,hb0,child,live0,inst⟩
+        · exact ⟨_,hc,Row.Subsumes.refl _,childOk_hit bound canonical child (quietKeys live)⟩
+        · exact ⟨successor p j0 b0,
+            List.mem_flatMap.mpr ⟨j0,List.mem_finRange j0,List.mem_map_of_mem hb0⟩,
+            instanceOf_sound inst,childOk_hit bound canonical child live0⟩
+      have start : ∃ m ∈ members, ∃ θ : Substitution s,
+          ∀ i : Key keys, EquivB (.var i.val) (θ.apply (m.assignment.image i.val)) := by
+        obtain ⟨k,rfl,_⟩ := mapM_ofFn _ seeded
+        obtain ⟨m,hm,θ,fit⟩ := covered_sound (c := ⟨Substitution.identity,k⟩) start_
+        exact ⟨m,hm,θ,fit.inputs⟩
+      exact covers_layers bound canonical narrow members sound closed start ρ norm out forms
     · contradiction
 
 end

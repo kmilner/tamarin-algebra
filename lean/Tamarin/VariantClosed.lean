@@ -55,6 +55,40 @@ structure Closed (R : Root s) (q : List (Term s)) (family : List (Substitution s
   start : Starts R q family
   step : ∀ σ ∈ family, Folds R q family σ
 
+/-- A narrowing successor of a member: an instance of the member that keeps
+its images normal, with one rewrite step in one of the instantiated values. -/
+def Successor (R : Root s) (q : List (Term s)) (σ : Substitution s) (values : List (Term s))
+    (τ : Substitution s) (raw : List (Term s)) : Prop :=
+  (∀ v, Observed q v → Normal R (τ.apply (σ.image v))) ∧ OneStep R (values.map τ.apply) raw
+
+/-- No successor of the member is properly more general: a successor of
+which this one is an instance is an instance of this one. -/
+def MostGeneral (R : Root s) (q : List (Term s)) (σ : Substitution s) (values : List (Term s))
+    (τ : Substitution s) (raw : List (Term s)) : Prop :=
+  ∀ τ' raw', Successor R q σ values τ' raw' →
+    Subsumed q (τ'.compose σ) raw' (τ.compose σ) raw →
+    Subsumed q (τ.compose σ) raw (τ'.compose σ) raw'
+
+/-- The terms a check has to normalize: the query, the instantiated queries,
+and the values of the most general narrowing successors of the members. -/
+inductive Demand (R : Root s) (q : List (Term s)) (family : List (Substitution s)) : Term s → Prop
+  | query {t : Term s} : t ∈ q → Demand R q family t
+  | member {σ : Substitution s} {t : Term s} : σ ∈ family → t ∈ q → Demand R q family (σ.apply t)
+  | successor {σ τ : Substitution s} {values raw : List (Term s)} {t : Term s} : σ ∈ family →
+      Completed R q σ values → Successor R q σ values τ raw → MostGeneral R q σ values τ raw →
+      t ∈ raw → Demand R q family t
+
+/-- The positions at which the narrowing layer of a member with these values
+looks for steps: the positions of the values that are not variables, in the
+slots whose query term is not a variable. -/
+def Charge (q values : List (Term s)) : Nat :=
+  ((q.zip values).map fun e => if idle e.1 then 0 else sites e.2).sum
+
+/-- The work limit is below the positions of the narrowing layers of the
+members, added up. -/
+def Overcharged (R : Root s) (q : List (Term s)) (family : List (Substitution s)) (work : Nat) : Prop :=
+  ∃ rows : List (List (Term s)), Aligned (Completed R q) family rows ∧ work < (rows.map (Charge q)).sum
+
 variable {n : Nat} {rules : List (Equation s)} {query : Fin n → Term s}
 
 theorem completed_ofFn {R : Root s} {σ : Substitution s} {values : Fin n → Term s} :
@@ -112,7 +146,9 @@ theorem oneStep_replace {R : Root s} (a : Fin n → Term s) (j : Fin n) {u : Ter
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
+omit [Interrupt] in
 /-- An irreducible reduct is a normal form: on a canonical presentation it
 keeps the sorts of its source. -/
 theorem normalForm_of_reduces (bound : ReferenceReduction.Bound rules)
@@ -185,12 +221,14 @@ theorem accepted_closed (canonical : CanonicalPresentation (ruleRoot rules)) {q 
     have input := fit.inputs k
     rwa [on_keys k] at input
 
+omit [Interrupt] in
 theorem mapM_ofFn_some {α β : Type} (f : α → Option β) {n : Nat} {g : Fin n → α} {k : Fin n → β}
     (h : ∀ i, f (g i) = some (k i)) : (List.ofFn g).mapM f = some (List.ofFn k) := by
   induction n with
   | zero => simp
   | succ n ih => simp [List.ofFn_succ,h 0,ih (fun i => h i.succ)]
 
+omit [Interrupt] in
 theorem mapM_map_some {α β : Type} (f : α → Option β) (g : α → β) {xs : List α}
     (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by
   induction xs with
@@ -198,6 +236,7 @@ theorem mapM_map_some {α β : Type} (f : α → Option β) (g : α → β) {xs 
   | cons a as ih =>
     simp [h a List.mem_cons_self,ih (fun x hx => h x (List.mem_cons_of_mem _ hx))]
 
+omit [Interrupt] in
 theorem every_of_all {α : Type} {f : α → Option Bool} {xs : List α}
     (h : ∀ x ∈ xs, f x = some true) : every f xs = some true := by
   induction xs with
@@ -207,6 +246,7 @@ theorem every_of_all {α : Type} {f : α → Option Bool} {xs : List α}
     rw [h a List.mem_cons_self]
     exact ih (fun x hx => h x (List.mem_cons_of_mem _ hx))
 
+omit [Interrupt] in
 theorem every_decided {α : Type} {f : α → Option Bool} {xs : List α}
     (h : ∀ x ∈ xs, f x ≠ none) : every f xs ≠ none := by
   induction xs with
@@ -217,6 +257,7 @@ theorem every_decided {α : Type} {f : α → Option Bool} {xs : List α}
     · exact ih (fun x hx => h x (List.mem_cons_of_mem _ hx))
     · exact h a List.mem_cons_self
 
+omit [Interrupt] in
 theorem every_false {α : Type} {f : α → Option Bool} {xs : List α}
     (h : every f xs = some false) : ∃ x ∈ xs, f x = some false := by
   induction xs with
@@ -228,6 +269,7 @@ theorem every_false {α : Type} {f : α → Option Bool} {xs : List α}
       exact ⟨x,List.mem_cons_of_mem _ hx,bad⟩
     · exact ⟨a,List.mem_cons_self,h⟩
 
+omit [Interrupt] in
 theorem le_foldr_max {xs : List Nat} {x : Nat} (h : x ∈ xs) : x ≤ xs.foldr max 0 := by
   induction xs with
   | nil => exact nomatch h
@@ -236,7 +278,7 @@ theorem le_foldr_max {xs : List Nat} {x : Nat} (h : x ∈ xs) : x ≤ xs.foldr m
     · exact Nat.le_max_left _ _
     · exact Nat.le_trans (ih later) (Nat.le_max_right _ _)
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 /-- A row keeps subsuming another when the values of both are exchanged for
 equal ones. -/
 theorem subsumes_congr {keys : List Variable} {σ τ : Substitution s} {a a' b b' : Fin n → Term s}
@@ -302,6 +344,100 @@ theorem settle_some (bound : ReferenceReduction.Bound rules)
       some (List.ofFn fun i => (ReferenceReduction.reducer rules bound canonical).reduce (raw i)) :=
   mapM_ofFn_some _ fun i => follow_some bound canonical (enough i)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem mapM_none {α β : Type} (f : α → Option β) {xs : List α} (h : xs.mapM f = none) :
+    ∃ x ∈ xs, f x = none := by
+  induction xs with
+  | nil => simp at h
+  | cons a as ih =>
+    cases ha : f a with
+    | none => exact ⟨a,List.mem_cons_self,ha⟩
+    | some b =>
+      cases tail : as.mapM f with
+      | none =>
+        obtain ⟨x,hx,bad⟩ := ih tail
+        exact ⟨x,List.mem_cons_of_mem _ hx,bad⟩
+      | some bs => simp [ha,tail] at h
+
+/-- A layer whose ordered scan settles is settled the same way. -/
+theorem closedAt_of_strict {keys : List Variable}
+    {branches : Point s n → Fin n → List (RootNarrowing.Branch s)} {fuel : Nat}
+    {rows : List (List (Term s))} {p : Point s n} {value : Bool}
+    (h : strictAt rules query keys branches fuel rows p = some value) :
+    closedAt rules query keys branches fuel rows p = some value := by
+  unfold closedAt
+  rw [h]
+
+/-- A layer that fails has a successor that was normalized and is not an
+instance of a row. -/
+theorem closedAt_false {keys : List Variable}
+    {branches : Point s n → Fin n → List (RootNarrowing.Branch s)} {fuel : Nat}
+    {rows : List (List (Term s))} {p : Point s n}
+    (h : closedAt rules query keys branches fuel rows p = some false) :
+    ∃ j b, idle (query j) = false ∧ b ∈ branches p j ∧
+      childOk rules keys fuel rows p j b = some false := by
+  unfold closedAt at h
+  split at h
+  · unfold rescue at h
+    dsimp only at h
+    split at h
+    · next bad =>
+      obtain ⟨e,he,eq⟩ := List.any_eq_true.mp bad
+      obtain ⟨⟨j,b⟩,hl,rfl⟩ := List.mem_map.mp he
+      obtain ⟨live,hb⟩ := mem_layer.mp hl
+      exact ⟨j,b,live,hb,by simpa using eq⟩
+    · split at h <;> cases h
+  · unfold strictAt at h
+    obtain ⟨j,_,slot⟩ := every_false h
+    split at slot
+    · cases slot
+    · next live =>
+      obtain ⟨b,hb,child⟩ := every_false slot
+      exact ⟨j,b,by simpa using live,hb,child⟩
+
+/-- A layer that the depth leaves open has no successor that fails, and a
+successor whose normal form the depth does not reach and that is an instance
+of no successor that passed. -/
+theorem closedAt_none {keys : List Variable}
+    {branches : Point s n → Fin n → List (RootNarrowing.Branch s)} {fuel : Nat}
+    {rows : List (List (Term s))} {p : Point s n}
+    (h : closedAt rules query keys branches fuel rows p = none) :
+    (∀ j b, idle (query j) = false → b ∈ branches p j →
+      childOk rules keys fuel rows p j b ≠ some false) ∧
+    ∃ j b, idle (query j) = false ∧ b ∈ branches p j ∧ childOk rules keys fuel rows p j b = none ∧
+      ∀ j0 b0, idle (query j0) = false → b0 ∈ branches p j0 →
+        childOk rules keys fuel rows p j0 b0 = some true →
+        (keys.map (b0.subst.compose p.assignment).image).all (quiet rules) = true →
+        instanceOf (terms keys (successor p j0 b0)) (terms keys (successor p j b)) = false := by
+  unfold closedAt at h
+  split at h
+  · unfold rescue at h
+    dsimp only at h
+    split at h
+    · cases h
+    · next clean =>
+      split at h
+      · cases h
+      · next open_ =>
+        refine ⟨fun j b live hb bad => clean (List.any_eq_true.mpr ⟨((j,b),some false),
+          List.mem_map.mpr ⟨(j,b),mem_layer.mpr ⟨live,hb⟩,by rw [bad]⟩,rfl⟩),?_⟩
+        simp only [List.all_eq_true,Classical.not_forall] at open_
+        obtain ⟨e,he,miss⟩ := open_
+        obtain ⟨made,pending⟩ := List.mem_filter.mp he
+        obtain ⟨⟨j,b⟩,hl,rfl⟩ := List.mem_map.mp made
+        obtain ⟨live,hb⟩ := mem_layer.mp hl
+        refine ⟨j,b,live,hb,by simpa using pending,fun j0 b0 live0 hb0 ok quiet_ => ?_⟩
+        cases found : instanceOf (terms keys (successor p j0 b0)) (terms keys (successor p j b)) with
+        | false => rfl
+        | true =>
+          exfalso
+          apply miss
+          apply List.any_eq_true.mpr
+          refine ⟨_,List.mem_map.mpr ⟨((j0,b0),childOk rules keys fuel rows p j0 b0),
+            List.mem_filter.mpr ⟨List.mem_map.mpr ⟨(j0,b0),mem_layer.mpr ⟨live0,hb0⟩,rfl⟩,?_⟩,rfl⟩,found⟩
+          simp [ok,quiet_]
+  · next other differs => exact absurd h (differs · )
+
 /-- The member the checker builds for a substitution once the depth suffices. -/
 def reference (r : VerifiedReducer (ruleRoot rules)) (query : Fin n → Term s) (σ : Substitution s) :
     Point s n :=
@@ -346,6 +482,7 @@ theorem member_some (bound : ReferenceReduction.Bound rules)
   rw [settle_some bound canonical enough,Option.map_some,frozen_ofFn]
   rfl
 
+omit [Interrupt] in
 theorem reference_formed (bound : ReferenceReduction.Bound rules)
     (canonical : CanonicalPresentation (ruleRoot rules)) {σ : Substitution s}
     (normal : NormalMember (ruleRoot rules) (List.ofFn query) σ) :
@@ -406,6 +543,7 @@ theorem saturated_closed (bound : ReferenceReduction.Bound rules)
     intro p hp
     obtain ⟨σ,hσ,rfl⟩ := List.mem_map.mp hp
     have formed := reference_formed bound canonical (closed.normal σ hσ)
+    apply closedAt_of_strict
     apply every_of_all
     intro j _
     split
@@ -492,6 +630,7 @@ theorem closed_accepted (canonical : CanonicalPresentation (ruleRoot rules))
   · rfl
   · exact saturated_closed bound canonical vars enough closed'
 
+omit [Interrupt] in
 theorem mapM_some_index {α β : Type} (f : α → Option β) {xs : List α} {ys : List β}
     (h : xs.mapM f = some ys) {i : Nat} {y : β} (at_i : ys[i]? = some y) :
     ∃ x, xs[i]? = some x ∧ f x = some y := by
@@ -695,11 +834,8 @@ theorem rejected_step (canonical : CanonicalPresentation (ruleRoot rules)) {q : 
       intro folds_
       have folds : Folds (ruleRoot rules) (List.ofFn query) family p.assignment := by
         simpa only [query,List.ofFn_getElem] using folds_
-      obtain ⟨j,_,slot⟩ := every_false bad
-      split at slot
-      · cases slot
-      · obtain ⟨b,hb,child⟩ := every_false slot
-        unfold childOk at child
+      obtain ⟨j,b,_,hb,child⟩ := closedAt_false bad
+      · unfold childOk at child
         dsimp only at child
         split at child
         · next quiet_ =>
@@ -786,6 +922,12 @@ theorem decided (canonical : CanonicalPresentation (ruleRoot rules))
               ((family.map (reference r query)).map (terms keys)) p ≠ none := by
           intro p hp
           obtain ⟨σ,hσ,rfl⟩ := List.mem_map.mp hp
+          suffices strict : strictAt rules query keys narrow.branches fuel
+              ((family.map (reference r query)).map (terms keys)) (reference r query σ) ≠ none by
+            cases value : strictAt rules query keys narrow.branches fuel
+                ((family.map (reference r query)).map (terms keys)) (reference r query σ) with
+            | none => exact absurd value strict
+            | some v => rw [closedAt_of_strict value]; exact fun bad => nomatch bad
           apply every_decided
           intro j _
           split
@@ -841,7 +983,7 @@ theorem rejected_reason {q : List (Term s)} {family : List (Substitution s)} {fu
     · cases h; exact .inr (.inr (.inr rfl))
   · cases h; exact .inr (.inr (.inr rfl))
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 theorem nonvar_iff (rules : List (Equation s)) :
     rules.all (fun r => CheckedVariants.nonvar r.lhs) = true ↔ ∀ r ∈ rules, ∀ v, r.lhs ≠ .var v := by
   rw [List.all_eq_true]
@@ -858,7 +1000,7 @@ theorem nonvar_iff (rules : List (Equation s)) :
     | comm _ _ _ => rfl
     | ac _ _ _ => rfl
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 /-- On a canonical presentation no left side is a variable. -/
 theorem nonvar_canonical (canonical : CanonicalPresentation (ruleRoot rules)) :
     rules.all (fun r => CheckedVariants.nonvar r.lhs) = true := by
@@ -897,6 +1039,426 @@ theorem decides (bound : ReferenceReduction.Bound rules)
   have hv := nonvar_canonical canonical
   exact ⟨threshold canonical hb hv q family,fun fuel enough =>
     ⟨decided canonical hb hv enough,accepted_closed canonical,closed_accepted canonical hb hv enough⟩⟩
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+/-- The slot of the step and its result. -/
+theorem oneStep_slot {R : Root s} {a : Fin n → Term s} {raw : List (Term s)}
+    (h : OneStep R (List.ofFn a) raw) :
+    ∃ j u, StepModulo R (a j) u ∧ raw = List.ofFn (replace a j u) := by
+  induction n generalizing raw with
+  | zero => simp at h; cases h
+  | succ n ih =>
+    rw [List.ofFn_succ] at h
+    cases h with
+    | here ts step =>
+      refine ⟨0,_,step,?_⟩
+      rw [List.ofFn_succ]
+      simp [replace,Fin.succ_ne_zero]
+    | later t rest =>
+      obtain ⟨j,u,step,rfl⟩ := ih rest
+      refine ⟨j.succ,u,step,?_⟩
+      rw [List.ofFn_succ]
+      have head : replace a j.succ u 0 = a 0 := by simp [replace,(Fin.succ_ne_zero j).symm]
+      have tail : (fun i : Fin n => replace a j.succ u i.succ) = replace (fun i => a i.succ) j u := by
+        funext i
+        simp [replace,Fin.succ_inj]
+      rw [head,tail]
+
+omit [Interrupt] in
+theorem filter_length_lt {α : Type} {f g : α → Bool} {xs : List α}
+    (imp : ∀ x ∈ xs, f x = true → g x = true) {a : α} (ha : a ∈ xs) (ga : g a = true)
+    (fa : f a = false) : (xs.filter f).length < (xs.filter g).length := by
+  induction xs with
+  | nil => exact nomatch ha
+  | cons x xs ih =>
+    have le : (xs.filter f).length ≤ (xs.filter g).length := by
+      clear ih ha
+      induction xs with
+      | nil => simp
+      | cons y ys ih2 =>
+        have rest := ih2 fun z hz => imp z (by simp [List.mem_cons] at hz ⊢; rcases hz with rfl | hz <;> simp [*])
+        have at_y := imp y (List.mem_cons_of_mem _ List.mem_cons_self)
+        cases fy : f y <;> cases gy : g y <;> simp [fy,gy] <;> simp [fy,gy] at at_y <;> omega
+    rcases List.mem_cons.mp ha with rfl | later
+    · simp [ga,fa]
+      omega
+    · have shorter := ih (fun z hz => imp z (List.mem_cons_of_mem _ hz)) later
+      have at_x := imp x List.mem_cons_self
+      cases fx : f x <;> cases gx : g x <;> simp [fx,gx] <;> simp [fx,gx] at at_x <;> omega
+
+theorem follow_none {fuel : Nat} {t : Term s} (bound : ReferenceReduction.Bound rules)
+    (h : ReferenceReduction.follow rules fuel t = none) : ¬CheckedReduction.Within rules fuel t := by
+  intro tree
+  obtain ⟨u,found⟩ := CheckedReduction.choose_of_within bound fuel t tree
+  rw [← CertifiedReductionWire.follow_eq,h] at found
+  cases found
+
+theorem settle_none {fuel : Nat} {raw : Fin n → Term s} (bound : ReferenceReduction.Bound rules)
+    (h : settle rules fuel raw = none) : ∃ i, ¬CheckedReduction.Within rules fuel (raw i) := by
+  obtain ⟨t,ht,bad⟩ := mapM_none _ h
+  obtain ⟨i,rfl⟩ := List.mem_ofFn.mp ht
+  exact ⟨i,follow_none bound bad⟩
+
+/-- Among the successors of a member whose normal forms the depth does not
+reach and that are instances of no successor that passed, one is most
+general. -/
+theorem pending_general (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) {fuel : Nat}
+    {rows : List (List (Term s))} {p : Point s n} (formed : Formed rules query p)
+    (clean : ∀ j b, idle (query j) = false →
+      b ∈ (TableNarrowing.checking bound vars query).branches p j →
+      childOk rules (keysOf query) fuel rows p j b ≠ some false) (k : Nat) :
+    ∀ j b, idle (query j) = false → b ∈ (TableNarrowing.checking bound vars query).branches p j →
+      childOk rules (keysOf query) fuel rows p j b = none →
+      (∀ j0 b0, idle (query j0) = false →
+        b0 ∈ (TableNarrowing.checking bound vars query).branches p j0 →
+        childOk rules (keysOf query) fuel rows p j0 b0 = some true →
+        ((keysOf query).map (b0.subst.compose p.assignment).image).all (quiet rules) = true →
+        instanceOf (terms (keysOf query) (successor p j0 b0))
+          (terms (keysOf query) (successor p j b)) = false) →
+      ((layer query (TableNarrowing.checking bound vars query).branches p).filter fun e =>
+        instanceOf (terms (keysOf query) (successor p e.1 e.2)) (terms (keysOf query) (successor p j b)) &&
+          !instanceOf (terms (keysOf query) (successor p j b))
+            (terms (keysOf query) (successor p e.1 e.2))).length = k →
+      ∃ j' b', idle (query j') = false ∧
+        b' ∈ (TableNarrowing.checking bound vars query).branches p j' ∧
+        childOk rules (keysOf query) fuel rows p j' b' = none ∧
+        MostGeneral (ruleRoot rules) (List.ofFn query) p.assignment (List.ofFn p.value) b'.subst
+          (List.ofFn (successor p j' b').value) := by
+  classical
+  let keys := keysOf query
+  let narrow := TableNarrowing.checking bound vars query
+  have sound := sound_member vars p formed
+  induction k using Nat.strongRecOn with
+  | ind k smaller =>
+    intro j b live hb pending alone rank
+    by_cases general : MostGeneral (ruleRoot rules) (List.ofFn query) p.assignment (List.ofFn p.value)
+        b.subst (List.ofFn (successor p j b).value)
+    · exact ⟨j,b,live,hb,pending,general⟩
+    · unfold MostGeneral at general
+      simp only [Classical.not_forall] at general
+      obtain ⟨τ,raw,⟨normal,step⟩,above,below⟩ := general
+      rw [List.map_ofFn] at step
+      obtain ⟨j1,u,step1,rfl⟩ := oneStep_slot step
+      have above' := subsumed_ofFn.mp above
+      have below' : ¬((successor p j b).row keys).Subsumes
+          ((⟨τ.compose p.assignment,replace (τ.apply ∘ p.value) j1 u⟩ : Point s n).row keys) :=
+        fun sub => below (subsumed_ofFn.mpr sub)
+      have hn (i : Key keys) : Normal (ruleRoot rules) (τ.apply ((p.row keys).input i)) :=
+        normal i.val ((observed query i.val).mp i.property)
+      obtain ⟨_,hm,η,fit⟩ := expand_covers keys p (narrow.branches p) (narrow.lifts p sound) τ hn j1 u step1
+      obtain ⟨c,hc,rfl⟩ := List.mem_map.mp hm
+      obtain ⟨j2,_,hj⟩ := List.mem_flatMap.mp hc
+      obtain ⟨b2,hb2,rfl⟩ := List.mem_map.mp hj
+      have over : ((successor p j2 b2).row keys).Subsumes
+          ((⟨τ.compose p.assignment,replace (τ.apply ∘ p.value) j1 u⟩ : Point s n).row keys) := ⟨η,fit⟩
+      have covers := over.trans above'
+      have strict : ¬((successor p j b).row keys).Subsumes ((successor p j2 b2).row keys) :=
+        fun sub => below' (sub.trans over)
+      have live2 (i : Key keys) : Normal (ruleRoot rules) ((successor p j2 b2).assignment.image i.val) :=
+        normal_of_instance ((normal_equiv _ (fit.inputs i)).mp (hn i))
+      have moving : idle (query j2) = false := by
+        cases still : idle (query j2) with
+        | false => rfl
+        | true => exact absurd live2 (idle_reducible vars narrow formed still hb2)
+      have quiet2 : (keys.map (b2.subst.compose p.assignment).image).all (quiet rules) = true := by
+        have ok := (admissible_iff (query := query) bound (successor p j2 b2)).mpr live2
+        rw [← normalOn_eq (rules := rules) (query := query)] at ok
+        simpa [normalOn,List.all_map] using ok
+      have hit := instanceOf_complete covers
+      cases outcome : childOk rules keys fuel rows p j2 b2 with
+      | some value =>
+        cases value with
+        | false => exact absurd outcome (clean j2 b2 moving hb2)
+        | true =>
+          rw [alone j2 b2 moving hb2 outcome quiet2] at hit
+          cases hit
+      | none =>
+        apply smaller _ (rank ▸ ?_) j2 b2 moving hb2 outcome ?_ rfl
+        · apply filter_length_lt (a := (j2,b2))
+          · intro e _ both
+            simp only [Bool.and_eq_true,Bool.not_eq_true'] at both ⊢
+            refine ⟨instanceOf_complete ((instanceOf_sound both.1).trans covers),?_⟩
+            cases back : instanceOf (terms keys (successor p j b)) (terms keys (successor p e.1 e.2)) with
+            | false => rfl
+            | true => exact absurd ((instanceOf_sound back).trans (instanceOf_sound both.1)) strict
+          · exact mem_layer.mpr ⟨moving,hb2⟩
+          · simp only [Bool.and_eq_true,Bool.not_eq_true']
+            refine ⟨hit,?_⟩
+            cases back : instanceOf (terms keys (successor p j b)) (terms keys (successor p j2 b2)) with
+            | false => rfl
+            | true => exact absurd (instanceOf_sound back) strict
+          · simp
+        · intro j0 b0 live0 hb0 ok quiet0
+          cases found : instanceOf (terms keys (successor p j0 b0)) (terms keys (successor p j2 b2)) with
+          | false => rfl
+          | true =>
+            have through := instanceOf_complete ((instanceOf_sound found).trans covers)
+            rw [alone j0 b0 live0 hb0 ok quiet0] at through
+            cases through
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem admitted_short {work : Nat} {charges : List Nat} {spent : Nat}
+    (h : admitted work spent charges < charges.length) : work < spent + charges.sum := by
+  induction charges generalizing spent with
+  | nil => simp at h
+  | cons c cs ih =>
+    unfold admitted at h
+    split at h
+    · simp only [List.sum_cons]
+      omega
+    · have rest := ih (spent := spent + c) (by simp only [List.length_cons] at h; omega)
+      simp only [List.sum_cons]
+      omega
+
+theorem closure_exhausted {keys : List Variable}
+    {branches : Point s n → Fin n → List (RootNarrowing.Branch s)}
+    {fuel work limit : Nat} {rows : List (List (Term s))} {todo : List (Point s n)} {index : Nat}
+    (h : closure rules query keys branches fuel work limit rows todo index = .exhausted) :
+    (work ≠ 0 ∧ limit < index + todo.length) ∨
+      ∃ p ∈ todo, closedAt rules query keys branches fuel rows p = none := by
+  induction todo generalizing index with
+  | nil => simp [closure] at h
+  | cons p rest ih =>
+    simp only [closure] at h
+    split at h
+    · next stop =>
+      simp only [Bool.and_eq_true,bne_iff_ne,ne_eq,decide_eq_true_eq] at stop
+      exact .inl ⟨stop.1,by simp only [List.length_cons]; omega⟩
+    · split at h
+      · next open_ => exact .inr ⟨p,List.mem_cons_self,open_⟩
+      · rcases ih h with ⟨limited,short⟩ | ⟨x,hx,open_⟩
+        · exact .inl ⟨limited,by simp only [List.length_cons]; omega⟩
+        · exact .inr ⟨x,List.mem_cons_of_mem _ hx,open_⟩
+      · cases h
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem charge_eq (p : Point s n) : charge query p = Charge (List.ofFn query) (List.ofFn p.value) := by
+  unfold charge Charge
+  have listed : (List.ofFn fun i => (query i,p.value i)) =
+      (List.finRange n).map fun i => (query i,p.value i) := by
+    apply List.ext_getElem <;> simp
+  rw [List.zip_eq_zipWith,zipWith_ofFn,listed,List.map_map]
+  rfl
+
+/-- Why the closure test reports an exhausted budget: a term it has to
+normalize has a rewrite path as long as the depth, or the work limit is below
+the positions of the narrowing layers. -/
+theorem saturated_exhausted (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) {family : List (Substitution s)}
+    {fuel work : Nat} {members : List (Point s n)} (formed : ∀ p ∈ members, Formed rules query p)
+    (source : ∀ p ∈ members, p.assignment ∈ family)
+    (rows : Aligned (Completed (ruleRoot rules) (List.ofFn query)) family
+      (members.map fun p => List.ofFn p.value))
+    (h : saturated rules bound vars query fuel work members = .exhausted) :
+    (∃ t, Demand (ruleRoot rules) (List.ofFn query) family t ∧ ¬CheckedReduction.Within rules fuel t) ∨
+      (work ≠ 0 ∧ Overcharged (ruleRoot rules) (List.ofFn query) family work) := by
+  let keys := keysOf query
+  let narrow := TableNarrowing.checking bound vars query
+  unfold saturated at h
+  dsimp only at h
+  split at h
+  · next open_ =>
+    obtain ⟨i,long⟩ := settle_none bound open_
+    exact .inl ⟨_,.query (List.mem_ofFn.mpr ⟨i,rfl⟩),long⟩
+  · split at h
+    · rcases closure_exhausted h with ⟨limited,short⟩ | ⟨p,hp,open_⟩
+      · refine .inr ⟨limited,_,rows,?_⟩
+        have total := admitted_short (work := work) (spent := 0)
+          (charges := members.map (charge query)) (by simpa using short)
+        rw [List.map_map]
+        have same : (Charge (List.ofFn query) ∘ fun p : Point s n => List.ofFn p.value) = charge query := by
+          funext p
+          exact (charge_eq p).symm
+        rw [same]
+        omega
+      · obtain ⟨clean,j,b,live,hb,pending,alone⟩ := closedAt_none open_
+        obtain ⟨j',b',_,hb',pending',general⟩ := pending_general bound vars (formed p hp) clean _
+          j b live hb pending alone rfl
+        unfold childOk at pending'
+        dsimp only at pending'
+        split at pending'
+        · next quiet_ =>
+          have open' : settle rules fuel (successor p j' b').value = none := by
+            cases made : settle rules fuel (successor p j' b').value with
+            | none => rfl
+            | some values => rw [made] at pending'; cases pending'
+          obtain ⟨i,long⟩ := settle_none bound open'
+          have normal : ∀ v, Observed (List.ofFn query) v →
+              Normal (ruleRoot rules) (b'.subst.apply (p.assignment.image v)) := by
+            intro v hv
+            have key := (observed query v).mpr hv
+            exact quiet_normal bound (List.all_eq_true.mp quiet_ _
+              (List.mem_map_of_mem (f := (b'.subst.compose p.assignment).image) key))
+          have step := narrow.genuine _ (sound_member vars _ (formed p hp)) j' b' hb'
+          exact .inl ⟨_,.successor (source p hp) (completed_ofFn.mpr (formed p hp).2)
+            ⟨normal,by rw [List.map_ofFn]; exact oneStep_replace _ j' step⟩ general
+            (List.mem_ofFn.mpr ⟨i,rfl⟩),long⟩
+        · cases pending'
+    · cases h
+
+theorem member_rows {family : List (Substitution s)} {fuel : Nat} {members : List (Point s n)}
+    (built : family.mapM (member rules query fuel) = some members)
+    (formed : ∀ p ∈ members, Formed rules query p) :
+    Aligned (Completed (ruleRoot rules) (List.ofFn query)) family
+      (members.map fun p => List.ofFn p.value) := by
+  induction family generalizing members with
+  | nil =>
+    simp at built
+    subst members
+    trivial
+  | cons σ rest ih =>
+    cases head : member rules query fuel σ with
+    | none => simp [head] at built
+    | some m =>
+      cases tail : rest.mapM (member rules query fuel) with
+      | none => simp [head,tail] at built
+      | some ms =>
+        simp [head,tail] at built
+        subst members
+        refine ⟨?_,ih tail fun p hp => formed p (List.mem_cons_of_mem _ hp)⟩
+        have at_m := (formed m List.mem_cons_self).2
+        rw [(member_form head).1] at at_m
+        exact completed_ofFn.mpr at_m
+
+/-- Why the checker reports an exhausted budget. On a canonical presentation
+a term that a check has to normalize (the query, an instantiated query, or a
+value of a most general narrowing successor of a member) has a rewrite path
+as long as the depth, or the work limit is nonzero and below the positions of
+the narrowing layers of the members. -/
+theorem exhausted_cases (canonical : CanonicalPresentation (ruleRoot rules)) {q : List (Term s)}
+    {family : List (Substitution s)} {fuel work : Nat}
+    (h : check rules q family fuel work = .exhausted) :
+    (∃ t, Demand (ruleRoot rules) q family t ∧ ¬CheckedReduction.Within rules fuel t) ∨
+      (work ≠ 0 ∧ Overcharged (ruleRoot rules) q family work) := by
+  let query := fun i : Fin q.length => q[i.val]
+  have list : List.ofFn query = q := List.ofFn_getElem
+  rw [← list]
+  unfold check at h
+  split at h
+  · next hb =>
+    split at h
+    · next hv =>
+      dsimp only at h
+      let bound := (CheckedReduction.rangeBound_iff rules).mp hb
+      let r := ReferenceReduction.reducer rules bound canonical
+      split at h
+      · next open_ =>
+        obtain ⟨σ,hσ,bad⟩ := mapM_none _ open_
+        have unsettled : settle rules fuel (fun i => σ.apply (query i)) = none := by
+          unfold member at bad
+          cases made : settle rules fuel (fun i => σ.apply (query i)) with
+          | none => rfl
+          | some values => rw [made] at bad; cases bad
+        obtain ⟨i,long⟩ := settle_none bound unsettled
+        exact .inl ⟨_,.member hσ (List.mem_ofFn.mpr ⟨i,rfl⟩),long⟩
+      · next members built =>
+        split at h
+        · cases h
+        · next normal =>
+          have formed (p) (hp : p ∈ members) : Formed rules query p := by
+            obtain ⟨σ,_,made⟩ := mapM_some_source _ built p hp
+            obtain ⟨rfl,values⟩ := member_form made
+            have none_ := List.findIdx?_eq_none_iff.mp normal p hp
+            rw [normalOn_eq (query := query)] at none_
+            exact ⟨(admissible_iff bound p).mp (by simpa using none_),
+              fun i => follow_reduce bound canonical (values i) ▸ (r.correct _).normalForm⟩
+          have source (p) (hp : p ∈ members) : p.assignment ∈ family := by
+            obtain ⟨σ,hσ,made⟩ := mapM_some_source _ built p hp
+            exact (member_form made).1 ▸ hσ
+          have rows := member_rows built formed
+          split at h
+          · cases h
+          · exact saturated_exhausted bound _ formed source rows h
+    · cases h
+  · cases h
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem stepModulo_source {R : Root s} {a a' u : Term s} (same : EquivB a' a)
+    (step : StepModulo R a u) : StepModulo R a' u := by
+  obtain ⟨l,r,start,one,finish⟩ := step
+  exact ⟨l,r,same.trans start,one,finish⟩
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem replace_equiv {x y : Fin n → Term s} (same : ∀ i, EquivB (x i) (y i)) (j : Fin n) (u : Term s)
+    (i : Fin n) : EquivB (replace x j u i) (replace y j u i) := by
+  unfold replace
+  split
+  · exact .refl _
+  · exact same i
+
+/-- The terms a check has to normalize have bounded rewrite paths: every
+most general successor of a member is, up to the declared laws, one of the
+finitely many that a complete narrowing layer lists. So the clause that
+limits an exhausted budget is not empty. -/
+theorem demand_within (canonical : CanonicalPresentation (ruleRoot rules))
+    (hb : CheckedReduction.rangeBound rules = true)
+    (hv : rules.all (fun r => CheckedVariants.nonvar r.lhs) = true) (q : List (Term s))
+    (family : List (Substitution s)) (t : Term s) (needed : Demand (ruleRoot rules) q family t) :
+    CheckedReduction.Within rules (threshold canonical hb hv q family) t := by
+  let bound := (CheckedReduction.rangeBound_iff rules).mp hb
+  let vars := CheckedVariants.varsNormal rules hv
+  let query := fun i : Fin q.length => q[i.val]
+  let keys := keysOf query
+  let r := ReferenceReduction.reducer rules bound canonical
+  let narrow := TableNarrowing.checking bound vars query
+  let height := ReductionHeight.height bound canonical.terminating
+  have list : List.ofFn query = q := List.ofFn_getElem
+  suffices low : height t < depth bound canonical vars query family from
+    (CheckedReduction.settled_of_height bound canonical _ t low).1
+  rw [← list] at needed
+  cases needed with
+  | query ht => exact depth_bound bound canonical vars (List.mem_append_left _ (List.mem_append_left _ ht))
+  | member hσ ht =>
+    obtain ⟨i,rfl⟩ := List.mem_ofFn.mp ht
+    exact depth_bound bound canonical vars (List.mem_append_left _
+      (List.mem_append_right _ (List.mem_flatMap.mpr ⟨_,hσ,List.mem_ofFn.mpr ⟨i,rfl⟩⟩)))
+  | @successor σ τ values raw _ hσ done next general ht =>
+    obtain ⟨a,rfl,nf⟩ := read_aligned query values done
+    obtain ⟨normal,step⟩ := next
+    rw [List.map_ofFn] at step
+    obtain ⟨j,u,step1,rfl⟩ := oneStep_slot step
+    let p := reference r query σ
+    have same (i) : EquivB (a i) (p.value i) := (r.correct _).unique _ (nf i)
+    have formed : Formed rules query p := reference_formed bound canonical fun v hv =>
+      normal_of_instance (normal v hv)
+    have sound := sound_member vars p formed
+    have hn (i : Key keys) : Normal (ruleRoot rules) (τ.apply ((p.row keys).input i)) :=
+      normal i.val ((observed query i.val).mp i.property)
+    obtain ⟨_,hm,η,fit⟩ := expand_covers keys p (narrow.branches p) (narrow.lifts p sound) τ hn j u
+      (stepModulo_source ((same j).symm.subst τ.image) step1)
+    obtain ⟨c,hc,rfl⟩ := List.mem_map.mp hm
+    obtain ⟨j2,_,hj⟩ := List.mem_flatMap.mp hc
+    obtain ⟨b2,hb2,rfl⟩ := List.mem_map.mp hj
+    have other : Successor (ruleRoot rules) (List.ofFn query) σ (List.ofFn a) b2.subst
+        (List.ofFn (replace (b2.subst.apply ∘ a) j2 b2.value)) := by
+      refine ⟨fun v hv => ?_,?_⟩
+      · have key := (observed query v).mpr hv
+        exact normal_of_instance ((normal_equiv _ (fit.inputs ⟨v,key⟩)).mp (normal v hv))
+      · rw [List.map_ofFn]
+        exact oneStep_replace _ j2 (stepModulo_source ((same j2).subst b2.subst.image)
+          (narrow.genuine p sound j2 b2 hb2))
+    have above : Subsumed (List.ofFn query) (b2.subst.compose σ)
+        (List.ofFn (replace (b2.subst.apply ∘ a) j2 b2.value)) (τ.compose σ)
+        (List.ofFn (replace (τ.apply ∘ a) j u)) := by
+      refine subsumed_ofFn.mpr ⟨η,fit.inputs,fun i => ?_⟩
+      exact (replace_equiv (fun i => (same i).subst τ.image) j u i).trans ((fit.values i).trans
+        ((replace_equiv (fun i => (same i).subst b2.subst.image) j2 b2.value i).subst η.image).symm)
+    obtain ⟨θ,_,back⟩ := subsumed_ofFn.mp (general _ _ other above)
+    obtain ⟨i,rfl⟩ := List.mem_ofFn.mp ht
+    have grows : height (replace (τ.apply ∘ a) j u i) ≤ height (θ.apply (replace (τ.apply ∘ a) j u i)) :=
+      ReductionHeight.le_rank bound canonical.terminating (fun t => height (θ.apply t))
+        (fun st => ReductionHeight.step bound _ (SpecializedFresh.stepModulo_subst rules θ st)) _
+    have moved : height (θ.apply (replace (τ.apply ∘ a) j u i)) =
+        height ((successor p j2 b2).value i) :=
+      (ReductionHeight.equiv bound canonical.terminating (back i)).symm.trans
+        (ReductionHeight.equiv bound canonical.terminating
+          (replace_equiv (fun i => (same i).subst b2.subst.image) j2 b2.value i))
+    have listed : (successor p j2 b2).value i ∈ demand bound canonical vars query family :=
+      List.mem_append_right _ (List.mem_flatMap.mpr ⟨σ,hσ,List.mem_flatMap.mpr
+        ⟨j2,List.mem_finRange j2,List.mem_flatMap.mpr ⟨b2,hb2,List.mem_ofFn.mpr ⟨i,rfl⟩⟩⟩⟩)
+    exact Nat.lt_of_le_of_lt (Nat.le_trans grows (Nat.le_of_eq moved))
+      (depth_bound bound canonical vars listed)
 
 end
 end Tamarin.VariantCertificate

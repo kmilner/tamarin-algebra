@@ -80,6 +80,8 @@ theorem reply_accepted {v : VariantCertificate.Verdict} (h : reply v = #[#[1]]) 
   | rejected reason index => simp [reply] at h
   | exhausted => simp [reply] at h
 
+variable [Interrupt]
+
 def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64)
     (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
   match input ds ns rules roots family with

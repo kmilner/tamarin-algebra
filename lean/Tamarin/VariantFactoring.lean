@@ -50,6 +50,7 @@ theorem formed_pick {p : Point s n} (formed : Formed rules query p) (slots : Lis
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 /-- Whether one substitution turns the first list into the second, by a
 guessed substitution or else by the complete matcher. -/
@@ -177,11 +178,13 @@ abbrev Index (s : Signature) (n : Nat) := List (UInt64 × List (List (Term s)) �
 the shapes of the choice joins the chosen representatives. -/
 def allJoined (index : Index s n) : List (Group s n) → List (Group s n × Point s n) → Bool
   | [], acc =>
-    let wanted := acc.map fun e => shape e.1 e.2
-    let number := codes wanted
-    match index.find? fun e => e.1 == number && e.2.1 == wanted with
-    | some e => joins e.2.2 acc [] []
-    | none => false
+    -- The caller is asked before every choice.
+    Interrupt.guard false fun _ =>
+      let wanted := acc.map fun e => shape e.1 e.2
+      let number := codes wanted
+      match index.find? fun e => e.1 == number && e.2.1 == wanted with
+      | some e => joins e.2.2 acc [] []
+      | none => false
   | g :: gs, acc => g.reps.all fun rep => allJoined index gs ((g,rep) :: acc)
 
 theorem allJoined_spec {members : List (Point s n)} {index : Index s n}
@@ -267,7 +270,7 @@ def resolve (query : Fin n → Term s) (members : List (Point s n)) (plans : Lis
     let reps := plan.reps.filterMap fun i => table[i]?
     ⟨plan.slots,keys,reps,reps.map fun p => canon (terms keys (pick p plan.slots))⟩
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
 theorem resolve_spec {members : List (Point s n)} {plans : List (Plan n)} {g : Group s n}
     (h : g ∈ resolve query members plans) :
     g.keys = keysOf (restrict query g.slots) ∧ ∀ p ∈ g.reps, p ∈ members := by

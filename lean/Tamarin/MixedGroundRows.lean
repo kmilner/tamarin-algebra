@@ -105,4 +105,26 @@ theorem groundRow_sound (scope : ReferenceReduction.Bound rs) {fuel}
       rw [(ground_of_empty fixed).apply_eq δ] at fit
       exact agrees_sound scope apps ok ((Reduces.basis fit.symm).trans path) nf
 
+/-- A rule over constructor patterns whose result is a closed constructor
+expression passes when every rule with its head returns that expression. No
+unification and no reduction is needed for it. -/
+theorem groundRow_of_constant {fuel} (pat : Pattern rs r.lhs) (closed : r.rhs.variables.isEmpty = true)
+    (inert : Inert rs r.rhs) (same : ∀ q ∈ rs, head q.lhs = head r.lhs → q.rhs = r.rhs) :
+    groundRow rs fuel r = true := by
+  have ctor := (constructorPattern_iff rs r.rhs).mpr inert
+  unfold groundRow
+  simp only [(pattern_iff rs r.lhs).mpr pat,closed,ctor,Bool.and_self,↓reduceIte,Option.any_some,
+    Bool.true_and,List.all_eq_true]
+  intro q hq
+  unfold pairResults
+  by_cases at_head : head q.lhs = head r.lhs
+  · have value := same q hq at_head
+    have agreed : agrees rs r.rhs fuel q.rhs = true := by
+      unfold agrees
+      rw [value]
+      simp [ctor]
+    rw [value] at agreed
+    simp [value,closed,agreed]
+  · simp [(headEq_false _ _).mpr at_head]
+
 end Tamarin.ConstructorRows

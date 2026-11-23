@@ -2,13 +2,17 @@ import Tamarin.SessionTableWire
 import Tamarin.VariantClosed
 
 /-! Which families the exported variant checkers accept. On a canonical
-presentation a family accepted with status 1 is closed. On a range-restricted
-canonical presentation there is a depth from which a call without a work
-limit never replies with status 3 and accepts every closed family. A reply
-with status 2 names a clause of closedness that fails, and the member that
-violates it when the clause concerns one member. -/
+presentation a family accepted with status 1 is closed. A reply with status 2
+names a clause of closedness that fails, and the member that violates it when
+the clause concerns one member. A reply with status 3 is given only when a
+term the check has to normalize has a rewrite path as long as the depth, or
+when the work limit is below the positions of the narrowing layers. On a
+range-restricted canonical presentation those terms have bounded rewrite
+paths, so there is a depth from which a call without a work limit never
+replies with status 3 and accepts every closed family. -/
 namespace Tamarin.VariantCheckWire
 open Rewriting MaudeOperations VariantCertificate
+variable [Interrupt]
 
 /-- The replies of a checker on one table, query and family, as a function
 of the depth and the work limit. -/
@@ -19,6 +23,9 @@ structure Decision {s : Signature} (rules : List (Equation s)) (q : List (Term s
   accepts : ReferenceReduction.Bound rules → CanonicalPresentation (ruleRoot rules) →
     ∃ k : Nat, ∀ fuel : UInt64, k ≤ fuel.toNat → reply fuel 0 ≠ #[#[3]] ∧
       (Closed (ruleRoot rules) q family → reply fuel 0 = #[#[1]])
+  exhausts : ∀ fuel work, CanonicalPresentation (ruleRoot rules) → reply fuel work = #[#[3]] →
+    (∃ t, Demand (ruleRoot rules) q family t ∧ ¬CheckedReduction.Within rules fuel.toNat t) ∨
+      (work ≠ 0 ∧ Overcharged (ruleRoot rules) q family work.toNat)
   rejects : ∀ fuel work reason index, CanonicalPresentation (ruleRoot rules) →
     reply fuel work = #[#[2,reason,index]] → ∃ i : Nat, index = UInt64.ofNat i ∧
       ((reason = 1 ∧ ∃ σ, family[i]? = some σ ∧ ¬NormalMember (ruleRoot rules) q σ) ∨
@@ -26,12 +33,14 @@ structure Decision {s : Signature} (rules : List (Equation s)) (q : List (Term s
         (reason = 3 ∧ ∃ σ, family[i]? = some σ ∧ ¬Folds (ruleRoot rules) q family σ) ∨
         (reason = 4 ∧ ¬(ReferenceReduction.Bound rules ∧ ∀ r ∈ rules, ∀ v, r.lhs ≠ .var v)))
 
+omit [Interrupt] in
 theorem reply_exhausted {v : Verdict} (h : reply v = #[#[3]]) : v = .exhausted := by
   cases v with
   | accepted => simp [reply] at h
   | rejected reason index => simp [reply] at h
   | exhausted => rfl
 
+omit [Interrupt] in
 theorem reply_rejected {v : Verdict} {reason index : UInt64} (h : reply v = #[#[2,reason,index]]) :
     ∃ r i, v = .rejected r i ∧ reason = UInt64.ofNat r ∧ index = UInt64.ofNat i := by
   cases v with
@@ -54,6 +63,11 @@ theorem decision {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [D
     change reply (check rules q family fuel.toNat 0) = _
     rw [(enough fuel.toNat large).2.mpr closed]
     rfl
+  exhausts := by
+    intro fuel work canonical out
+    rcases exhausted_cases canonical (reply_exhausted out) with long | ⟨limited,short⟩
+    · exact .inl long
+    · exact .inr ⟨fun zero => limited (by rw [zero]; rfl),short⟩
   rejects := by
     intro fuel work reason index canonical out
     obtain ⟨r,i,verdict,rfl,rfl⟩ := reply_rejected out
@@ -86,6 +100,7 @@ end Tamarin.VariantCheckWire
 
 namespace Tamarin.SessionVariantCheckWire
 open Rewriting MaudeOperations VariantCertificate TableAmbient
+variable [Interrupt]
 
 /-- The replies of the session checker decide closedness of the family that
 the further rows denote. -/

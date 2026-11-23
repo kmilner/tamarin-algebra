@@ -16,21 +16,17 @@ private def unsorted (f : s.ACSym) (t : Term s) : Bool := !t.checkSort (s.acSort
 /-- The whole product, and every split whose set-aside side consists of
 unsorted factors only. Sorted factors never need to be set aside: the rest
 variable of an extended rule can stand for them. A product of sorted factors
-therefore has a single view. -/
+therefore has a single view, and the number of views is exponential in the
+number of unsorted factors only. -/
 private def views (f : s.ACSym) (t : Term s) : List (Term s × Option (Term s)) :=
-  (t,none) ::
-    if (flatten f t).any (unsorted f) then
-      ((ACSplits.splits f t).filter fun (_,b) => (flatten f b).all (unsorted f)).map fun (a,b) => (a,some b)
-    else []
+  (t,none) :: (ACSplits.asides f (unsorted f) t).map fun (a,b) => (a,some b)
 
 private theorem view_sound {f : s.ACSym} {t : Term s} {v}
     (h : v ∈ views f t) : EquivB t (plug f v.2 v.1) := by
   rcases List.mem_cons.mp h with rfl|hm
   · exact .refl _
-  · split at hm
-    · obtain ⟨⟨a,b⟩,mem,rfl⟩ := List.mem_map.mp hm
-      exact ACSplits.sound f t (List.mem_filter.mp mem).1
-    · contradiction
+  · obtain ⟨⟨a,b⟩,mem,rfl⟩ := List.mem_map.mp hm
+    exact ACSplits.asides_sound f _ t mem
 
 omit [DecidableEq s.ACSym] in
 private theorem unsorted_class {f : s.ACSym} {x y : Term s}
@@ -45,23 +41,8 @@ private theorem view_cover {f : s.ACSym} {t a : Term s} {k}
   cases k with
   | none => exact ⟨_,List.mem_cons_self,h.symm⟩
   | some b =>
-    obtain ⟨l,r,mem,eq,er⟩ := ACSplits.complete f h
-    have right : ∀ z ∈ flatten f r, unsorted f z = true := by
-      intro z hz
-      apply aside b rfl z
-      have bags := Cancellation.flatten_equiv f er
-      rw [DHProduct.classes f r] at bags
-      exact bags.mem_iff.mpr (List.mem_map_of_mem hz)
-    have whole := Cancellation.flatten_equiv f (ACSplits.sound f t mem)
-    rw [Cancellation.flatten_ac,DHProduct.classes f t,DHProduct.classes f r] at whole
-    obtain ⟨z,hz⟩ := List.exists_mem_of_ne_nil _ (flatten_nonempty f r)
-    obtain ⟨x,hx,same⟩ := List.mem_map.mp
-      (whole.mem_iff.mpr (List.mem_append_right _ (List.mem_map_of_mem hz)))
-    have some_ : (flatten f t).any (unsorted f) = true :=
-      List.any_eq_true.mpr ⟨x,hx,(unsorted_class same).trans (right z hz)⟩
-    refine ⟨(l,some r),List.mem_cons_of_mem _ ?_,eq⟩
-    rw [ite_eq_left some_]
-    exact List.mem_map.mpr ⟨(l,r),List.mem_filter.mpr ⟨mem,List.all_eq_true.mpr right⟩,rfl⟩
+    obtain ⟨l,r,mem,eq⟩ := ACSplits.asides_complete f (unsorted f) h (aside b rfl)
+    exact ⟨(l,some r),List.mem_cons_of_mem _ (List.mem_map.mpr ⟨(l,r),mem,rfl⟩),eq⟩
 
 /-- Remove prescribed factors one at a time. Each can be removed with its
 entire source block, regardless of duplicate values and occurrence order. -/

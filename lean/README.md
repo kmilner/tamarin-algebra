@@ -98,7 +98,7 @@ and distinguish exhaustion, interruption and unsupported input from a complete a
 
 The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManifest.txt).
 
-**Contract exports** are the eleven whose reply the Rust backend uses as the answer. Each is
+**Contract exports** are the nine whose reply the Rust backend uses as the answer. Each is
 mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
 are the whole of what is promised to a caller.
 
@@ -108,21 +108,39 @@ are the whole of what is promised to a caller.
 | `tamarin_total_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`exportedTotalUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets (reply 0). 4 exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_unpack_conjunction` | The rows are the conjunction the packed command denotes, or the clash header (`exportedUnpackConjunction_correct`). | Malformed packets only. |
 | `tamarin_total_match`, `tamarin_total_match_exists` | The complete set of scoped matches, and 1 or 2 exactly as one exists, also in every signature extension. | Malformed packets only. |
-| `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` carries no information. It is the reply to a malformed packet and may be the reply to any table. Three concrete packets must be accepted (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). |
+| `tamarin_certify_table` | `true`: the packet decodes and its table is range restricted, a canonical presentation and has the finite variant property over all ambient names (`exportedCertifyTable_sound`). | `false` is the reply to a malformed packet. It is never the reply to a decoded table of constructor-pattern rules whose results are subterms or constants (`exportedCertifyTable_subterm`, class `SubtermTable.Presentation`, below), nor to three concrete packets (`exportedPhysicalXorTable_admitted`, `exportedPhysicalJointGroupTable_admitted`, `exportedPhysicalBilinearTable_admitted`). On any other table it carries no information. |
 | `tamarin_session_reduce` | On a table `certify_table` accepted: the unique normal form of the term (`exportedSessionReduce_certified`). | `#[#[3]]` only while some rewrite path from the term has at least `n` steps (`exportedSessionReduce_complete`, stated with `CheckedReduction.Within`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`exportedPathReduce_correct`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
-| `tamarin_checked_reduce` | Status 1: the unique normal form, on any table, also in every signature extension (`exportedCheckedReduce_sound`). | **No limit**: `#[#[2]]` may be the reply to any decoded packet, except on sorted tables of constructor definitions or of constructor-pattern projections, where it must answer (`exportedDefinitionReduce_ambient`, `exportedDestructorReduce_ambient`). See the weak clauses below. |
-| `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 below some depth. See the weak clause below. |
-| `tamarin_checked_variants` | A reply other than `#[#[2]]` decodes to a complete set of variants with unique values, on any table (`exportedCheckedVariants_sound`). | **No limit.** It stays a contract export because it is the only solver for kind-level input, where the checker is exponential. See the weak clauses below. |
+| `tamarin_session_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`exportedSessionVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 only if a term the check has to normalize (`VariantCertificate.Demand`: a term of the query, its instance by a member, or a value of a most general narrowing successor of a member) has a rewrite path at least as long as the depth, or the work limit is nonzero and below the positions of the narrowing layers (`VariantCertificate.Overcharged`); see `_decides`, `_complete` and `variantDemand_bounded`. `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 
 No contract statement names a search, a classifier or a reference procedure. A decline is limited
 either by a condition on the decoded packet and the rewrite relation, or by a concrete packet, or
-by the caller's `poll`, or not at all. Where it is not limited, coverage is guarded by the corpus
-and the benchmarks.
+by the caller's `poll`. The one reply that is not limited everywhere is `false` of `certify_table`
+outside its class and its three packets: termination, confluence and the finite variant property
+are undecidable. There coverage is guarded by the corpus and the benchmarks.
 
-**Interruption.** The four exports whose searches can run for a time or allocate memory exponential
+The class of `exportedCertifyTable_subterm` is stated on the decoded table alone
+([`Tamarin/SubtermTable.lean`](Tamarin/SubtermTable.lean)):
+
+- every left side is a free application whose arguments contain no operator that heads a left
+  side (constructor patterns, with free, C and AC constructors, names and repeated variables);
+- the rules of one head either all return the subterm at one common position below the root of
+  their left side, or all return one closed term that contains no head of a left side and has
+  fewer symbols than the left side;
+- every result has the sort of the root of its left side.
+
+These are the equations of pairing, symmetric and asymmetric encryption, signatures (`verify`
+returning `true`), revealing signatures, and user equations of the same shape. Not in the class:
+a left side with a defined operator below its root (`f(g(x))` where `g` has an equation), a result
+that is neither a subterm nor a closed constructor term, a constant result that is not smaller
+than its left side (`f(x) = c`), a C or AC operator at the root of a left side, and every table
+with an equation of Diffie-Hellman, XOR, bilinear pairing, multisets or natural numbers. The
+certifier accepts many such tables (the three packets, user AC units, defined calls in results),
+and nothing in the contract makes it.
+
+**Interruption.** The five exports whose searches can run for a time or allocate memory exponential
 in the width of an AC product (`total_unify`, `total_unify_exists`, `session_reduce`,
-`path_reduce`) take a first argument `poll : Unit → Bool`. Every statement about their answers has
+`path_reduce`, `session_variant_check`) take a first argument `poll : Unit → Bool`. Every statement about their answers has
 the hypothesis `poll () = false` and is otherwise the statement it was, and the reply is the
 interrupted status exactly when `poll () = true`. The searches receive `poll` as an instance
 argument `[Interrupt]` and wrap their loops in combinators that are, as definitions, the plain
@@ -130,8 +148,10 @@ computation (`Interrupt.guard d x` is `x ()`, `Interrupt.map f xs` is `xs.map f`
 through a proved `@[csimp]` equation, to code that asks `poll` first and returns a default when
 told to stop. A proof never sees the question. All instances are equal, so the library's theorems,
 which are stated for the default instance, hold for the instance an export builds. A search that
-is given no instance (the variant checker, the matchers, every proposer) runs as before and is
-compiled without the questions. [Combinators and proofs](Tamarin/Interrupt.lean)
+is given no instance (the matchers, the certifier, every proposer but the folding one) runs as
+before and is compiled without the questions. The variant checker hands its instance to every unification,
+matching and reduction it runs, and asks itself before every member, every narrowing successor
+and every choice of a product. [Combinators and proofs](Tamarin/Interrupt.lean)
 
 Inside Lean the stopping branch is dead: a function on `Unit` has one value. It exists for the C
 bridge, whose `poll` is a closure that starts to reply `true` when the Rust caller's request is
@@ -148,23 +168,25 @@ Two things are trusted about it, both in [`native/lean_unification.c`](../native
 What an interrupted search computes is therefore irrelevant. The export's own reply `#[#[4]]` is
 produced only when the very first question is answered `true`.
 
-**Proposer exports** are the other 41 (`proposer` lines of the manifest): the pieces of the
+**Proposer exports** are the other 42 (`proposer` lines of the manifest): the pieces of the
 specialised variant solvers that still run in Lean, the folding variant generator
-`tamarin_general_variants`, and `tamarin_fold_variants`, the proposer for a sorted query that no
-specialised solver covers. The latter runs folding variant narrowing in the order of Maude's
+`tamarin_general_variants`, the bounded narrowing search `tamarin_checked_variants` (the proposer
+for kind-level queries and for tables the certifier did not accept), and `tamarin_fold_variants`,
+the proposer for a sorted query that no specialised solver covers. The latter runs folding variant narrowing in the order of Maude's
 `VariantSearch` and `VariantFolder` on the narrowing layer and the subsumption test of the
 certificate checker: a successor that is an instance of a retained variant is dropped, a
 successor that is kept evicts the retained variants it subsumes other than its ancestors, and a
 layer is listed when it is complete ([`Tamarin/VariantFold.lean`](Tamarin/VariantFold.lean)).
-A call stops with status 3 beyond a given number of narrowing sites; the caller retries with a
-larger number and can cancel between calls. They carry no contract. The Rust backend
+A call stops with status 3 beyond a given number of narrowing sites, and the caller retries with a
+larger number. It takes a `poll` like the interruptible contract exports, so a call also stops
+when the caller cancels. They carry no contract. The Rust backend
 assembles their output into a proposed family of variants and uses that family only after
 `tamarin_session_variant_check` accepted it; a rejected or undecided family fails the session.
 A wrong proposal, including a wrong pruning decision inside the proposer, therefore costs a
 rejection and never a wrong answer, which is why nothing has to be promised about a proposer.
 It follows that a proposer's output must never reach the prover without that check. The Rust
 backend has one place where a family of variants is returned (`MaudeHandle::variants`). It
-passes every family through the checker except one that `tamarin_checked_variants` computed.
+passes every family through the checker, without exception.
 
 The theorems about proposers that were contract statements are kept, unpinned and without an
 owner, in [`TamarinProposers.lean`](TamarinProposers.lean), together with the coverage statements
@@ -179,7 +201,7 @@ modules without importing them into its own elaboration. It fails unless:
 - every contract export has a theorem of the proof root, and the kernel statement of every
   public theorem of the proof root is the recorded one (SHA-256 of a canonical encoding);
 - every definition those statements depend on, in whatever module it is defined, is the one
-  recorded in [`SpecManifest.txt`](SpecManifest.txt) (336 constants: terms, signatures,
+  recorded in [`SpecManifest.txt`](SpecManifest.txt) (351 constants: terms, signatures,
   substitutions, the rewrite relation, the reply specifications and the wire decoders);
 - no theorem of the proof root mentions a proposer, and no proposer is in that closure;
 - no module, proposer code included, defines macros, syntax, elaborators or initializers, imports
@@ -209,10 +231,19 @@ which used to exempt the verified unifier, is empty for that reason.
 What the tightening gave up, relative to the previous contract:
 
 - `certify_table` no longer has to accept what the reference classifier `CertifiedTable.admits`
-  accepts. No semantic statement can replace that clause: termination, confluence and the finite
-  variant property are undecidable, Maude does not check them and Tamarin assumes them.
-- `checked_reduce` no longer has its decline tied to `CheckedReduction.run` and the work limit.
-  That limit is resource policy with no counterpart in the rewrite relation.
+  accepts. No semantic statement can replace that clause in full: termination, confluence and
+  the finite variant property are undecidable, Maude does not check them and Tamarin assumes
+  them. It has to accept the class of `exportedCertifyTable_subterm` and three packets.
+- `checked_reduce` is no export. It followed every rewrite path and declined by a resource
+  policy with no counterpart in the rewrite relation (a factorial charge per AC head against a
+  fixed work limit), so its decline could not be limited. A session reduces along one path:
+  `session_reduce` on a table the certifier accepted, `path_reduce` on any other, whose replies
+  are all specified. What the caller loses: on a table the certifier did not accept, a reduct is
+  proved irreducible and sort preserving but not unique, so the Rust backend counts every such
+  reduction as assumed (it counted those the all-paths check settled as proved), and a raw
+  session, which follows no path, reports the uncertified table. Proofs are unaffected: same
+  verdicts and step counts. The procedure `CheckedReductionWire.run` and what was proved of it
+  (its two floors included) stay in the library and in `TamarinProposers.lean`.
 - `general_variants` is a proposer. Measured on the whole corpus, all 10,282 families of
   variants reached the prover through a Rust proposer and the checker and none through this
   export. The caller loses its two statements (`exportedGeneralVariants_malformed`, `_sound`):
@@ -220,8 +251,11 @@ What the tightening gave up, relative to the previous contract:
   fails the session where it used to count as assumed. The statements are still proved in
   `TamarinProposers.lean`, with the clauses that forced a reply when the reference search
   `GeneralVariants.run` finishes and the corollaries for DH, constructor and subterm tables.
-- `checked_variants` keeps what a reply means and has no clause that forces a reply. The corpus
-  never uses it either, but it cannot be a proposer yet: see the kind-level clause below.
+- `checked_variants` is a proposer. It was kept as a contract export only for kind-level
+  queries, on which the checker was exponential; it no longer is. Its family goes through the
+  checker like every other, so the caller loses its two statements
+  (`exportedCheckedVariants_malformed`, `_sound`, still proved in `TamarinProposers.lean`) and
+  a family the checker does not accept fails the session.
 - `general_reduce` is no export. It followed every rewrite path to the given depth and listed
   every match of every rule at every step, so one call on a wide AC product allocated without
   limit (4.8 GB in 15 s on one test query) and nothing in its contract let a caller prevent
@@ -243,53 +277,53 @@ Known weak clauses:
   collide with its fresh ones (`unsafe variable name`, `src/Higher/unificationProblem.cc`).
   Until then the caller treats the decline word as a hard error, never as "no unifier", and
   `exportedTotalUnify_unsatisfiable` rules it out for queries without solutions.
-- Variant certificates. `exportedSessionVariantCheck_decides` and `_complete` say that a depth
-  exists (`∃ k : Nat`) from which a call without a work limit never replies with status 3 and
-  accepts exactly the closed families. The depth argument is a 64-bit word, so the clause is
-  empty if that depth exceeds 2^64. Acceptance and rejection are exact at every depth. No
-  stronger statement was found that is both non-vacuous and cheap to pin:
-  - Naming the depth proved sufficient, `VariantCertificate.threshold`, pins what computes it.
-    It is one more than the largest rewrite height among the terms the closure test normalizes,
-    and those include the narrowing successors that the installed unifier lists: 259 further
-    definitions in 39 modules (the narrower, the reference reducer, the unifier), measured.
-  - A bound through the rewrite relation alone, of the form "status 3 at depth `n` only if some
-    term `u` in a set `U` has a rewrite path of `n` steps", needs a set `U` that contains the
-    terms the test normalizes and is defined without the unifier. Those terms are instances of
-    normal forms of members by unifiers of a subterm with a left-hand side. Any `U` closed under
-    "instance by some unifier" contains instances by arbitrarily large substitutions, whose
-    rewrite heights are unbounded on every table with a rule that keeps a variable, so the
-    clause would hold of every checker. Restricting `U` to most general unifiers names a
-    complete set of unifiers, and the one the checker uses is the installed unifier's: complete
-    sets modulo AC are not unique and the installed one is not minimal.
-  - `∃ k < 2^64` is false: a table with few symbols can have terms of small size and rewrite
-    height above 2^64.
-  A nonzero work limit only declines members by an estimate of their narrowing layer, so
-  nothing bounds the time or the memory of a call.
-- Kind-level products in the variant checker. On an AC product that holds a variable outside
-  the sorts of messages (no well-sorted theory produces one, the corpus has none), the closure
-  test of `tamarin_session_variant_check` takes time and memory proportional to 2^k in the
-  number `k` of factors: 16 factors 0.28 s and 90 MB, 20 factors 5.4 s and 1.43 GB, 129 factors
-  killed at 6 GB after 3 s, with a charge of only `k` against the work limit. Well-sorted
-  products of the same width check in milliseconds. `tamarin_checked_variants` answers such a
-  query in milliseconds and is its only solver, so it remains a contract export with an
-  unlimited decline, and the Rust backend uses its family without the checker. The ignored
-  Rust test `kind_level_product_check_is_not_exponential` (`tamarin-term`,
-  `lean_unification/whole/reduction.rs`) is the acceptance test for a checker that removes
-  this; `checked_variants` can become a proposer once it passes.
-- Reduction on a table `certify_table` did not accept. `tamarin_checked_reduce` may decline
-  anything outside its two floors. Its decline cannot be given a semantic clause as it stands:
-  it guards the cost of listing every match of a rule against a wide AC product (a factorial
-  charge per AC head against a fixed work limit, `CheckedReduction.affordable`), and that cost
-  is a property of the matcher's enumeration, not of the rewrite relation. A limit in terms of
-  the number of distinct terms reachable within the depth would not bound it either: on the
-  query above two terms are reachable and the matches number 2^63. `tamarin_path_reduce`
-  answers where it declines, with every reply specified, but claims no uniqueness, so the Rust
-  backend counts such an answer as assumed. Measured on the 19 corpus theories with an
-  uncertified table: with `path_reduce` alone the proofs are identical (same verdicts, same
-  step counts, same output), and 22,617 reductions that `checked_reduce` settles count as
-  assumed instead of proved (23,010 assumed in all). Every family of variants of those theories
-  is assumed already. So `checked_reduce` could be deleted at the price of that label and of
-  raw sessions, which do not follow a path, reporting every uncertified table.
+- Variant certificates: what limits status 3. The clause is exact in one direction
+  (`Decision.exhausts`): a reply with status 3 at depth `n` and work limit `w` implies that some
+  term in `VariantCertificate.Demand` has a rewrite path of at least `n` steps (stated with
+  `CheckedReduction.Within`, as for `session_reduce`), or that `w` is nonzero and below
+  `Charge`, the number of positions that are not variables in the normal forms of the
+  instantiated query, added up over the members (slots whose query term is a variable do not
+  count). `Demand` is defined through the rewrite relation and subsumption modulo the declared
+  laws alone. It holds the terms of the query, their instances by the members, and the values
+  of the *most general narrowing successors* of the members. A successor of a member is an
+  instance of it that keeps its images normal and takes one rewrite step in one value (the
+  premise of `Folds`); it is most general when every successor of which it is an instance is an
+  instance of it. No unifier, narrower or reducer is named, so an implementation is free in how
+  it enumerates successors. `variantDemand_bounded` proves that the clause is not empty: on a
+  range-restricted canonical presentation one depth bounds every rewrite path from every term
+  of `Demand`. What the clause does not capture:
+  - It is not an equivalence. The checker follows one rewrite path per term, so it can answer at
+    a depth below the longest path of a term it normalizes, and it need not normalize a
+    successor that is an instance of another one.
+  - The depth is compared with the longest rewrite path, not with the shortest one or with the
+    path a particular reducer takes, so the depth that `variantDemand_bounded` provides for a
+    family can be above the depth at which the checker in fact answers. No bound is computed
+    from the packet: 65536 suffices on the whole corpus.
+  - To meet the clause the checker rereads the layer of a member whose scan the depth ended, and
+    passes over a successor it could not normalize when that successor is an instance of one it
+    normalized and found subsumed. This costs nothing unless the depth is exhausted.
+  - Nothing bounds the time or the memory of a call. The work limit charges positions, not the
+    cost of the unifications at a position, which can be exponential (below). The caller's
+    `poll` and a bound on its questions stop such a call.
+- Kind-level products in the variant checker. The narrowing layer set aside every sub-product
+  of an AC product that holds a factor outside the sort of its operator: 2^k views of `k`
+  factors (20 factors 5.4 s and 1.43 GB). It now sets aside sub-products of the factors outside
+  the sort only (`ACSplits.asides`), so the number of views is 2^u in the number `u` of those
+  factors and independent of the width: the identity family on 129 public names and one Node
+  variable checks in milliseconds (Rust test `kind_level_product_check_is_not_exponential`). A
+  product of many factors outside the sort is still exponential in their number. No well-sorted
+  theory produces one, and such a call is stopped by `poll` like any other.
+- Repeated variables in products. The check of a family whose members hold products with
+  repeated variables can take far longer than Maude takes to list the family, and need not
+  finish: `mult('c',x,x,x)` over Diffie-Hellman exponents, 8 variants, takes about 5 s in the
+  checker where Maude lists the family in 0.3 s, and the 247 variants of
+  `LIST(x*y, x*inv(y))` are not checked within 900 s (7.7 GB). By stack samples of the first,
+  60% of the checker's time is in the unifier (a product with repeated factors against the
+  extended left sides of the rules) and 38% in the normality tests of the unifiers it returns. The unifier was not changed. Such a call is now interruptible: it
+  returns within 0.1 s of a cancellation, and the Rust backend stops it after 2^26 questions.
+- Reduction on a table `certify_table` did not accept. `tamarin_path_reduce` answers, with
+  every reply specified, and claims no uniqueness, so the Rust backend counts its answers as
+  assumed. Every family of variants on such a table is assumed as well.
 - Running time. No statement bounds the time of a call. AC matching and unification are
   exponential in the worst case. `tamarin_path_reduce` and `tamarin_session_reduce` look for
   the first match of a rule, and that search can be exponential in the width of an AC product:
@@ -304,10 +338,11 @@ Known weak clauses:
   time: the first-match search of the bag matcher, the selection of basis solutions and the
   construction of their answers in the homogeneous solver, the frontier and the children of a
   component search and the partition fallback. Nothing proves that every long loop asks.
+  The variant checker is interruptible as well: it hands `poll` to every unification, matching
+  and reduction it runs and asks before every member and every narrowing successor.
+  So is the folding proposer `tamarin_fold_variants`, which takes a `poll` as well.
   Still uninterruptible: `total_match` and `total_match_exists` (a fuzzing run found a
-  scoped match that ignores its cancellation), `checked_reduce` (which declines by its own
-  work limit), `certify_table`, the variant checker, which calls the unifier without a
-  `poll`, and every proposer.
+  scoped match that ignores its cancellation), `certify_table` and every other proposer.
 
 The repository includes a GitHub ruleset for the default branch. Importing it in Settings →
 Rules → Rulesets requires the GitHub Actions `lean-spec` check and code-owner approval for

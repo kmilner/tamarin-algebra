@@ -5,8 +5,8 @@
 /* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
  * export is specified by theorems and may be used as the answer: total_unify, unpack_conjunction,
  * total_unify_exists, total_match, total_match_exists, certify_table, session_reduce,
- * checked_reduce, path_reduce, session_variant_check, checked_variants. Every other export,
- * general_variants and fold_variants included, is a proposer with no contract: its output may only go into a
+ * path_reduce, session_variant_check. Every other export, checked_variants, general_variants and
+ * fold_variants included, is a proposer with no contract: its output may only go into a
  * proposed family of variants that tamarin_lean_session_variant_check then has to accept. */
 
 /* The generated module initializer and export use the pinned Lean ABI. */
@@ -403,21 +403,14 @@ void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *r
                         atom_array(equations.data, equations.size)));
 }
 
-extern lean_object *tamarin_checked_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
-
-void *tamarin_lean_checked_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                                  size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_checked_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                           atom_array(rules.data, rules.size), root, fuel));
-}
-
 extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
                                        uint64_t, uint64_t);
 
-/* Same packet and reply layout as tamarin_lean_checked_reduce, for a table that is only range
-   restricted: one rewrite path is followed. {1, term} is an irreducible reduct (not known to be
-   unique), {2} an unsupported table or a reduct that lost a sort, {3} a request for more depth,
-   {0} a malformed packet. NULL when the call was interrupted: see interrupt_watch. */
+/* Reduce on a table that is only range restricted: one rewrite path is followed. The packet is a
+   table packet with the term among its rows, and root is its node index. {1, term} is an
+   irreducible reduct (not known to be unique), {2} an unsupported table or a reduct that lost a
+   sort, {3} a request for more depth, {0} a malformed packet. NULL when the call was
+   interrupted: see interrupt_watch. */
 void *tamarin_lean_path_reduce(whole_word_slice decls, const whole_word_slice *rows,
                                size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel,
                                interrupt_watch *watch) {
@@ -458,6 +451,7 @@ uint8_t tamarin_lean_total_match_exists(whole_word_slice decls, const whole_word
 
 extern lean_object *tamarin_checked_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t);
 
+/* A proposer: a bounded narrowing search. {2} declines. */
 void *tamarin_lean_checked_variants(whole_word_slice decls, const whole_word_slice *rows,
                                     size_t count, whole_word_slice rules, whole_word_slice roots, uint64_t fuel) {
     return wrap_rows(tamarin_checked_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
@@ -483,22 +477,25 @@ void *tamarin_lean_session_reduce(whole_word_slice decls, const whole_word_slice
 
 extern lean_object *tamarin_session_variant_check(lean_object *, lean_object *, lean_object *,
                                                  lean_object *, lean_object *, lean_object *,
-                                                 uint64_t, uint64_t);
+                                                 lean_object *, uint64_t, uint64_t);
 
 /* Check a proposed family of variants on the table that tamarin_lean_certify_table accepted, with
    the observations and the images of the family in further node rows as in
    tamarin_lean_session_reduce. roots are node indices and each family row lists node pairs
    (variable node, image node). The reply has one row: {1} accepted, {2, reason, member} rejected,
-   {3} budget exhausted, {0} malformed packet. Only {1} accepts. */
+   {3} budget exhausted, {0} malformed packet. Only {1} accepts. NULL when the call was
+   interrupted: see interrupt_watch. */
 void *tamarin_lean_session_variant_check(whole_word_slice decls, const whole_word_slice *rows,
                                          size_t count, whole_word_slice rules,
                                          const whole_word_slice *extra, size_t added,
                                          whole_word_slice roots, const whole_word_slice *family,
-                                         size_t members, uint64_t fuel, uint64_t work) {
-    return wrap_rows(tamarin_session_variant_check(atom_array(decls.data, decls.size),
-                    word_rows(rows, count), atom_array(rules.data, rules.size),
-                    word_rows(extra, added), atom_array(roots.data, roots.size),
-                    word_rows(family, members), fuel, work));
+                                         size_t members, uint64_t fuel, uint64_t work,
+                                         interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_session_variant_check(watch_closure(watch),
+                        atom_array(decls.data, decls.size),
+                        word_rows(rows, count), atom_array(rules.data, rules.size),
+                        word_rows(extra, added), atom_array(roots.data, roots.size),
+                        word_rows(family, members), fuel, work));
 }
 
 extern lean_object *tamarin_general_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t);
@@ -509,14 +506,18 @@ void *tamarin_lean_general_variants(whole_word_slice decls, const whole_word_sli
                     atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel));
 }
 
-extern lean_object *tamarin_fold_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+extern lean_object *tamarin_fold_variants(lean_object *, lean_object *, lean_object *, lean_object *,
+                                         lean_object *, uint64_t, uint64_t);
 
-/* A proposer: folding variant narrowing within `work` narrowing sites. */
+/* A proposer: folding variant narrowing within `work` narrowing sites. NULL when the call was
+   interrupted: see interrupt_watch. */
 void *tamarin_lean_fold_variants(whole_word_slice decls, const whole_word_slice *rows,
                                  size_t count, whole_word_slice rules, whole_word_slice roots,
-                                 uint64_t fuel, uint64_t work) {
-    return wrap_rows(tamarin_fold_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
-                    atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel, work));
+                                 uint64_t fuel, uint64_t work, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_fold_variants(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
+                        atom_array(rules.data, rules.size), atom_array(roots.data, roots.size),
+                        fuel, work));
 }
 
 extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);

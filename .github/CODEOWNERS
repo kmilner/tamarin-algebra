@@ -57,11 +57,10 @@
 #
 # What the gate does not enforce: anything no theorem of lean/TamarinCI.lean
 # states. That includes how often a contract export declines where no theorem
-# limits it (certify_table beyond three concrete packets, checked_reduce
-# beyond two table classes, checked_variants), the depth from which
-# session_variant_check stops asking for more (it is only said to exist),
-# everything about a proposer (the folding generator general_variants is
-# one), running time and memory, that the Rust backend really passes every
+# limits it (certify_table beyond its class of constructor-pattern tables
+# and three concrete packets), everything about a proposer (the generators
+# general_variants, checked_variants and fold_variants are proposers),
+# running time and memory, that the Rust backend really passes every
 # proposed family through the checker, and the files under
 # lean/Tests other than the two below, which are regression tests and can be
 # edited like any implementation file.
