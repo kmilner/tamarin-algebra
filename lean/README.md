@@ -342,11 +342,22 @@ Known weak clauses:
   theory produces one, and such a call is stopped by `poll` like any other.
 - Repeated variables in products. The check of a family whose members hold products with
   repeated variables can take far longer than Maude takes to list the family, and need not
-  finish: `mult('c',x,x,x)` over Diffie-Hellman exponents, 8 variants, takes about 5 s in the
+  finish: `mult('c',x,x,x)` over Diffie-Hellman exponents, 8 variants, takes about 3.2 s in the
   checker where Maude lists the family in 0.3 s, and the 247 variants of
-  `LIST(x*y, x*inv(y))` are not checked within 900 s (7.7 GB). By stack samples of the first,
-  60% of the checker's time is in the unifier (a product with repeated factors against the
-  extended left sides of the rules) and 38% in the normality tests of the unifiers it returns. The unifier was not changed. Such a call is now interruptible: it
+  `LIST(x*y, x*inv(y))` are not checked within 900 s (7.7 GB). The linear system is not the
+  cause. The homogeneous solver works on the multiplicities and selects from the Hilbert basis,
+  as Maude does, it lists the families Maude lists, and it takes 2% of the time of a
+  unification. The time goes into what is done for every selected answer: each one is handed to
+  the general solver as a problem of its own, which lists its subterms, purifies it,
+  reconstructs a valuation and gives it sorts, at the leaf and again at the root, where Maude
+  writes the bindings of a selection into its substitution. Those passes are now tabulated
+  (`purifyTabled`, `reconstructOfTabled`, `solveRowsShared`, `excludedSplit`, `bannedAtRoot`,
+  each a proved `@[csimp]` equation), and the checker tests a branch image that recurs up to
+  the names of its variables once (`numberedRootsMemo`). That took the listing of 2982
+  unifiers of `c*x*x*x = y*z*w` from 4.0 to 3.0 billion instructions (0.52 s to 0.39 s; Maude
+  0.18 s) and the check above from 5.4 s. By call counts of that check, 60% of its time is
+  still the unifier (7144 leaves for 97 unifications), 15% the normality tests of the images
+  and 5% the tests of the 4931 successors it keeps. Such a call is interruptible: it
   returns within 0.1 s of a cancellation, and the Rust backend stops it after 2^26 questions.
 - Reduction on a table `certify_table` did not accept. `tamarin_path_reduce` answers, with
   every reply specified, and claims no uniqueness, so the Rust backend counts its answers as

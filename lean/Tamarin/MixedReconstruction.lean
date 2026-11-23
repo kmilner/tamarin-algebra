@@ -264,45 +264,124 @@ private theorem identifyArray_eq (ts : List (Term s)) (table : Array Nat) (p : P
       rw [fixed, List.map_id]
     · simp
 
+/-- The positions of the elements of a list without repeats are the numbers
+below its length, in order. -/
+private theorem map_idxOf_range {α : Type} [BEq α] [LawfulBEq α] (ts : List α) (nd : ts.Nodup) :
+    ts.map ts.idxOf = List.range ts.length := by
+  apply List.ext_getElem (by simp)
+  intro i h₁ h₂
+  simp only [List.getElem_map, List.getElem_range]
+  exact nd.idxOf_getElem i (by simpa using h₁)
+
+private theorem filterMap_agree {α β : Type} {f g : α → Option β} (l : List α)
+    (h : ∀ a ∈ l, f a = g a) : l.filterMap f = l.filterMap g := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    rw [List.filterMap_cons, List.filterMap_cons, h a List.mem_cons_self,
+      ih fun b hb => h b (List.mem_cons_of_mem _ hb)]
+
+private theorem inventory_nodup (p : Problem s) : (inventory p).Nodup :=
+  Matching.ACBagSearch.dedup_distinct _
+
+/-- `describe` for a term whose slot is known. -/
+private def describeAt (k : Term s → Nat) (out : Nat) : Term s → Option (Constraint s)
+  | .var _ => none
+  | .atom a => some (.atom out a)
+  | .free f xs => some (.free out f fun i => k (xs i))
+  | .comm f a b => some (.comm out f (k a) (k b))
+  | .ac f a b => some (.ac out f (k a) (k b))
+
+omit [DecidableEq (Term s)] in
+private theorem describeAt_slot (k : Term s → Nat) (t : Term s) : describeAt k (k t) t = describe k t := by
+  cases t <;> rfl
+
 /-- `purify` with the subterms interned in buckets and the slot of every
 interned term computed once. The slot function of `purify` re-derives each
-merge on every call, and looks every term up by a linear scan. -/
+merge on every call, and looks every term up by a linear scan. The interned
+terms are distinct, so the position of the `i`-th one is `i` and needs no
+lookup, neither for the first table of slots nor for the slot that the
+constraint of the term defines. -/
 private def purifyTabled (p : Problem s) : System s :=
   let ts := inventory p
   let index := Buckets.index bucketKey (ts.length + 1) 0 ts
   let idx := fun t => Buckets.lookup bucketKey index ts.length t
-  let table := identifyArray idx (ts.map idx).toArray p
+  let table := identifyArray idx (Array.range ts.length) p
   let k := fun t =>
     let i := idx t
     if h : i < table.size then table[i] else identify ts.idxOf p t
-  ⟨k, ts.filterMap (describe k)⟩
+  ⟨k, ts.zipIdx.filterMap fun e => describeAt k (table.getD e.2 0) e.1⟩
+
+private theorem idx_eq (p : Problem s) :
+    (fun t => Buckets.lookup bucketKey
+      (Buckets.index bucketKey ((inventory p).length + 1) 0 (inventory p)) (inventory p).length t) =
+      (inventory p).idxOf := by
+  funext t
+  simpa using Buckets.lookup_index bucketKey ((inventory p).length + 1) (by omega) 0 (inventory p) t
+
+private theorem table_eq (p : Problem s) :
+    (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).toList =
+      (inventory p).map (identify (inventory p).idxOf p) := by
+  rw [identifyArray_eq]
+  have start : (Array.range (inventory p).length).toList = (inventory p).map (inventory p).idxOf := by
+    rw [map_idxOf_range _ (inventory_nodup p)]
+    simp
+  rw [start]
+  exact identifyTable_eq _ _ _ (fun e he => ⟨inside he (.inl (self_mem _)), inside he (.inr (self_mem _))⟩)
+
+private theorem slot_eq (p : Problem s) :
+    (fun t => if h : (inventory p).idxOf t <
+        (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).size
+      then (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p)[(inventory p).idxOf t]
+      else identify (inventory p).idxOf p t) = identify (inventory p).idxOf p := by
+  funext t
+  split
+  · next h =>
+    have lt : (inventory p).idxOf t < (inventory p).length := by
+      have := congrArg List.length (table_eq p)
+      simp only [Array.length_toList, List.length_map] at this
+      omega
+    rw [← Array.getElem_toList]
+    simp [table_eq, List.getElem_idxOf lt]
+  · rfl
 
 @[csimp] theorem purify_eq_tabled : @purify = @purifyTabled := by
   funext s _ p
-  have idx : (fun t => Buckets.lookup bucketKey
-      (Buckets.index bucketKey ((inventory p).length + 1) 0 (inventory p)) (inventory p).length t) =
-      (inventory p).idxOf := by
-    funext t
-    simpa using Buckets.lookup_index bucketKey ((inventory p).length + 1) (by omega) 0 (inventory p) t
-  have table : (identifyArray (inventory p).idxOf ((inventory p).map (inventory p).idxOf).toArray p).toList =
-      (inventory p).map (identify (inventory p).idxOf p) := by
-    rw [identifyArray_eq]
-    exact identifyTable_eq _ _ _ (fun e he => ⟨inside he (.inl (self_mem _)), inside he (.inr (self_mem _))⟩)
-  have slot : (fun t => if h : (inventory p).idxOf t <
-        (identifyArray (inventory p).idxOf ((inventory p).map (inventory p).idxOf).toArray p).size
-      then (identifyArray (inventory p).idxOf ((inventory p).map (inventory p).idxOf).toArray p)[(inventory p).idxOf t]
-      else identify (inventory p).idxOf p t) = identify (inventory p).idxOf p := by
-    funext t
-    split
-    · next h =>
-      have lt : (inventory p).idxOf t < (inventory p).length := by
-        have := congrArg List.length table
+  simp only [purify, purifyTabled, idx_eq, slot_eq]
+  congr 1
+  have known : ∀ e ∈ (inventory p).zipIdx,
+      describeAt (identify (inventory p).idxOf p)
+        ((identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).getD e.2 0) e.1 =
+        describe (identify (inventory p).idxOf p) e.1 := by
+    intro e he
+    obtain ⟨t,i⟩ := e
+    have at_i : (inventory p)[i]? = some t := by
+      simpa using (List.mem_zipIdx_iff_getElem?.mp he)
+    have lt : i < (inventory p).length := by
+      rcases Nat.lt_or_ge i (inventory p).length with h | h
+      · exact h
+      · rw [List.getElem?_eq_none h] at at_i; cases at_i
+    have here : (inventory p)[i] = t := by
+      rw [List.getElem?_eq_getElem lt] at at_i
+      exact Option.some.inj at_i
+    have slot : (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).getD i 0 =
+        identify (inventory p).idxOf p t := by
+      have size : i < (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).size := by
+        have := congrArg List.length (table_eq p)
         simp only [Array.length_toList, List.length_map] at this
         omega
-      rw [← Array.getElem_toList]
-      simp [table, List.getElem_idxOf lt]
-    · rfl
-  simp only [purify, purifyTabled, idx, slot]
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem size, Option.getD_some,
+        ← Array.getElem_toList]
+      simp [table_eq, here]
+    dsimp only
+    rw [slot, describeAt_slot]
+  rw [filterMap_agree _ known]
+  have spread (ts : List (Term s)) (g : Term s → Option (Constraint s)) :
+      ts.filterMap g = ts.zipIdx.filterMap fun e => g e.1 := by
+    conv => lhs; rw [← List.zipIdx_map_fst 0 ts]
+    rw [List.filterMap_map]
+    rfl
+  exact spread _ _
 
 /-- The slots of `purify` without the constructor constraints, for callers
 that only compare slots. The result is a record so that its table is built
@@ -313,7 +392,7 @@ private def slotsOnlyTabled (p : Problem s) : System s :=
   let ts := inventory p
   let index := Buckets.index bucketKey (ts.length + 1) 0 ts
   let idx := fun t => Buckets.lookup bucketKey index ts.length t
-  let table := identifyArray idx (ts.map idx).toArray p
+  let table := identifyArray idx (Array.range ts.length) p
   let k := fun t =>
     let i := idx t
     if h : i < table.size then table[i] else identify ts.idxOf p t
@@ -603,6 +682,95 @@ private def reconstruct (todo : List (Constraint s)) (images : Nat → Term s) :
             e (List.mem_filter.mpr ⟨he,by simpa using same⟩)
 termination_by todo.length
 
+private theorem reconstruct_nil (images : Nat → Term s) :
+    (reconstruct ([] : List (Constraint s)) images).val = some images := by
+  rw [reconstruct]
+
+private theorem reconstruct_cons (c : Constraint s) (cs : List (Constraint s)) (images : Nat → Term s) :
+    (reconstruct (c :: cs) images).val =
+      match (c :: cs).find? (readyIn (outputs (c :: cs))) with
+      | none => none
+      | some d => (reconstruct ((c :: cs).filter fun e => e.out != d.out)
+          (installAt d.out (d.term images) images)).val := by
+  rw [reconstruct]
+  split <;> simp_all
+
+/-- The valuation that a table of terms stands for: the entry of a slot
+inside the table, and the variable of the slot outside it. -/
+private def view (table : Array (Term s)) (i : Nat) : Term s :=
+  if h : i < table.size then table[i] else .var ⟨i,.msg⟩
+
+private theorem view_set (table : Array (Term s)) (out : Nat) (value : Term s)
+    (inside : out < table.size) :
+    view (table.setIfInBounds out value) = installAt out value (view table) := by
+  funext i
+  unfold view installAt
+  by_cases same : i = out
+  · subst same
+    simp [inside]
+  · have other : ¬ out = i := fun h => same h.symm
+    simp only [same, ↓reduceIte, Array.size_setIfInBounds]
+    split
+    · next lt =>
+      rw [Array.getElem_setIfInBounds lt]
+      simp only [other, ↓reduceIte]
+    · rfl
+
+/-- `reconstruct` on a table of the slots. The valuation of `reconstruct` is
+a chain of one closure per defined slot, and every read of a slot walks it.
+The first argument bounds the number of constraints. -/
+private def reconstructTable : Nat → List (Constraint s) → Array (Term s) → Option (Array (Term s))
+  | _, [], table => some table
+  | 0, _ :: _, _ => none
+  | fuel + 1, c :: cs, table =>
+    match (c :: cs).find? (readyIn (outputs (c :: cs))) with
+    | none => none
+    | some d =>
+      reconstructTable fuel ((c :: cs).filter fun e => e.out != d.out)
+        (table.setIfInBounds d.out (d.term (view table)))
+
+private theorem reconstructTable_eq (n : Nat) : ∀ (todo : List (Constraint s)) (table : Array (Term s)),
+    todo.length ≤ n → (∀ c ∈ todo, c.out < table.size) →
+    (reconstructTable n todo table).map view = (reconstruct todo (view table)).val := by
+  induction n with
+  | zero =>
+    intro todo table short _
+    obtain rfl : todo = [] := List.length_eq_zero_iff.mp (Nat.le_zero.mp short)
+    rw [reconstructTable, reconstruct_nil]
+    rfl
+  | succ n ih =>
+    intro todo table short inside
+    cases todo with
+    | nil =>
+      rw [reconstructTable, reconstruct_nil]
+      rfl
+    | cons c cs =>
+      rw [reconstructTable, reconstruct_cons]
+      cases found : (c :: cs).find? (readyIn (outputs (c :: cs))) with
+      | none => rfl
+      | some d =>
+        dsimp only
+        have member := List.mem_of_find?_eq_some found
+        rw [← view_set table d.out _ (inside d member)]
+        apply ih
+        · have shorter : ((c :: cs).filter fun e => e.out != d.out).length < (c :: cs).length :=
+            List.length_filter_lt_length_iff_exists.mpr ⟨d, member, by simp⟩
+          omega
+        · intro e he
+          rw [Array.size_setIfInBounds]
+          exact inside e (List.mem_filter.mp he).1
+
+private theorem out_le_fold (cs : List (Constraint s)) (m : Nat) :
+    m ≤ cs.foldl (fun m c => max m c.out) m ∧ ∀ c ∈ cs, c.out ≤ cs.foldl (fun m c => max m c.out) m := by
+  induction cs generalizing m with
+  | nil => exact ⟨Nat.le_refl m, fun c hc => nomatch hc⟩
+  | cons d ds ih =>
+    obtain ⟨grows, covers⟩ := ih (max m d.out)
+    refine ⟨Nat.le_trans (Nat.le_max_left m d.out) grows, fun c hc => ?_⟩
+    rcases List.mem_cons.mp hc with rfl | hc
+    · exact Nat.le_trans (Nat.le_max_right m c.out) grows
+    · exact covers c hc
+
 section Solve
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
@@ -717,6 +885,40 @@ def reconstructOf (q : System s) : Option (List (UnifierSorts.Template s)) :=
   | some row =>
     if q.constraints.all (fun c => agree (row c.out) (c.term row))
     then some [project q row] else none
+
+/-- `reconstructOf` with the valuation kept in a table of the slots. -/
+private def reconstructOfTabled (q : System s) : Option (List (UnifierSorts.Template s)) :=
+  let size := q.constraints.foldl (fun m c => max m c.out) 0 + 1
+  match reconstructTable q.constraints.length q.constraints
+      (Array.ofFn (n := size) fun i => .var ⟨i.val,.msg⟩) with
+  | none => some []
+  | some table =>
+    let row := view table
+    if q.constraints.all (fun c => agree (row c.out) (c.term row))
+    then some [project q row] else none
+
+@[csimp] private theorem reconstructOf_eq_tabled : @reconstructOf = @reconstructOfTabled := by
+  funext s _ _ _ _ q
+  have start (n : Nat) : view (Array.ofFn (n := n) fun i => (.var ⟨i.val,.msg⟩ : Term s)) =
+      fun i => .var ⟨i,.msg⟩ := by
+    funext i
+    unfold view
+    split
+    · simp
+    · rfl
+  have same := reconstructTable_eq q.constraints.length q.constraints
+    (Array.ofFn (n := q.constraints.foldl (fun m c => max m c.out) 0 + 1)
+      fun i => (.var ⟨i.val,.msg⟩ : Term s)) (Nat.le_refl _) (fun c hc => by
+      have := (out_le_fold q.constraints 0).2 c hc
+      simp only [Array.size_ofFn]
+      omega)
+  rw [start] at same
+  unfold reconstructOf reconstructOfTabled
+  dsimp only
+  rw [← same]
+  cases reconstructTable q.constraints.length q.constraints
+      (Array.ofFn (n := q.constraints.foldl (fun m c => max m c.out) 0 + 1)
+        fun i => (.var ⟨i.val,.msg⟩ : Term s)) <;> rfl
 
 def reconstruct? (p : Problem s) : Option (List (UnifierSorts.Template s)) :=
   reconstructOf (purify p)

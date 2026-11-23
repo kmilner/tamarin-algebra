@@ -263,6 +263,30 @@ private def banned (ban : Variable → Head s → Bool) (y : Variable) : Term s 
   | .var _ => false
   | t => ban y ((headModel s).eval Head.var t)
 
+/-- The outer constructor of a term, read at its root. The evaluation in the
+model of heads computes the head of every subterm first. -/
+private def rootHead : Term s → Head s
+  | .var v => .var v
+  | .atom a => .atom a
+  | .free f _ => .free f
+  | .comm f _ _ => .comm f
+  | .ac f _ _ => .ac f
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem rootHead_eq (t : Term s) : rootHead t = (headModel s).eval Head.var t := by
+  cases t <;> rfl
+
+private def bannedAtRoot (ban : Variable → Head s → Bool) (y : Variable) : Term s → Bool
+  | .var _ => false
+  | t => ban y (rootHead t)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+@[csimp] private theorem banned_eq_root : @banned = @bannedAtRoot := by
+  funext s ban y t
+  cases t <;> simp [banned, bannedAtRoot, rootHead_eq]
+
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 omit [Interrupt] in
 private theorem unbanned {ban : Variable → Head s → Bool} {obs : List Variable}
@@ -289,6 +313,64 @@ private def excluded (ban : Variable → Head s → Bool) (c : Problem s) : Bool
     let ts := rigid c x
     ts.any (fun a => ts.any (NarrowingClash.clash a)) ||
       (near c x).any fun y => ts.any (banned ban y)
+
+/-- The two variables of an equation between variables. -/
+private def linkPair : Equation s → Option (Variable × Variable)
+  | ⟨.var a, .var b⟩ => some (a,b)
+  | _ => none
+
+private def pickLink (x : Variable) (z : Variable × Variable) : Option Variable :=
+  if z.1 = x then some z.2 else if z.2 = x then some z.1 else none
+
+/-- The variable and the other side of an equation between a variable and a
+term that is not one. -/
+private def defPair : Equation s → Option (Variable × Term s)
+  | ⟨.var _, .var _⟩ => none
+  | ⟨.var a, t⟩ => some (a,t)
+  | ⟨t, .var b⟩ => some (b,t)
+  | _ => none
+
+private def pickDef (x : Variable) (z : Variable × Term s) : Option (Term s) :=
+  if z.1 = x then some z.2 else none
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem links_split (c : Problem s) (x : Variable) :
+    c.filterMap (link x) = (c.filterMap linkPair).filterMap (pickLink x) := by
+  rw [List.filterMap_filterMap]
+  congr 1
+  funext e
+  obtain ⟨l,r⟩ := e
+  cases l <;> cases r <;> rfl
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem definitions_split (c : Problem s) (x : Variable) :
+    c.filterMap (definition x) = (c.filterMap defPair).filterMap (pickDef x) := by
+  rw [List.filterMap_filterMap]
+  congr 1
+  funext e
+  obtain ⟨l,r⟩ := e
+  cases l <;> cases r <;> rfl
+
+/-- `excluded` reading the aliases and the rigid terms of an operand from the
+equations between variables and from the definitions, each listed once. The
+other equations of the branch say nothing about either. -/
+private def excludedSplit (ban : Variable → Head s → Bool) (c : Problem s) : Bool :=
+  let links := c.filterMap linkPair
+  let defs := c.filterMap defPair
+  (c.filterMap operand).any fun x =>
+    let one := links.filterMap (pickLink x)
+    let close := x :: (one ++ one.flatMap fun y => links.filterMap (pickLink y))
+    let ts := close.flatMap fun y => defs.filterMap (pickDef y)
+    ts.any (fun a => ts.any (NarrowingClash.clash a)) ||
+      close.any fun y => ts.any (banned ban y)
+
+omit [Interrupt] in
+@[csimp] private theorem excluded_eq_split : @excluded = @excludedSplit := by
+  funext s _ _ _ _ ban c
+  unfold excluded excludedSplit rigid near
+  simp only [links_split, definitions_split]
 
 omit [Interrupt] in
 private theorem admitted {ban : Variable → Head s → Bool} {obs : List Variable} {c : Problem s}

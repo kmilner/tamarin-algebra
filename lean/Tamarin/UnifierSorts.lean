@@ -271,6 +271,106 @@ private theorem tabulate_map (θ : Template s) (vs : List Variable) {v : Variabl
     · next h => rw [h]
     · next h => exact ih ((List.mem_cons.mp hv).resolve_left h)
 
+private theorem tabulate_outside (table : List (Variable × Term s)) (v : Variable)
+    (h : ∀ e ∈ table, e.1 ≠ v) : tabulate table v = .var v := by
+  induction table with
+  | nil => rfl
+  | cons e rest ih =>
+    obtain ⟨w,t⟩ := e
+    simp only [tabulate]
+    split
+    · next same => exact absurd same.symm (h (w,t) List.mem_cons_self)
+    · exact ih fun e he => h e (List.mem_cons_of_mem _ he)
+
+private theorem tabulate_sorted (table : List (Variable × Term s))
+    (h : ∀ e ∈ table, HasSort e.2 e.1.sort) (v : Variable) : HasSort (tabulate table v) v.sort := by
+  induction table with
+  | nil => exact .var _
+  | cons e rest ih =>
+    obtain ⟨w,t⟩ := e
+    simp only [tabulate]
+    split
+    · next same => rw [same]; exact h (w,t) List.mem_cons_self
+    · exact ih fun e he => h e (List.mem_cons_of_mem _ he)
+
+/-- `arm` for the variables of the problem, their list without repeats and
+the slots of the template, all computed by the caller. Every image is computed
+once, checked, and kept in a table: `arm` computes it for the check and again
+on every read of the substitution. -/
+private def armShared (p : Problem s) (ks vars : List Variable) (hk : ks = keys p)
+    (hv : vars = p.variables) (θ : Template s) (seen : List Variable) (_hs : seen = slots p θ)
+    (base : Nat) (g : Variable → SortId) : Option (Substitution s) :=
+  let img := images θ (name seen base g)
+  let table := ks.map fun v => (v, img v)
+  if ok : table.all (fun e => e.2.checkSort e.1.sort) then
+    some {
+      image := tabulate table
+      support := vars
+      outside := fun v out => tabulate_outside table v fun e he same => by
+        obtain ⟨w,hw,rfl⟩ := List.mem_map.mp he
+        exact out (hv ▸ mem_keys.mp (hk ▸ same ▸ hw))
+      sorted := tabulate_sorted table fun e he =>
+        Term.checkSort_sound _ _ (List.all_eq_true.mp ok e he) }
+  else none
+
+private theorem armShared_eq (p : Problem s) (ks vars : List Variable) (hk : ks = keys p)
+    (hv : vars = p.variables) (θ : Template s) (seen : List Variable) (hs : seen = slots p θ)
+    (base : Nat) (g : Variable → SortId) :
+    armShared p ks vars hk hv θ seen hs base g = arm p θ base g := by
+  subst hk hv hs
+  have cond : (((keys p).map fun v => (v, images θ (name (slots p θ) base g) v)).all
+      (fun e => e.2.checkSort e.1.sort)) =
+      (keys p).all (fun v => (images θ (name (slots p θ) base g) v).checkSort v.sort) := by
+    rw [List.all_map]
+    rfl
+  unfold armShared arm
+  dsimp only
+  split
+  · next yes =>
+    have yes' := cond ▸ yes
+    simp only [yes', ↓reduceDIte]
+    congr 1
+    have same : tabulate ((keys p).map fun v => (v, images θ (name (slots p θ) base g) v)) =
+        fun v => if v ∈ p.variables then images θ (name (slots p θ) base g) v else .var v := by
+      funext v
+      split
+      · next live => exact tabulate_map _ _ (mem_keys.mpr live)
+      · next dead =>
+        apply tabulate_outside
+        intro e he eq
+        obtain ⟨w,hw,rfl⟩ := List.mem_map.mp he
+        exact dead (eq ▸ mem_keys.mp hw)
+    simp only [read, Substitution.mk.injEq, and_true]
+    exact same
+  · next no =>
+    have no' := cond ▸ no
+    simp only [no', Bool.false_eq_true, ↓reduceDIte]
+
+/-- `solveRows` with the variables of the problem listed once for all rows,
+and the variables of a template listed without repeats through buckets. -/
+private def solveRowsShared (p : Problem s) (rows : List (Template s)) (avoid : List Variable) :=
+  let vars := p.variables
+  let ks := keys p
+  let base := VariablePermutation.freshBound (vars ++ avoid)
+  rows.flatMap fun θ =>
+    let ds := demandList p θ
+    (armShared p ks vars rfl rfl θ
+      (Buckets.dedup Variable.id (ks.flatMap fun v => (θ v).variables)) (Buckets.dedup_eq ..) base
+      (assoc ((Buckets.dedup Variable.id (ds.map (·.1))).map fun w => (w, principal ds w)))).toList
+
+@[csimp] private theorem solveRows_eq_shared : @solveRows = @solveRowsShared := by
+  funext s p rows avoid
+  unfold solveRows solveRowsShared perTemplate
+  dsimp only
+  congr 1
+  funext θ
+  have listed := Buckets.dedup_eq Variable.id ((demandList p θ).map (·.1))
+  calc (arm p θ (VariablePermutation.freshBound (p.variables ++ avoid)) (assoc (sortTable p θ))).toList
+      = (arm p θ (VariablePermutation.freshBound (p.variables ++ avoid))
+          (assoc ((Buckets.dedup Variable.id ((demandList p θ).map (·.1))).map fun w =>
+            (w, principal (demandList p θ) w)))).toList := by rw [listed]; rfl
+    _ = _ := congrArg Option.toList (armShared_eq ..).symm
+
 /-- A raw solver may return each template as a closure that recomputes its
 images. Evaluate every image of a problem variable once before sorting. -/
 def solve (p : Problem s) (rows : List (Template s)) (avoid : List Variable) :=

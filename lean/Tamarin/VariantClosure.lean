@@ -553,6 +553,84 @@ theorem quietS_eq (bound : ReferenceReduction.Bound rules) (made : Quiets rules)
     exact TableNarrowing.quiet_number bound t
   · exact TableNarrowing.quiet_number bound t
 
+/-- Whether all the terms are normal, with the tests looked up. The scan
+stops at the first term that is not, as `List.all` does. -/
+def allQuietS (rules : List (Equation s)) : Quiets rules → List (Term s) → Quiets rules × Bool
+  | made, [] => (made,true)
+  | made, t :: ts =>
+    match quietS rules made t with
+    | (more,true) => allQuietS rules more ts
+    | (more,false) => (more,false)
+
+theorem allQuietS_eq (bound : ReferenceReduction.Bound rules) (made : Quiets rules)
+    (ts : List (Term s)) : (allQuietS rules made ts).2 = ts.all (quiet rules) := by
+  induction ts generalizing made with
+  | nil => rfl
+  | cons t ts ih =>
+    rw [List.all_cons]
+    unfold allQuietS
+    have head := quietS_eq bound made t
+    split
+    · next more ok =>
+      rw [ok] at head
+      rw [ih more,← head,Bool.true_and]
+    · next more ok =>
+      rw [ok] at head
+      rw [← head,Bool.false_and]
+
+/-- The branches that keep the listed variables normal, in their order. The
+images of different branches are often the same term up to the names of its
+variables, and such a term is tested once. -/
+def keptS (rules : List (Equation s)) (ws : List Variable) :
+    Quiets rules → List (RootNarrowing.Branch s) → Array (RootNarrowing.Branch s) →
+      List (RootNarrowing.Branch s)
+  | _, [], acc => acc.toList
+  | made, b :: bs, acc =>
+    match allQuietS rules made (ws.map b.subst.image) with
+    | (more,true) => keptS rules ws more bs (acc.push b)
+    | (more,false) => keptS rules ws more bs acc
+
+theorem keptS_eq (bound : ReferenceReduction.Bound rules) (ws : List Variable)
+    (made : Quiets rules) (bs : List (RootNarrowing.Branch s))
+    (acc : Array (RootNarrowing.Branch s)) :
+    keptS rules ws made bs acc =
+      acc.toList ++ bs.filter fun b => ws.all fun w => quiet rules (b.subst.image w) := by
+  induction bs generalizing made acc with
+  | nil => simp [keptS]
+  | cons b bs ih =>
+    unfold keptS
+    have head := allQuietS_eq bound made (ws.map b.subst.image)
+    rw [List.all_map] at head
+    split
+    · next more ok =>
+      rw [ok] at head
+      have yes : (ws.all fun w => quiet rules (b.subst.image w)) = true := head.symm
+      rw [ih]
+      simp [yes]
+    · next more ok =>
+      rw [ok] at head
+      have no : ¬ (ws.all fun w => quiet rules (b.subst.image w)) = true := by
+        rw [← show false = (ws.all fun w => quiet rules (b.subst.image w)) from head]
+        simp
+      rw [ih]
+      simp [no]
+
+/-- `numberedRoots` with the normality tests of the images looked up among
+those made for the earlier branches of the same term. -/
+def numberedRootsMemo (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (t : Term s) (ws : List Variable) : List (RootNarrowing.Branch s) :=
+  (keptS rules ws (Array.replicate 4096 []) (TableNarrowing.rootsAt bound t) #[]).map
+    (TableNarrowing.freeze ws)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+@[csimp] theorem numberedRoots_eq_memo :
+    @TableNarrowing.numberedRoots = @numberedRootsMemo := by
+  funext s _ _ _ _ _ rules bound t ws
+  unfold TableNarrowing.numberedRoots numberedRootsMemo
+  rw [keptS_eq bound]
+  simp
+
 /-- `every` with a state handed from one entry to the next. -/
 def everyS {α σ : Type} (f : σ → α → σ × Option Bool) : σ → List α → σ × Option Bool
   | state, [] => (state,some true)
