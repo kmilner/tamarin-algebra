@@ -636,7 +636,7 @@ uses the DH power bound. A single component proof works for multiple maps sharin
 point action. The same rule matcher recognizes renamed equations for XOR and bilinear
 pairing, and termination weights can be inferred from the oriented equations.
 [Composition criterion](Tamarin/PresentationComponents.lean) · [Bilinear bounds](Tamarin/BilinearOperatorPaths.lean) ·
-[Production packet](Tamarin/BilinearWire.lean)
+[Production packet](Tamarin/BilinearWireData.lean)
 
 Arbitrary user extensions require a whole-table argument. For example, the two rules
 `f(s(x)) → g(x)` and `g(x) → f(x)` each take at most one root step above normal arguments

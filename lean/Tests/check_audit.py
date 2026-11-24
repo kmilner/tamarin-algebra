@@ -155,8 +155,14 @@ end OtherNamespace
     ),
 ]
 
-# (label, text of TamarinRuntime.lean, its replacement, contract theorem whose
-# proof must then fail). Only contract exports appear: a proposer export has no
+# (label, text of TamarinRuntime.lean, its replacement, theorem whose proof must
+# then fail). The text is the body of a definition a contract export is built
+# on: the eight theory exports are `totalUnify`, `certifyTable`, ... on the
+# packet of the theory. The theorem is a contract statement, or a private lemma
+# of the proof root from which the contract statement named in the comment
+# beside it is proved, directly or through the lemma about that definition: a
+# contract statement that cites a lemma does not fail itself when the lemma
+# does. Only contract exports appear: a proposer export has no
 # contract, so nothing may depend on what it computes.
 CERTIFY_RUN = "CertifiedTableWire.run ds ns rules fuel"
 TOTAL_RUN = "@TotalUnifyWire.run i decls nodes roots"
@@ -172,52 +178,62 @@ EXPORT_MUTATIONS = [
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
      "theorem theoryCertify_builtin"),
     ("refuses_all_certificates", CERTIFY_RUN, "false", "theorem theoryCertify_builtin"),
-    ("refuses_joint_group_table", CERTIFY_RUN,
-     "(ds != JointGroupWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
+    # The tables of the builtins alone that a theory sends for DH with XOR and
+    # for DH with bilinear pairing: `theoryCertify_builtin` says both are accepted.
+    ("refuses_dh_xor_builtin_table", CERTIFY_RUN,
+     "(ds != Theory.Signature.declarations ⟨true, true, false, false, false, #[], 0⟩ && "
+     "CertifiedTableWire.run ds ns rules fuel)",
      "theorem theoryCertify_builtin"),
-    ("refuses_bilinear_table", CERTIFY_RUN,
-     "(ds != BilinearWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
+    ("refuses_dh_bp_builtin_table", CERTIFY_RUN,
+     "(ds != Theory.Signature.declarations ⟨true, false, true, false, false, #[], 0⟩ && "
+     "CertifiedTableWire.run ds ns rules fuel)",
      "theorem theoryCertify_builtin"),
-    ("refuses_subterm_tables", CERTIFY_RUN,
-     "((ds == XorConstructorWire.declarations || ds == JointGroupWire.declarations || "
-     "ds == BilinearWire.declarations) && CertifiedTableWire.run ds ns rules fuel)",
-     "theorem theoryCertify_builtin"),
+    # Accepts only the packet of a table of the builtins alone, so it refuses
+    # every table with a user rule. The lemma is the one theoryCertify_subterm
+    # is proved from.
+    ("refuses_user_rule_tables", CERTIFY_RUN,
+     "((List.range 32).any (fun f => match Theory.Signature.ofWire f.toUInt64 #[] 0 with "
+     "| some sig => (({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.ds == ds && "
+     "({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.ns == ns && "
+     "({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.es == rules) "
+     "| none => false) && CertifiedTableWire.run ds ns rules fuel)",
+     "theorem exportedCertifyTable_subterm"),
     # An interruptible export is tied to its search by one equation, on which
     # its contract theorems rest: a wrong search breaks that equation.
-    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),
-    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem totalUnify_quiet"),
+    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),  # theoryUnify_correct
+    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem totalUnify_quiet"),  # theoryUnify_correct
     ("total_ignores_equation_tail", TOTAL_RUN, "@TotalUnifyWire.run i decls nodes (roots.extract 0 2)",
-     "theorem totalUnify_quiet"),
+     "theorem totalUnify_quiet"),  # theoryUnify_correct
     ("total_ignores_its_caller", "Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots",
-     "totalUnifyFor Interrupt.never decls nodes roots", "theorem exportedTotalUnify_interrupted"),
+     "totalUnifyFor Interrupt.never decls nodes roots", "theorem exportedTotalUnify_interrupted"),  # theoryUnify_interrupted
     ("total_exists_stops_unasked", "Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots",
-     "4", "theorem totalUnifyExists_quiet"),
+     "4", "theorem totalUnifyExists_quiet"),  # theoryUnifyExists_correct
     ("match_ignores_scope", MATCH_RUN, "TotalMatchWire.run decls nodes roots #[]",
-     "theorem exportedTotalMatch_correct"),
-    ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),
+     "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
+    ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
     ("match_drops_equation_tail", MATCH_RUN, "TotalMatchWire.run decls nodes (roots.extract 0 2) ids",
-     "theorem exportedTotalMatch_correct"),
-    ("match_exists_always_yes", EXISTS_RUN, "1", "theorem exportedTotalMatchExists_correct"),
-    ("match_exists_always_no", EXISTS_RUN, "2", "theorem exportedTotalMatchExists_correct"),
+     "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
+    ("match_exists_always_yes", EXISTS_RUN, "1", "theorem exportedTotalMatchExists_correct"),  # theoryMatchExists_correct
+    ("match_exists_always_no", EXISTS_RUN, "2", "theorem exportedTotalMatchExists_correct"),  # theoryMatchExists_correct
     ("packed_conjunction_drops_rhs", UNPACK_RUN, "PackedConjunction.run nodes limit lhs lhs",
      "theorem exportedUnpackConjunction_correct"),
     ("packed_conjunction_drops_leaves", UNPACK_RUN, "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
-    ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem pathReduce_quiet"),
+    ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem pathReduce_quiet"),  # theoryPathReduce_correct
     ("path_reduce_omits_table", PATH_REDUCE, "@PathReductionWire.run i ds ns #[] root fuel",
-     "theorem pathReduce_quiet"),
-    ("path_reduce_always_interrupted", PATH_REDUCE, "#[#[4]]", "theorem pathReduce_quiet"),
-    ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem sessionReduce_quiet"),
+     "theorem pathReduce_quiet"),  # theoryPathReduce_correct
+    ("path_reduce_always_interrupted", PATH_REDUCE, "#[#[4]]", "theorem pathReduce_quiet"),  # theoryPathReduce_correct
+    ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem sessionReduce_quiet"),  # theoryReduce_correct
     ("session_reduce_ignores_term_rows", SESSION_REDUCE, "@SessionReductionWire.run i ds ns rules #[] root fuel",
-     "theorem sessionReduce_quiet"),
-    ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem sessionVariantCheck_quiet"),
+     "theorem sessionReduce_quiet"),  # theoryReduce_correct
+    ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
     ("variant_check_ignores_family", SESSION_CHECK,
      "@SessionVariantCheckWire.run i ds ns rules extra roots #[] fuel work",
-     "theorem sessionVariantCheck_quiet"),
-    ("variant_check_never_accepts", SESSION_CHECK, "#[#[3]]", "theorem sessionVariantCheck_quiet"),
+     "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
+    ("variant_check_never_accepts", SESSION_CHECK, "#[#[3]]", "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
     ("variant_check_ignores_its_caller",
      "Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work",
      "sessionVariantCheckFor Interrupt.never ds ns rules extra roots family fuel work",
-     "theorem exportedSessionVariantCheck_interrupted"),
+     "theorem exportedSessionVariantCheck_interrupted"),  # theoryVariantCheck_interrupted
     ("names_untested_proposal", NAME_RUN,
      "(((UnifierNames.query names heads).bind fun q => UnifierNames.tablesFor q heads ranges "
      "(some proposal.toList) nat low).getD #[#[0]])",

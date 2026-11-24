@@ -6,10 +6,10 @@ import Tamarin.DHFiniteVariants
 import Tamarin.TablePresentation
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
-import Tamarin.XorConstructorWire
-import Tamarin.JointGroupWire
+import Tamarin.XorConstructorWireData
+import Tamarin.JointGroupWireData
+import Tamarin.BilinearWireData
 import Tamarin.JointGroupTable
-import Tamarin.BilinearWire
 import Tamarin.CertifiedReduction
 import Tamarin.CertifiedReductionWire
 import Tamarin.VariantCheckWire
@@ -253,8 +253,9 @@ dictionary of the packet extended by all ambient names.
 packet, and the checker may also return it for a table that is certified:
 termination, confluence and the finite variant property are undecidable, so
 no statement limits declining on every table. It is limited on the class of
-`exportedCertifyTable_subterm` and on the three concrete packets below. Which
-other user tables are accepted is guarded by the corpus, not here. -/
+`exportedCertifyTable_subterm`, and `theoryCertify_builtin` limits it on the
+tables of the builtins alone. Which other user tables are accepted is guarded
+by the corpus, not here. -/
 private theorem exportedCertifyTable_sound {ds ns es fuel}
     (hit : Executable.certifyTable ds ns es fuel = true) :
     ∃ d rs, TableWire.input ds ns es #[] = some ⟨d,rs,[]⟩ ∧ CertifiedTableWire.Certified rs := by
@@ -286,22 +287,6 @@ private theorem exportedCertifyTable_subterm {ds ns es d rs q}
     (cls : SubtermTable.Presentation rs) (fuel : UInt64) :
     Executable.certifyTable ds ns es fuel = true :=
   CertifiedTableWire.subterm decoded cls fuel
-
-/-- Coverage floors: these three production packets (XOR with the destructor
-table, the joint group table, the bilinear pairing table) are accepted at
-budget zero. -/
-private theorem exportedPhysicalXorTable_admitted :
-    Executable.certifyTable XorConstructorWire.declarations XorConstructorWire.nodes
-      XorConstructorWire.ruleRoots 0 = true :=
-  XorConstructorWire.admitted
-
-private theorem exportedPhysicalJointGroupTable_admitted :
-    Executable.certifyTable JointGroupWire.declarations JointGroupWire.nodes JointGroupWire.ruleRoots 0 = true :=
-  JointGroupWire.admitted
-
-private theorem exportedPhysicalBilinearTable_admitted :
-    Executable.certifyTable BilinearWire.declarations BilinearWire.nodes BilinearWire.ruleRoots 0 = true :=
-  BilinearWire.admitted
 
 /-- On any decoded table a status 1 reply of the single-path reducer is an
 irreducible reduct that keeps the sorts of the input. Convergence of the table

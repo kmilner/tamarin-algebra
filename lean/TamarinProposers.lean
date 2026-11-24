@@ -6,10 +6,7 @@ import Tamarin.DHFiniteVariants
 import Tamarin.TablePresentation
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
-import Tamarin.XorConstructorWire
-import Tamarin.JointGroupWire
 import Tamarin.JointGroupTable
-import Tamarin.BilinearWire
 import Tamarin.CertifiedReduction
 import Tamarin.CertifiedReductionWire
 import Tamarin.VariantCheckWire
