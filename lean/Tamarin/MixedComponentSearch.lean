@@ -242,18 +242,47 @@ private theorem tabulate_sorted (table : List (Variable × Term s))
     · next same => rw [same]; exact h (w,t) List.mem_cons_self
     · exact ih fun e he => h e (List.mem_cons_of_mem _ he)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+/-- A variable that no row binds resolves to itself. -/
+private theorem resolve_unbound (rows : List (Row s)) (n : Nat) {v : Variable}
+    (h : v ∉ rows.map (·.1)) : resolve rows n v = .var v := by
+  cases n with
+  | zero => rfl
+  | succ n =>
+    have none : bound rows v = none := by
+      unfold bound
+      rw [Option.map_eq_none_iff, List.find?_eq_none]
+      intro d hd same
+      exact h (List.mem_map.mpr ⟨d,hd,of_decide_eq_true same⟩)
+    unfold resolve
+    rw [none]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+/-- The table of the bound variables gives the resolution of every variable. -/
+private theorem tabulate_resolve (rows : List (Row s)) (n : Nat) (v : Variable) :
+    tabulate ((rows.map (·.1)).map fun w => (w, resolve rows n w)) v = resolve rows n v := by
+  by_cases h : v ∈ rows.map (·.1)
+  · exact tabulate_map _ _ h
+  · rw [resolve_unbound rows n h]
+    apply tabulate_outside
+    intro d hd same
+    obtain ⟨w,hw,rfl⟩ := List.mem_map.mp hd
+    exact h (same ▸ hw)
+
 /-- The answer of a problem whose equations, oriented and followed through
 their bindings, never equate two different terms that are not variables. The
 bindings are substituted into each other, and the resulting valuation must
 solve every equation syntactically and respect the sort of every variable. -/
-private def solvedLeaf (a : Problem s) : Option (Substitution s) :=
-  match rowsOf [] a with
+private def solvedLeaf (p : Problem s) : Option (Substitution s) :=
+  match rowsOf [] p with
   | none => none
   | some rows =>
-    let keys := Buckets.dedup Variable.id a.variables
+    let keys := rows.map (·.1)
     let table := keys.map fun v => (v, resolve rows (rows.length + 1) v)
     if ok : (table.all fun d => d.2.checkSort d.1.sort) &&
-        a.all (fun e => decide (e.lhs.subst (tabulate table) = e.rhs.subst (tabulate table))) then
+        p.all (fun e => decide (e.lhs.subst (tabulate table) = e.rhs.subst (tabulate table))) then
       some {
         image := tabulate table
         support := keys
@@ -265,8 +294,8 @@ private def solvedLeaf (a : Problem s) : Option (Substitution s) :=
     else none
 
 omit [Interrupt] in
-private theorem solvedLeaf_spec {a : Problem s} {σ : Substitution s} (h : solvedLeaf a = some σ) :
-    a.Solves σ ∧ ∀ δ : Substitution s, a.Solves δ → ∀ v, a.Occurs v →
+private theorem solvedLeaf_spec {p : Problem s} {σ : Substitution s} (h : solvedLeaf p = some σ) :
+    p.Solves σ ∧ ∀ δ : Substitution s, p.Solves δ → ∀ v,
       EquivB (δ.image v) (δ.apply (σ.image v)) := by
   unfold solvedLeaf at h
   split at h
@@ -277,17 +306,14 @@ private theorem solvedLeaf_spec {a : Problem s} {σ : Substitution s} (h : solve
     · next ok =>
       cases h
       have checks := (Bool.and_eq_true_iff.mp ok).2
-      refine ⟨fun e he => ?_,fun δ sol v hv => ?_⟩
+      refine ⟨fun e he => ?_,fun δ sol v => ?_⟩
       · have same := of_decide_eq_true (List.all_eq_true.mp checks e he)
         change EquivB (e.lhs.subst _) (e.rhs.subst _)
         rw [same]
         exact .refl _
-      · have model := rowsOf_rows [] a hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
-        have key : v ∈ Buckets.dedup Variable.id a.variables := by
-          rw [Buckets.dedup_eq]
-          exact List.mem_eraseDups.mpr ((a.mem_variables v).mpr hv)
+      · have model := rowsOf_rows [] p hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
         change EquivB _ ((tabulate _ v).subst δ.image)
-        rw [tabulate_map (fun w => resolve rows (rows.length + 1) w) _ key]
+        rw [tabulate_resolve]
         exact resolve_equiv rows δ.image model _ v
     · cases h
 
@@ -316,17 +342,16 @@ private def generalLeaf (p : Problem s) (observe : List Variable) :
 from its bindings. Every other leaf takes the general path. -/
 private def leaf (p : Problem s) (observe : List Variable) :
     {r : Option (List (Substitution s)) // ∀ ans, r = some ans → Exact p observe ans} :=
-  match hd : solvedLeaf (p ++ anchors observe) with
+  match hd : solvedLeaf p with
   | some σ => ⟨some [σ],by
     rintro _ ⟨⟩ ρ
     obtain ⟨sound,complete⟩ := solvedLeaf_spec hd
     constructor
     · rintro ⟨δ,hd,agree⟩
-      exact ⟨σ,List.mem_singleton_self _,δ,fun v hv => (agree v hv).trans
-        (complete δ ((solves_anchored ..).mpr hd) v (anchored p observe v hv))⟩
+      exact ⟨σ,List.mem_singleton_self _,δ,fun v hv => (agree v hv).trans (complete δ hd v)⟩
     · rintro ⟨σ',hσ,μ,hm⟩
       obtain rfl := List.mem_singleton.mp hσ
-      exact ⟨μ.compose σ',p.solves_compose ((solves_anchored ..).mp sound) μ,hm⟩⟩
+      exact ⟨μ.compose σ',p.solves_compose sound μ,hm⟩⟩
   | none => generalLeaf p observe
 
 /-- Sufficient structural coverage for a leaf. Either two rigid heads clash
