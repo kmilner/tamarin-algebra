@@ -68,6 +68,11 @@ def accepts (ps : List (Part s)) (weights : Problem s → Head s → Nat) (fuel 
     TableDecrease.sorted whole && SymbolWeight.decreasing (weights whole) whole &&
     whole.all (fun r => claimed ps (head r.lhs) || checkOther whole fuel r)
 
+/-- `accepts` reads the weights only at the table it checks. -/
+theorem accepts_table_weights (ps : List (Part s)) (weights : Problem s → Head s → Nat) (fuel : Nat)
+    (rs : Problem s) : accepts ps weights fuel rs = accepts ps (fun _ => weights (table ps rs)) fuel rs :=
+  rfl
+
 /-- A table of free applications without components is accepted when it is
 sorted, the proposed weights decrease and every rule passes the structural
 row test. -/

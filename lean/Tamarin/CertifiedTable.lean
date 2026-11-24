@@ -92,6 +92,48 @@ private def withoutDH (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
   PresentationComponents.accepts (parts.map PresentationComponents.Independent.toPart)
     (SubtermDecrease.proposeWeight (fun _ => 1)) fuel rs
 
+/-! The compiled certifier runs `dh` and `withoutDH` as the definitions below:
+each proposed weighting is chosen once, as data (`SubtermDecrease.propose`), and
+every weight lookup reads that choice. -/
+
+private def dhProposed (rs : Problem d.sig) (fuel : Nat) (s : Symbols d.sig)
+    (ks : Fin 3 → Variable) (xs : List (XorTable.Schema d.sig))
+    (parts : List (PresentationComponents.Independent (TableAmbient.sig d))) : Bool :=
+  let ambient := TableAmbient.liftRules rs
+  let dh := DHWire.liftSymbols s
+  let extensions := parts.map (GroupTable.independent dh) ++
+    (BilinearTable.detect s rs).map (fun b => GroupTable.bilinear dh (BilinearTable.liftSchema b))
+  let base : Head (TableAmbient.sig d) → Nat
+    | .ac (.inl f) => if xs.any (fun a => a.f == f) then 2 else 1
+    | h => ExactTable.weight h
+  let one : Head (TableAmbient.sig d) → Nat := fun _ => 1
+  let whole := PresentationComponents.table
+    (GroupPresentationParts.dhPart dh ks :: extensions.map GroupTable.Extension.toPart) ambient
+  let inferred := (SubtermDecrease.propose one whole).weight one
+  let weight := if SymbolWeight.decreasing inferred whole then inferred
+    else (SubtermDecrease.propose base whole).weight base
+  decide (∀ i, (ks i).sort = .msg) && decide (∀ i j, ks i = ks j → i = j) &&
+    GroupTable.accepts dh ks extensions (fun _ => weight) fuel ambient
+
+@[csimp] private theorem dh_eq_proposed : @dh = @dhProposed := by
+  funext d rs fuel s ks xs parts
+  simp only [dh,dhProposed,GroupTable.accepts]
+  conv => lhs; rw [PresentationComponents.accepts_table_weights (s := TableAmbient.sig d)]
+  simp only [SubtermDecrease.propose_weight]
+
+private def withoutDHProposed (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
+    (parts : List (PresentationComponents.Independent (TableAmbient.sig d))) : Bool :=
+  let ps := parts.map PresentationComponents.Independent.toPart
+  let one : Head (TableAmbient.sig d) → Nat := fun _ => 1
+  let weight := (SubtermDecrease.propose one (PresentationComponents.table ps rs)).weight one
+  PresentationComponents.accepts ps (fun _ => weight) fuel rs
+
+@[csimp] private theorem withoutDH_eq_proposed : @withoutDH = @withoutDHProposed := by
+  funext d rs fuel parts
+  simp only [withoutDH,withoutDHProposed]
+  conv => lhs; rw [PresentationComponents.accepts_table_weights (s := TableAmbient.sig d)]
+  simp only [SubtermDecrease.propose_weight]
+
 def admits (rs : Problem d.sig) (fuel : Nat) : Bool :=
   let ambient := TableAmbient.liftRules rs
   if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
