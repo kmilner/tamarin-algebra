@@ -256,9 +256,166 @@ private theorem extensionF_eq (rules : List (Equation s)) (f : s.ACSym) (t : Ter
   · rw [List.head?_map, ReferenceMatching.subproductF_eq]
   · rfl
 
-/-- The first one-step result, found without listing the others. -/
+/-- Whether every operand of an application of `f` in the pattern that is not
+a variable has the root of some operand of the subject. A match of the pattern
+with the subject, or with a part of it, needs this. -/
+private def rooted (f : s.ACSym) (pattern subject : Term s) : Bool :=
+  let ts := ACRepresentation.flatten f subject
+  (ACRepresentation.flatten f pattern).all fun x => ts.any (sameHead x)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] [Interrupt] in
+private theorem flatten_not_ac {f : s.ACSym} {p x : Term s} (h : x ∈ ACRepresentation.flatten f p)
+    (a b : Term s) : x ≠ .ac f a b := by
+  induction p with
+  | ac g c d ic id =>
+    unfold ACRepresentation.flatten at h
+    split at h
+    · rcases List.mem_append.mp h with l | r
+      · exact ic l
+      · exact id r
+    · next other =>
+      rw [List.mem_singleton.mp h]
+      intro same
+      cases same
+      exact other rfl
+  | _ =>
+    unfold ACRepresentation.flatten at h
+    rw [List.mem_singleton.mp h]
+    intro same
+    cases same
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] [Interrupt] in
+/-- The instance of an operand that is not a variable is an operand of the
+instance. -/
+private theorem flatten_apply {f : s.ACSym} (σ : Substitution s) {p x : Term s}
+    (h : x ∈ ACRepresentation.flatten f p) (solid : ∀ v, x ≠ .var v) :
+    σ.apply x ∈ ACRepresentation.flatten f (σ.apply p) := by
+  induction p with
+  | ac g c d ic id =>
+    unfold ACRepresentation.flatten at h
+    split at h
+    · next same =>
+      subst same
+      change σ.apply x ∈ ACRepresentation.flatten f (.ac f (σ.apply c) (σ.apply d))
+      unfold ACRepresentation.flatten
+      simp only [↓reduceIte]
+      rcases List.mem_append.mp h with l | r
+      · exact List.mem_append_left _ (ic l)
+      · exact List.mem_append_right _ (id r)
+    · next other =>
+      rw [List.mem_singleton.mp h]
+      change Term.ac g (σ.apply c) (σ.apply d) ∈ ACRepresentation.flatten f (.ac g (σ.apply c) (σ.apply d))
+      unfold ACRepresentation.flatten
+      simp [other]
+  | var v =>
+    unfold ACRepresentation.flatten at h
+    exact absurd (List.mem_singleton.mp h) (solid v)
+  | atom a =>
+    unfold ACRepresentation.flatten at h
+    rw [List.mem_singleton.mp h]
+    exact List.mem_singleton_self _
+  | free g xs =>
+    unfold ACRepresentation.flatten at h
+    rw [List.mem_singleton.mp h]
+    exact List.mem_singleton_self _
+  | comm g c d =>
+    unfold ACRepresentation.flatten at h
+    rw [List.mem_singleton.mp h]
+    exact List.mem_singleton_self _
+
+omit [Interrupt] in
+/-- A pattern whose instance has its operands, modulo B, among those of the
+subject passes `rooted`. -/
+private theorem rooted_of_classes {f : s.ACSym} {pattern subject : Term s} (σ : Substitution s)
+    (inside : ∀ c ∈ Cancellation.flatten f (σ.apply pattern), c ∈ Cancellation.flatten f subject) :
+    rooted f pattern subject = true := by
+  unfold rooted
+  apply List.all_eq_true.mpr
+  intro x hx
+  apply List.any_eq_true.mpr
+  by_cases solid : ∀ v, x ≠ .var v
+  · have mem := flatten_apply σ hx solid
+    have cls : Cancellation.classOf (σ.apply x) ∈ Cancellation.flatten f (σ.apply pattern) := by
+      rw [Rewriting.DHProduct.classes]
+      exact List.mem_map_of_mem mem
+    have there := inside _ cls
+    rw [Rewriting.DHProduct.classes] at there
+    obtain ⟨y,hy,eq⟩ := List.mem_map.mp there
+    exact ⟨y,hy,sameHead_of_match σ (Quotient.exact eq).symm⟩
+  · obtain ⟨v,rfl⟩ := Classical.not_forall_not.mp solid
+    cases hts : ACRepresentation.flatten f subject with
+    | nil => exact absurd hts (ACRepresentation.flatten_nonempty f subject)
+    | cons y ys => exact ⟨y,List.mem_cons_self,rfl⟩
+
+/-- Whether an AC left side can match the subject at its root, by `rooted`.
+Other left sides are not tested. -/
+private def fits : Term s → Term s → Bool
+  | .ac f a b, t => rooted f (.ac f a b) t
+  | _, _ => true
+
+/-- `rootF` with the AC left sides that `rooted` excludes skipped. -/
+private def rootQ (rules : List (Equation s)) (t : Term s) : Option (Term s) :=
+  rules.findSome? fun r =>
+    if sameHead r.lhs t && fits r.lhs t then
+      let p : Problem s := [⟨r.lhs,t⟩]
+      (ReferenceMatching.first p (patternVariables p)).map fun σ => σ.apply r.rhs
+    else none
+
+private theorem rootQ_eq (rules : List (Equation s)) (t : Term s) : rootQ rules t = rootF rules t := by
+  unfold rootQ rootF
+  apply BagMatching.findSome_congr
+  intro r
+  by_cases head : sameHead r.lhs t = true
+  · by_cases ok : fits r.lhs t = true
+    · simp only [head,ok,Bool.and_self,↓reduceIte]
+    · simp only [head,Bool.true_and,ok,Bool.false_eq_true,↓reduceIte]
+      symm
+      rw [Option.map_eq_none_iff,ReferenceMatching.first_eq,List.head?_eq_none_iff,
+        List.eq_nil_iff_forall_not_mem]
+      intro σ hσ
+      have hit := (RuleMatches.of_complete (r := r)
+        (plain_match (ReferenceMatching.matcher s) [⟨r.lhs,t⟩] trivial)).sound σ hσ
+      apply ok
+      cases hl : r.lhs with
+      | ac f a b =>
+        rw [hl] at hit
+        unfold fits
+        exact rooted_of_classes σ fun c hc => (Cancellation.flatten_equiv f hit).subset hc
+      | _ => rfl
+  · simp only [head,Bool.false_and,Bool.false_eq_true,↓reduceIte]
+
+/-- `extensionF` with the left sides that `rooted` excludes skipped. -/
+private def extensionQ (rules : List (Equation s)) (f : s.ACSym) (t : Term s) : Option (Term s) :=
+  rules.findSome? fun r =>
+    if groups f r.lhs && rooted f r.lhs t then
+      (ReferenceMatching.subproductF f r.lhs t).map fun (θ,rest) => Term.ac f (θ.apply r.rhs) rest
+    else none
+
+private theorem extensionQ_eq (rules : List (Equation s)) (f : s.ACSym) (t : Term s) :
+    extensionQ rules f t = extensionF rules f t := by
+  unfold extensionQ extensionF
+  apply BagMatching.findSome_congr
+  intro r
+  by_cases group : groups f r.lhs = true
+  · by_cases ok : rooted f r.lhs t = true
+    · simp only [group,ok,Bool.and_self,↓reduceIte]
+    · simp only [group,Bool.true_and,ok,Bool.false_eq_true,↓reduceIte]
+      symm
+      rw [Option.map_eq_none_iff,ReferenceMatching.subproductF_eq,List.head?_eq_none_iff,
+        List.eq_nil_iff_forall_not_mem]
+      intro e he
+      have hit := ReferenceMatching.subproducts_sound f r.lhs t he
+      apply ok
+      refine rooted_of_classes e.1 fun c hc => ?_
+      have bags := Cancellation.flatten_equiv f hit
+      rw [Cancellation.flatten_ac] at bags
+      exact bags.symm.subset (List.mem_append_left _ hc)
+  · simp only [group,Bool.false_and,Bool.false_eq_true,↓reduceIte]
+
+/-- The first one-step result, found without listing the others. Left sides
+that `rooted` excludes are not matched. -/
 private def stepF (rules : List (Equation s)) (t : Term s) : Option (Term s) :=
-  BagMatching.orLater (rootF rules t) fun _ =>
+  BagMatching.orLater (rootQ rules t) fun _ =>
     match t with
     | .var _ | .atom _ => none
     | .free f xs => (List.finRange (s.arity f)).findSome? fun i =>
@@ -267,28 +424,29 @@ private def stepF (rules : List (Equation s)) (t : Term s) : Option (Term s) :=
         BagMatching.orLater ((stepF rules a).map fun u => .comm f u b) fun _ =>
           (stepF rules b).map (.comm f a)
     | .ac f a b =>
-        BagMatching.orLater (extensionF rules f (.ac f a b)) fun _ =>
+        BagMatching.orLater (extensionQ rules f (.ac f a b)) fun _ =>
           BagMatching.orLater ((stepF rules a).map fun u => .ac f u b) fun _ =>
             (stepF rules b).map (.ac f a)
 
 private theorem stepF_eq (rules : List (Equation s)) (t : Term s) :
     stepF rules t = (steps rules t).head? := by
   induction t with
-  | var v => simp [stepF, steps, BagMatching.orLater_eq, rootF_eq]
-  | atom a => simp [stepF, steps, BagMatching.orLater_eq, rootF_eq]
+  | var v => simp [stepF, steps, BagMatching.orLater_eq, rootQ_eq, rootF_eq]
+  | atom a => simp [stepF, steps, BagMatching.orLater_eq, rootQ_eq, rootF_eq]
   | free f xs ih =>
-    rw [stepF, steps, BagMatching.orLater_eq, rootF_eq, List.head?_append, BagMatching.head_flatMap]
+    rw [stepF, steps, BagMatching.orLater_eq, rootQ_eq, rootF_eq, List.head?_append,
+      BagMatching.head_flatMap]
     congr 1
     apply BagMatching.findSome_congr
     intro i
     rw [ih i, List.head?_map]
   | comm f a b ia ib =>
-    rw [stepF, steps, BagMatching.orLater_eq, rootF_eq, List.head?_append, BagMatching.orLater_eq,
-      List.head?_append, List.head?_map, List.head?_map, ia, ib]
+    rw [stepF, steps, BagMatching.orLater_eq, rootQ_eq, rootF_eq, List.head?_append,
+      BagMatching.orLater_eq, List.head?_append, List.head?_map, List.head?_map, ia, ib]
   | ac f a b ia ib =>
-    rw [stepF, steps, BagMatching.orLater_eq, rootF_eq, List.head?_append, BagMatching.orLater_eq,
-      BagMatching.orLater_eq, extensionF_eq, List.head?_append, List.head?_append, List.head?_map,
-      List.head?_map, ia, ib]
+    rw [stepF, steps, BagMatching.orLater_eq, rootQ_eq, rootF_eq, List.head?_append,
+      BagMatching.orLater_eq, BagMatching.orLater_eq, extensionQ_eq, extensionF_eq, List.head?_append,
+      List.head?_append, List.head?_map, List.head?_map, ia, ib]
 
 /-- Follow first steps until none applies, for at most the given number of
 steps. Each step stops at the first redex instead of listing all successors. -/
