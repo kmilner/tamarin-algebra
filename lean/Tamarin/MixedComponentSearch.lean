@@ -153,28 +153,90 @@ private theorem link_rows {rows out : List (Row s)} {e : Equation s}
         exact extend (r.symm.trans (eq.symm.trans l))
       · cases h
 
-/-- The rows of a list of equations, each equation added in turn. -/
-private def rowsOf : List (Row s) → Problem s → Option (List (Row s))
-  | rows, [] => some rows
-  | rows, e :: es =>
+/-- The equations of the arguments, when both sides of an equation, followed
+through the bindings, are applications of one free symbol. -/
+private def splitRow (rows : List (Row s)) (e : Equation s) : Option (Problem s) :=
+  match walk rows (rows.length + 1) e.lhs, walk rows (rows.length + 1) e.rhs with
+  | .free f xs, .free g ys =>
+    if h : f = g then some (List.ofFn fun i => ⟨xs i,ys (h ▸ i)⟩) else none
+  | _, _ => none
+
+omit [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+private theorem split_rows {rows : List (Row s)} {e : Equation s} {parts : Problem s}
+    (h : splitRow rows e = some parts) (W : Env s) (model : Models rows W)
+    (eq : EquivB (e.lhs.subst W) (e.rhs.subst W)) :
+    ∀ d ∈ parts, EquivB (d.lhs.subst W) (d.rhs.subst W) := by
+  unfold splitRow at h
+  have l := walk_equiv rows W model (rows.length + 1) e.lhs
+  have r := walk_equiv rows W model (rows.length + 1) e.rhs
+  split at h
+  · next f xs g ys hl hr =>
+    split at h
+    · next same =>
+      subst same
+      cases h
+      rw [hl] at l
+      rw [hr] at r
+      have args := (Matching.free_equiv_iff f (fun i => (xs i).subst W) (fun i => (ys i).subst W)).mp
+        (l.symm.trans (eq.trans r))
+      intro d hd
+      obtain ⟨i,rfl⟩ := List.mem_ofFn.mp hd
+      exact args i
+    · cases h
+  · cases h
+
+/-- The rows of a list of equations, each equation added in turn. An equation
+between two applications of one free symbol is replaced by the equations of
+the arguments. The fuel bounds the number of equations handled. -/
+private def rowsOf : Nat → List (Row s) → Problem s → Option (List (Row s))
+  | _, rows, [] => some rows
+  | 0, _, _ :: _ => none
+  | fuel + 1, rows, e :: es =>
     match linkRow rows e with
-    | some next => rowsOf next es
-    | none => none
+    | some next => rowsOf fuel next es
+    | none =>
+      match splitRow rows e with
+      | some parts => rowsOf fuel rows (parts ++ es)
+      | none => none
 
 omit [Interrupt] in
-private theorem rowsOf_rows : ∀ (rows : List (Row s)) (p : Problem s) {out : List (Row s)},
-    rowsOf rows p = some out → ∀ W : Env s, Models rows W →
+private theorem rowsOf_rows : ∀ (fuel : Nat) (rows : List (Row s)) (p : Problem s) {out : List (Row s)},
+    rowsOf fuel rows p = some out → ∀ W : Env s, Models rows W →
       (∀ e ∈ p, EquivB (e.lhs.subst W) (e.rhs.subst W)) → Models out W
-  | rows, [], out, h, W, model, _ => by
+  | _, rows, [], out, h, W, model, _ => by
+    unfold rowsOf at h
     cases h
     exact model
-  | rows, e :: es, out, h, W, model, eqs => by
+  | 0, rows, e :: es, out, h, W, model, _ => by
+    unfold rowsOf at h
+    cases h
+  | fuel + 1, rows, e :: es, out, h, W, model, eqs => by
     unfold rowsOf at h
     split at h
     · next next hl =>
-      exact rowsOf_rows next es h W (link_rows hl W model (eqs e List.mem_cons_self))
+      exact rowsOf_rows fuel next es h W (link_rows hl W model (eqs e List.mem_cons_self))
         (fun e' he' => eqs e' (List.mem_cons_of_mem _ he'))
-    · cases h
+    · split at h
+      · next parts hs =>
+        refine rowsOf_rows fuel rows (parts ++ es) h W model fun d hd => ?_
+        rcases List.mem_append.mp hd with part | later
+        · exact split_rows hs W model (eqs e List.mem_cons_self) d part
+        · exact eqs d (List.mem_cons_of_mem _ later)
+      · cases h
+
+/-- The number of positions of a term. -/
+private def width : Term s → Nat
+  | .var _ => 1
+  | .atom _ => 1
+  | .free _ xs => 1 + (List.ofFn fun i => width (xs i)).sum
+  | .comm _ a b => 1 + width a + width b
+  | .ac _ a b => 1 + width a + width b
+
+/-- A bound on the number of equations that building the rows of a problem
+handles: each split replaces an equation by those of the arguments of two
+terms that are subterms of the problem. -/
+private def extent (p : Problem s) : Nat :=
+  p.length + 4 * (p.map fun e => width e.lhs + width e.rhs).sum
 
 /-- The image of a variable with the bindings of the rows substituted, at most
 the given number of times. -/
@@ -276,7 +338,7 @@ their bindings, never equate two different terms that are not variables. The
 bindings are substituted into each other, and the resulting valuation must
 solve every equation syntactically and respect the sort of every variable. -/
 private def solvedLeaf (p : Problem s) : Option (Substitution s) :=
-  match rowsOf [] p with
+  match rowsOf (extent p) [] p with
   | none => none
   | some rows =>
     let keys := rows.map (·.1)
@@ -311,7 +373,7 @@ private theorem solvedLeaf_spec {p : Problem s} {σ : Substitution s} (h : solve
         change EquivB (e.lhs.subst _) (e.rhs.subst _)
         rw [same]
         exact .refl _
-      · have model := rowsOf_rows [] p hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
+      · have model := rowsOf_rows _ [] p hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
         change EquivB _ ((tabulate _ v).subst δ.image)
         rw [tabulate_resolve]
         exact resolve_equiv rows δ.image model _ v
