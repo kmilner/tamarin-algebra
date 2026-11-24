@@ -1,6 +1,7 @@
 import Tamarin.MixedRigidBranches
 import Tamarin.ACReferenceBranch
 import Tamarin.NarrowingClash
+import Tamarin.MixedSolvedForm
 
 /-! Combine the homogeneous answers of distinct AC operators on a shared worklist.
 The denotation observes the same slots in every child, including slots that disappear
@@ -70,7 +71,230 @@ private def direct (p : Problem s) : RigidBranches.Certified p := by
     obtain ⟨_,model,_⟩ := extend_solution p δ.image hd
     exact False.elim (ok (model_compatible _ model))
 
-private def leaf (p : Problem s) (observe : List Variable) :
+section Solved
+open SolvedForm
+
+/-- The term that the rows bind to a variable. -/
+private def bound (rows : List (Row s)) (x : Variable) : Option (Term s) :=
+  (rows.find? (fun d => decide (d.1 = x))).map (·.2)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem bound_equiv {rows : List (Row s)} {W : Env s} (model : Models rows W)
+    {x : Variable} {t : Term s} (h : bound rows x = some t) : EquivB (W x) (t.subst W) := by
+  unfold bound at h
+  obtain ⟨d,found,rfl⟩ := Option.map_eq_some_iff.mp h
+  have key : d.1 = x := by simpa using List.find?_some found
+  have here := model d (List.mem_of_find?_eq_some found)
+  rwa [key] at here
+
+/-- Follow the bindings of the rows from a term, at most the given number of times. -/
+private def walk (rows : List (Row s)) : Nat → Term s → Term s
+  | n+1, .var x =>
+    match bound rows x with
+    | some t => walk rows n t
+    | none => .var x
+  | _, t => t
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem walk_equiv (rows : List (Row s)) (W : Env s) (model : Models rows W) :
+    ∀ (n : Nat) (t : Term s), EquivB (t.subst W) ((walk rows n t).subst W)
+  | 0, t => by unfold walk; exact .refl _
+  | n+1, t => by
+    cases t with
+    | var x =>
+      unfold walk
+      split
+      · next t found => exact (bound_equiv model found).trans (walk_equiv rows W model n t)
+      · exact .refl _
+    | _ => unfold walk; exact .refl _
+
+/-- Add an equation to the rows: both sides are followed through the bindings,
+equal results need nothing, and a variable on either side is bound to the
+other side. Two different terms that are not variables are not handled here. -/
+private def linkRow (rows : List (Row s)) (e : Equation s) : Option (List (Row s)) :=
+  let l := walk rows (rows.length + 1) e.lhs
+  let r := walk rows (rows.length + 1) e.rhs
+  if l = r then some rows else
+    match l with
+    | .var x => some ((x,r) :: rows)
+    | _ =>
+      match r with
+      | .var y => some ((y,l) :: rows)
+      | _ => none
+
+omit [Interrupt] in
+private theorem link_rows {rows out : List (Row s)} {e : Equation s}
+    (h : linkRow rows e = some out) (W : Env s) (model : Models rows W)
+    (eq : EquivB (e.lhs.subst W) (e.rhs.subst W)) : Models out W := by
+  unfold linkRow at h
+  dsimp only at h
+  have l := walk_equiv rows W model (rows.length + 1) e.lhs
+  have r := walk_equiv rows W model (rows.length + 1) e.rhs
+  have extend {x : Variable} {t : Term s} (here : EquivB (W x) (t.subst W)) :
+      Models ((x,t) :: rows) W := by
+    intro d hd
+    rcases List.mem_cons.mp hd with rfl | hd
+    · exact here
+    · exact model d hd
+  split at h
+  · cases h
+    exact model
+  · split at h
+    · next x hx =>
+      cases h
+      rw [hx] at l
+      exact extend (l.symm.trans (eq.trans r))
+    · split at h
+      · next y hy =>
+        cases h
+        rw [hy] at r
+        exact extend (r.symm.trans (eq.symm.trans l))
+      · cases h
+
+/-- The rows of a list of equations, each equation added in turn. -/
+private def rowsOf : List (Row s) → Problem s → Option (List (Row s))
+  | rows, [] => some rows
+  | rows, e :: es =>
+    match linkRow rows e with
+    | some next => rowsOf next es
+    | none => none
+
+omit [Interrupt] in
+private theorem rowsOf_rows : ∀ (rows : List (Row s)) (p : Problem s) {out : List (Row s)},
+    rowsOf rows p = some out → ∀ W : Env s, Models rows W →
+      (∀ e ∈ p, EquivB (e.lhs.subst W) (e.rhs.subst W)) → Models out W
+  | rows, [], out, h, W, model, _ => by
+    cases h
+    exact model
+  | rows, e :: es, out, h, W, model, eqs => by
+    unfold rowsOf at h
+    split at h
+    · next next hl =>
+      exact rowsOf_rows next es h W (link_rows hl W model (eqs e List.mem_cons_self))
+        (fun e' he' => eqs e' (List.mem_cons_of_mem _ he'))
+    · cases h
+
+/-- The image of a variable with the bindings of the rows substituted, at most
+the given number of times. -/
+private def resolve (rows : List (Row s)) : Nat → Variable → Term s
+  | 0, v => .var v
+  | n+1, v =>
+    match bound rows v with
+    | some t => t.subst (resolve rows n)
+    | none => .var v
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem resolve_equiv (rows : List (Row s)) (W : Env s) (model : Models rows W) :
+    ∀ (n : Nat) (v : Variable), EquivB (W v) ((resolve rows n v).subst W)
+  | 0, v => .refl _
+  | n+1, v => by
+    unfold resolve
+    split
+    · next t found =>
+      refine (bound_equiv model found).trans ?_
+      rw [Term.subst_comp]
+      exact t.subst_equiv _ _ fun u _ => resolve_equiv rows W model n u
+    · exact .refl _
+
+/-- A valuation given by its images of the listed variables. -/
+private def tabulate : List (Variable × Term s) → Variable → Term s
+  | [], v => .var v
+  | (w,t) :: rest, v => if v = w then t else tabulate rest v
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem tabulate_map (θ : Env s) (vs : List Variable) {v : Variable} (hv : v ∈ vs) :
+    tabulate (vs.map fun w => (w, θ w)) v = θ v := by
+  induction vs with
+  | nil => cases hv
+  | cons w ws ih =>
+    simp only [List.map_cons, tabulate]
+    split
+    · next h => rw [h]
+    · next h => exact ih ((List.mem_cons.mp hv).resolve_left h)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem tabulate_outside (table : List (Variable × Term s)) (v : Variable)
+    (h : ∀ e ∈ table, e.1 ≠ v) : tabulate table v = .var v := by
+  induction table with
+  | nil => rfl
+  | cons e rest ih =>
+    obtain ⟨w,t⟩ := e
+    simp only [tabulate]
+    split
+    · next same => exact absurd same.symm (h (w,t) List.mem_cons_self)
+    · exact ih fun e he => h e (List.mem_cons_of_mem _ he)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem tabulate_sorted (table : List (Variable × Term s))
+    (h : ∀ e ∈ table, HasSort e.2 e.1.sort) (v : Variable) : HasSort (tabulate table v) v.sort := by
+  induction table with
+  | nil => exact .var _
+  | cons e rest ih =>
+    obtain ⟨w,t⟩ := e
+    simp only [tabulate]
+    split
+    · next same => rw [same]; exact h (w,t) List.mem_cons_self
+    · exact ih fun e he => h e (List.mem_cons_of_mem _ he)
+
+/-- The answer of a problem whose equations, oriented and followed through
+their bindings, never equate two different terms that are not variables. The
+bindings are substituted into each other, and the resulting valuation must
+solve every equation syntactically and respect the sort of every variable. -/
+private def solvedLeaf (a : Problem s) : Option (Substitution s) :=
+  match rowsOf [] a with
+  | none => none
+  | some rows =>
+    let keys := Buckets.dedup Variable.id a.variables
+    let table := keys.map fun v => (v, resolve rows (rows.length + 1) v)
+    if ok : (table.all fun d => d.2.checkSort d.1.sort) &&
+        a.all (fun e => decide (e.lhs.subst (tabulate table) = e.rhs.subst (tabulate table))) then
+      some {
+        image := tabulate table
+        support := keys
+        outside := fun v out => tabulate_outside table v fun d hd same => by
+          obtain ⟨w,hw,rfl⟩ := List.mem_map.mp hd
+          exact out (same ▸ hw)
+        sorted := tabulate_sorted table fun d hd =>
+          Term.checkSort_sound _ _ (List.all_eq_true.mp (Bool.and_eq_true_iff.mp ok).1 d hd) }
+    else none
+
+omit [Interrupt] in
+private theorem solvedLeaf_spec {a : Problem s} {σ : Substitution s} (h : solvedLeaf a = some σ) :
+    a.Solves σ ∧ ∀ δ : Substitution s, a.Solves δ → ∀ v, a.Occurs v →
+      EquivB (δ.image v) (δ.apply (σ.image v)) := by
+  unfold solvedLeaf at h
+  split at h
+  · cases h
+  · next rows hr =>
+    dsimp only at h
+    split at h
+    · next ok =>
+      cases h
+      have checks := (Bool.and_eq_true_iff.mp ok).2
+      refine ⟨fun e he => ?_,fun δ sol v hv => ?_⟩
+      · have same := of_decide_eq_true (List.all_eq_true.mp checks e he)
+        change EquivB (e.lhs.subst _) (e.rhs.subst _)
+        rw [same]
+        exact .refl _
+      · have model := rowsOf_rows [] a hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
+        have key : v ∈ Buckets.dedup Variable.id a.variables := by
+          rw [Buckets.dedup_eq]
+          exact List.mem_eraseDups.mpr ((a.mem_variables v).mpr hv)
+        change EquivB _ ((tabulate _ v).subst δ.image)
+        rw [tabulate_map (fun w => resolve rows (rows.length + 1) w) _ key]
+        exact resolve_equiv rows δ.image model _ v
+    · cases h
+
+end Solved
+
+/-- The general leaf: purify, reconstruct, and assign sorts. -/
+private def generalLeaf (p : Problem s) (observe : List Variable) :
     {r : Option (List (Substitution s)) // ∀ ans, r = some ans → Exact p observe ans} := by
   let a := p ++ anchors observe
   let raw := direct a
@@ -87,6 +311,23 @@ private def leaf (p : Problem s) (observe : List Variable) :
       exact ⟨σ,hσ,μ,fun v hv => (agree v hv).trans (hm v (anchored p observe v hv))⟩
     · rintro ⟨σ,hσ,μ,hm⟩
       exact ⟨μ.compose σ,p.solves_compose ((solves_anchored ..).mp (cert.sound σ hσ)) μ,hm⟩
+
+/-- A leaf that is a solved form up to orientation has the single answer read
+from its bindings. Every other leaf takes the general path. -/
+private def leaf (p : Problem s) (observe : List Variable) :
+    {r : Option (List (Substitution s)) // ∀ ans, r = some ans → Exact p observe ans} :=
+  match hd : solvedLeaf (p ++ anchors observe) with
+  | some σ => ⟨some [σ],by
+    rintro _ ⟨⟩ ρ
+    obtain ⟨sound,complete⟩ := solvedLeaf_spec hd
+    constructor
+    · rintro ⟨δ,hd,agree⟩
+      exact ⟨σ,List.mem_singleton_self _,δ,fun v hv => (agree v hv).trans
+        (complete δ ((solves_anchored ..).mpr hd) v (anchored p observe v hv))⟩
+    · rintro ⟨σ',hσ,μ,hm⟩
+      obtain rfl := List.mem_singleton.mp hσ
+      exact ⟨μ.compose σ',p.solves_compose ((solves_anchored ..).mp sound) μ,hm⟩⟩
+  | none => generalLeaf p observe
 
 /-- Sufficient structural coverage for a leaf. Either two rigid heads clash
 at a slot, or every competing definition agrees modulo B for all slot values. -/
@@ -109,9 +350,14 @@ private theorem leaf_completes (p : Problem s) (obs) (h : ConstructorDecided p o
     next => rfl
   obtain ⟨rows,hr⟩ := Option.isSome_iff_exists.mp ha
   dsimp only [a] at hr
+  have general : (generalLeaf p obs).val.isSome := by
+    unfold generalLeaf
+    dsimp only
+    split <;> simp_all
   unfold leaf
-  dsimp only
-  split <;> simp_all
+  split
+  · rfl
+  · exact general
 
 private def selected (f : s.ACSym) (e : Equation s) : Bool :=
   match e.rhs with

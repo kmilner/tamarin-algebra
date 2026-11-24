@@ -359,18 +359,21 @@ Known weak clauses:
   `LIST(x*y, x*inv(y))` are not checked within 900 s (7.7 GB). The linear system is not the
   cause. The homogeneous solver works on the multiplicities and selects from the Hilbert basis,
   as Maude does, it lists the families Maude lists, and it takes 2% of the time of a
-  unification. The time goes into what is done for every selected answer: each one is handed to
-  the general solver as a problem of its own, which lists its subterms, purifies it,
-  reconstructs a valuation and gives it sorts, at the leaf and again at the root, where Maude
-  writes the bindings of a selection into its substitution. Those passes are now tabulated
-  (`purifyTabled`, `reconstructOfTabled`, `solveRowsShared`, `excludedSplit`, `bannedAtRoot`,
-  each a proved `@[csimp]` equation), and the checker tests a branch image that recurs up to
-  the names of its variables once (`numberedRootsMemo`). That took the listing of 2982
-  unifiers of `c*x*x*x = y*z*w` from 4.0 to 3.0 billion instructions (0.52 s to 0.39 s; Maude
-  0.18 s) and the check above from 5.4 s. By call counts of that check, 60% of its time is
-  still the unifier (7144 leaves for 97 unifications), 15% the normality tests of the images
-  and 5% the tests of the 4931 successors it keeps. Such a call is interruptible: it
-  returns within 0.1 s of a cancellation, and the Rust backend stops it after 2^26 questions.
+  unification. The cost is per selected answer. A selected answer whose child problem is a
+  solved form gets its bindings read off directly (`solvedLeaf`, the counterpart of Maude's
+  `buildSolution`). Any other child is handed to the general solver, which lists its
+  subterms, purifies it, reconstructs a valuation and gives it sorts. Those passes are
+  tabulated (`purifyTabled`, `reconstructOfTabled`, `solveRowsShared`, `excludedSplit`,
+  `bannedAtRoot`, each a proved `@[csimp]` equation), a child without free or C subterms skips
+  the search for rigid pairs (`refineProblemPlain`), and the checker tests a branch image that
+  recurs up to the names of its variables once (`numberedRootsMemo`). Listing the 2982
+  unifiers of `c*x*x*x = y*z*w` takes 1.5 billion instructions (about 0.23 s, Maude 0.20 s on
+  the same machine). The variant check above gains nothing from the direct leaves: most of its
+  leaves hold two definitions of one slot or a constructor cycle and take the general path. By
+  call counts of that check, 60% of its time is the unifier (7144 leaves for 97
+  unifications), 15% the normality tests of the images and 5% the tests of the 4931 successors
+  it keeps. Such a call is interruptible: it returns within 0.1 s of a cancellation, and the
+  Rust backend stops it after 2^26 questions.
 - Reduction on a table `theory_certify` did not accept. `tamarin_theory_path_reduce` answers, with
   every reply specified, and claims no uniqueness, so the Rust backend counts its answers as
   assumed. Every family of variants on such a table is assumed as well.
@@ -678,7 +681,10 @@ identify corresponding arguments. Competing C definitions branch on the two alig
 For each AC operator, the homogeneous solver splits all its slot equations together. Each
 child retains the other operators’ constraints and the observed slot values. The internal
 one-sort signature also admits kind-level input terms. Projection restores source sorts and
-caller freshness. [Purification](Tamarin/MixedReconstruction.lean) · [AC frontier](Tamarin/MixedComponentSearch.lean) · [Sort transfer](Tamarin/MixedComponentEncoding.lean)
+caller freshness. A child whose equations, followed through the variables they bind, never
+equate two different terms that are not variables is a solved form, as in Maude's
+`buildSolution`: its one answer is read from the bindings and checked on the child's
+equations, and only the other children are purified and reconstructed. [Purification](Tamarin/MixedReconstruction.lean) · [AC frontier](Tamarin/MixedComponentSearch.lean) · [Sort transfer](Tamarin/MixedComponentEncoding.lean)
 
 For `X + a = Y + b`, the reference returns the exact swap and the family with a common
 nonempty remainder. A second AC operator can force two previously distinct sums to agree.
