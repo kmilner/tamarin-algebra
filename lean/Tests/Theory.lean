@@ -75,10 +75,10 @@ private def matchRows : Array (Array UInt64) :=
 private def xorTable : Table := ⟨⟨false, true, false, false, false, #[], 0⟩, #[], #[]⟩
 private def xorWords : Array UInt64 := #[4,1,2,2,2,2, 2,4,0,2]
 private def xorRows : Array (Array UInt64) :=
-  #[#[0,1,2], #[2,4], #[4,1,0,1], #[0,1,2],
-    #[0,1,2], #[0,1,2], #[4,1,4,5], #[2,4],
-    #[0,1,2], #[0,1,2], #[0,2,2], #[4,1,9,10], #[4,1,8,11], #[0,2,2]]
-private def xorRoots : Array UInt64 := #[2,3, 6,7, 12,13]
+  #[#[0,1,2], #[0,1,2], #[4,1,0,1], #[2,4],
+    #[0,1,2], #[0,1,2], #[0,2,2], #[4,1,5,6], #[4,1,4,7], #[0,2,2],
+    #[0,1,2], #[2,4], #[4,1,10,11], #[0,1,2]]
+private def xorRoots : Array UInt64 := #[2,3, 8,9, 12,13]
 #guard xorTable.packet.ds == xorWords
 #guard xorTable.packet.ns == xorRows
 #guard xorTable.packet.es == xorRoots

@@ -126,32 +126,36 @@ def em (a b : Term) : Term := .app 3 C.em [a, b]
 /-- Diffie–Hellman, oriented left to right. -/
 def dhRules : List (Term × Term) := [
   (exp x1 one, x1),
-  (exp (exp x1 x2) x3, exp x1 (mult x2 x3)),
   (exp dhNeutral x1, dhNeutral),
-  (mult x1 one, x1),
+  (exp (exp x1 x2) x3, exp x1 (mult x2 x3)),
   (inv (inv x1), x1),
   (inv one, one),
-  (mult x1 (inv x1), one),
-  (mult (inv x1) (inv x2), inv (mult x1 x2)),
-  (mult (inv (mult x1 x2)) x2, inv x1),
   (inv (mult (inv x1) x2), mult x1 (inv x2)),
   (mult x1 (mult (inv x1) x2), x2),
+  (mult x1 (inv x1), one),
+  (mult x1 one, x1),
+  (mult (inv (mult x1 x2)) (mult x2 x3), mult (inv x1) x3),
+  (mult (inv (mult x1 x2)) x2, inv x1),
   (mult (inv x1) (mult (inv x2) x3), mult (inv (mult x1 x2)) x3),
-  (mult (inv (mult x1 x2)) (mult x2 x3), mult (inv x1) x3)]
+  (mult (inv x1) (inv x2), inv (mult x1 x2))]
 
 /-- Exclusive or. -/
 def xorRules : List (Term × Term) := [
-  (xor x1 zero, x1),
   (xor x1 x1, zero),
-  (xor x1 (xor x1 x2), x2)]
+  (xor x1 (xor x1 x2), x2),
+  (xor x1 zero, x1)]
 
 /-- Bilinear pairing. -/
 def bpRules : List (Term × Term) := [
-  (pmult one x1, x1),
   (pmult x3 (pmult x2 x1), pmult (mult x3 x2) x1),
+  (pmult one x1, x1),
   (em x1 (pmult x2 x3), exp (em x1 x3) x2)]
 
-/-- The rules of the enabled builtins. Multisets and natural numbers have none. -/
+/-- The rules of the enabled builtins. Multisets and natural numbers have none.
+Each list above is in the order of Tamarin's rule sets of that builtin, which are
+sorted as terms; the variant checker tries rules in the order of the table, and
+on Diffie–Hellman products it is about twice as fast in this order as in the
+order the rules are usually written. -/
 def Signature.builtinRules (sig : Signature) : List (Term × Term) :=
   (if sig.dh then dhRules else []) ++ (if sig.xor then xorRules else []) ++
     (if sig.bp then bpRules else [])
