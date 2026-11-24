@@ -203,12 +203,10 @@ where the searches get specialized for the declarations of a packet. -/
     Array (Array UInt64) :=
   @SessionReductionWire.run i ds ns rules extra root fuel
 
-@[export tamarin_total_unify]
 def totalUnify (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : Array (Array UInt64) :=
   Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots
 
-@[export tamarin_total_unify_exists]
 def totalUnifyExists (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : UInt8 :=
   Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots
@@ -228,20 +226,16 @@ def applyNames (tables : Array (Array UInt64)) (nat : Bool) (reply : Array (Arra
     Array (Array UInt64) :=
   (UnifierNames.apply tables nat reply).getD #[#[0]]
 
-@[export tamarin_total_match]
 def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
     Array (Array UInt64) := TotalMatchWire.run decls nodes roots ids
 
-@[export tamarin_total_match_exists]
 def totalMatchExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
     UInt8 := TotalMatchWire.runExists decls nodes roots ids
 
-@[export tamarin_path_reduce]
 def pathReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
   Interrupt.run poll #[#[4]] fun i => pathReduceFor i ds ns rules root fuel
 
-@[export tamarin_session_reduce]
 def sessionReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules : Array UInt64) (extra : Array (Array UInt64)) (root fuel : UInt64) :
     Array (Array UInt64) :=
@@ -252,7 +246,6 @@ def sessionReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array 
     (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
   @SessionVariantCheckWire.run i ds ns rules extra roots family fuel work
 
-@[export tamarin_session_variant_check]
 def sessionVariantCheck (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules : Array UInt64) (extra : Array (Array UInt64)) (roots : Array UInt64)
     (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
@@ -262,7 +255,6 @@ def sessionVariantCheck (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := CheckedVariantsWire.run ds ns rules roots fuel
 
-@[export tamarin_certify_table]
 def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64) (fuel : UInt64) : Bool :=
   CertifiedTableWire.run ds ns rules fuel
 

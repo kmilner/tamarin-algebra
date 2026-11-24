@@ -57,7 +57,7 @@ private def rules : Array UInt64 := #[3,0,4,1]
 #guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
 #guard CheckedReductionWire.run ds ns #[3,0,3,1] 3 0 == #[#[2]]
 -- The two projections are a table of the class the certifier has to accept
--- (`exportedCertifyTable_subterm`). The conflicting pair is outside it.
+-- (`theoryCertify_subterm` on the packet of a theory). The conflicting pair is outside it.
 #guard Executable.certifyTable ds ns rules 0
 #guard !Executable.certifyTable ds ns #[3,0,3,1] 0
 -- The single-path reducer follows the first branch of the checked one. On this

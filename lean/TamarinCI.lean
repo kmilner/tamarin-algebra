@@ -48,16 +48,19 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the eighteen exports whose reply the Rust backend uses as the
+export, one of the ten exports whose reply the Rust backend uses as the
 answer, or states a property of the specification itself:
 
-* `totalUnify`, `totalUnifyExists`, `nameUnifiers`, `unpackConjunction`,
-  `totalMatch`, `totalMatchExists`;
-* `certifyTable`, `sessionReduce`, `pathReduce`;
-* `sessionVariantCheck`;
+* `nameUnifiers`, `unpackConjunction`;
 * over the theory of a Tamarin file (`Tamarin.Theory`): `theoryUnify`,
   `theoryUnifyExists`, `theoryMatch`, `theoryMatchExists`, `theoryCertify`,
   `theoryPathReduce`, `theoryReduce`, `theoryVariantCheck`.
+
+The theory exports are the definitions `totalUnify`, `totalUnifyExists`,
+`totalMatch`, `totalMatchExists`, `certifyTable`, `pathReduce`,
+`sessionReduce` and `sessionVariantCheck` on the packet of the theory. Those
+definitions are no exports; the private theorems about them below are lemmas
+of the theory statements and not contract.
 
 A statement here says what a reply means in terms of the decoded packet and
 the rewrite relation. No statement names a search, a classifier or a
@@ -115,13 +118,13 @@ and the reply is that family fully decoded unless one of its answers adds at
 least `2^64 - bound` distinct variables to the query, `bound` being the least
 identifier above the variables of the query. Malformed input has the same
 decline status. -/
-theorem exportedTotalUnify_correct {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedTotalUnify_correct {poll : Unit → Bool} (quiet : poll () = false) :
     TotalUnifyWire.Packet.Correct (Executable.totalUnify poll) :=
   totalUnify_quiet quiet ▸ TotalUnifyWire.Packet.correct
 
 /-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
 says stop. It carries no answer. -/
-theorem exportedTotalUnify_interrupted (poll : Unit → Bool) (ds ns es) :
+private theorem exportedTotalUnify_interrupted (poll : Unit → Bool) (ds ns es) :
     Executable.totalUnify poll ds ns es = #[#[4]] ↔ poll () = true := by
   constructor
   · intro reply
@@ -145,13 +148,13 @@ theorem exportedTotalUnify_interrupted (poll : Unit → Bool) (ds ns es) :
 /-- The decision export answers 1 exactly when the decoded query has a
 unifier, 2 exactly when it has none, and 0 exactly when the packet does not
 decode. It never declines a decoded query. -/
-theorem exportedTotalUnifyExists_correct {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedTotalUnifyExists_correct {poll : Unit → Bool} (quiet : poll () = false) :
     TotalUnifyWire.ExistsCorrect (Executable.totalUnifyExists poll) :=
   totalUnifyExists_quiet quiet ▸ TotalUnifyWire.existsCorrect
 
 /-- The interrupted reply 4 is given exactly when the caller's `poll` says
 stop. It decides nothing. -/
-theorem exportedTotalUnifyExists_interrupted (poll : Unit → Bool) (ds ns es) :
+private theorem exportedTotalUnifyExists_interrupted (poll : Unit → Bool) (ds ns es) :
     Executable.totalUnifyExists poll ds ns es = 4 ↔ poll () = true := by
   constructor
   · intro reply
@@ -174,7 +177,7 @@ theorem exportedTotalUnifyExists_interrupted (poll : Unit → Bool) (ds ns es) :
 
 /-- The decision also holds in the caller's entire signature, even when only
 the declarations occurring in the terms crossed the wire. -/
-theorem exportedTotalUnifyExists_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+private theorem exportedTotalUnifyExists_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) (extra : Signature) :
     Executable.totalUnifyExists poll ds ns es = 1 ↔
       ∃ σ, (SignatureExtension.query extra p).Solves σ := by
@@ -207,12 +210,12 @@ theorem exportedTotalUnifyExists_ambient {poll : Unit → Bool} (quiet : poll ()
 theorem exportedUnpackConjunction_correct : PackedConjunction.Correct Executable.unpackConjunction :=
   PackedConjunction.correct
 
-theorem exportedTotalMatch_correct : TotalMatchWire.Correct Executable.totalMatch :=
+private theorem exportedTotalMatch_correct : TotalMatchWire.Correct Executable.totalMatch :=
   TotalMatchWire.correct
 
 /-- Exact matching coverage in the caller's entire signature, even when
 only the declarations occurring in the terms crossed the wire. -/
-theorem exportedTotalMatch_ambient {ds ns es d p} (ids)
+private theorem exportedTotalMatch_ambient {ds ns es d p} (ids)
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) :
     ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalMatch ds ns es ids) answers ∧
       ∀ extra : Signature, Matching.Complete (SignatureExtension.query extra p) (TotalMatchWire.Bindable ids)
@@ -222,12 +225,12 @@ theorem exportedTotalMatch_ambient {ds ns es d p} (ids)
 
 /-- The decision export answers 1 exactly when a scoped match exists and 2
 exactly when none exists. -/
-theorem exportedTotalMatchExists_correct : TotalMatchWire.ExistsCorrect Executable.totalMatchExists :=
+private theorem exportedTotalMatchExists_correct : TotalMatchWire.ExistsCorrect Executable.totalMatchExists :=
   TotalMatchWire.existsCorrect
 
 /-- The decision also holds in the caller's entire signature, even when only
 the declarations occurring in the terms crossed the wire. -/
-theorem exportedTotalMatchExists_ambient {ds ns es d p} (ids)
+private theorem exportedTotalMatchExists_ambient {ds ns es d p} (ids)
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) (extra : Signature) :
     Executable.totalMatchExists ds ns es ids = 1 ↔
       ∃ σ, Matching.Matches (SignatureExtension.query extra p) σ ∧
@@ -252,7 +255,7 @@ termination, confluence and the finite variant property are undecidable, so
 no statement limits declining on every table. It is limited on the class of
 `exportedCertifyTable_subterm` and on the three concrete packets below. Which
 other user tables are accepted is guarded by the corpus, not here. -/
-theorem exportedCertifyTable_sound {ds ns es fuel}
+private theorem exportedCertifyTable_sound {ds ns es fuel}
     (hit : Executable.certifyTable ds ns es fuel = true) :
     ∃ d rs, TableWire.input ds ns es #[] = some ⟨d,rs,[]⟩ ∧ CertifiedTableWire.Certified rs := by
   have spec := CertifiedTableWire.correct ds ns es fuel
@@ -278,7 +281,7 @@ asymmetric encryption and signatures, and user equations of that shape.
 Outside this class and the three packets below, `false` stays unlimited:
 termination, confluence and the finite variant property are undecidable, so
 no certifier accepts every certified table. -/
-theorem exportedCertifyTable_subterm {ds ns es d rs q}
+private theorem exportedCertifyTable_subterm {ds ns es d rs q}
     (decoded : TableWire.input ds ns es #[] = some ⟨d,rs,q⟩)
     (cls : SubtermTable.Presentation rs) (fuel : UInt64) :
     Executable.certifyTable ds ns es fuel = true :=
@@ -287,16 +290,16 @@ theorem exportedCertifyTable_subterm {ds ns es d rs q}
 /-- Coverage floors: these three production packets (XOR with the destructor
 table, the joint group table, the bilinear pairing table) are accepted at
 budget zero. -/
-theorem exportedPhysicalXorTable_admitted :
+private theorem exportedPhysicalXorTable_admitted :
     Executable.certifyTable XorConstructorWire.declarations XorConstructorWire.nodes
       XorConstructorWire.ruleRoots 0 = true :=
   XorConstructorWire.admitted
 
-theorem exportedPhysicalJointGroupTable_admitted :
+private theorem exportedPhysicalJointGroupTable_admitted :
     Executable.certifyTable JointGroupWire.declarations JointGroupWire.nodes JointGroupWire.ruleRoots 0 = true :=
   JointGroupWire.admitted
 
-theorem exportedPhysicalBilinearTable_admitted :
+private theorem exportedPhysicalBilinearTable_admitted :
     Executable.certifyTable BilinearWire.declarations BilinearWire.nodes BilinearWire.ruleRoots 0 = true :=
   BilinearWire.admitted
 
@@ -306,13 +309,13 @@ is not assumed, so the reply need not be the only normal form. Status 2 is
 returned only for a table that is not range restricted or when an irreducible
 reduct lost a sort, and status 3 only while some rewrite path is at least as
 long as the depth. -/
-theorem exportedPathReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedPathReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
     PathReductionWire.Correct (Executable.pathReduce poll) :=
   pathReduce_quiet quiet ▸ PathReductionWire.correct
 
 /-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
 says stop. It carries no answer. -/
-theorem exportedPathReduce_interrupted (poll : Unit → Bool) (ds ns es root n) :
+private theorem exportedPathReduce_interrupted (poll : Unit → Bool) (ds ns es root n) :
     Executable.pathReduce poll ds ns es root n = #[#[4]] ↔ poll () = true := by
   constructor
   · intro reply
@@ -330,13 +333,13 @@ theorem exportedPathReduce_interrupted (poll : Unit → Bool) (ds ns es root n) 
 
 /-- The session reducer reads the terms of a call from further node rows, over
 the table of the rules-only packet and all ambient names. -/
-theorem exportedSessionReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedSessionReduce_correct {poll : Unit → Bool} (quiet : poll () = false) :
     SessionReductionWire.Correct (Executable.sessionReduce poll) :=
   sessionReduce_quiet quiet ▸ SessionReductionWire.correct
 
 /-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
 says stop. It carries no answer. -/
-theorem exportedSessionReduce_interrupted (poll : Unit → Bool) (ds ns es extra root n) :
+private theorem exportedSessionReduce_interrupted (poll : Unit → Bool) (ds ns es extra root n) :
     Executable.sessionReduce poll ds ns es extra root n = #[#[4]] ↔ poll () = true := by
   constructor
   · intro reply
@@ -356,7 +359,7 @@ theorem exportedSessionReduce_interrupted (poll : Unit → Bool) (ds ns es extra
 that adds node rows to that packet replies with the unique normal form of the
 term the rows denote, or with a request for more depth. The certificate is
 the one of the rules-only packet. -/
-theorem exportedSessionReduce_certified {poll : Unit → Bool} (quiet : poll () = false)
+private theorem exportedSessionReduce_certified {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra root n d rs t budget}
     (decoded : SessionReductionWire.input ds ns es extra root = some ⟨d,rs,t⟩)
     (hit : Executable.certifyTable ds ns es budget = true) :
@@ -370,7 +373,7 @@ theorem exportedSessionReduce_certified {poll : Unit → Bool} (quiet : poll () 
 packet replies with the unique normal form at every depth that bounds all
 rewrite paths from its term under the lifted rules. The bound is on the
 rewrite relation, so the request for more depth cannot persist. -/
-theorem exportedSessionReduce_complete {poll : Unit → Bool} (quiet : poll () = false)
+private theorem exportedSessionReduce_complete {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra root d rs t budget}
     (decoded : SessionReductionWire.input ds ns es extra root = some ⟨d,rs,t⟩)
     (hit : Executable.certifyTable ds ns es budget = true) (n : UInt64)
@@ -381,13 +384,13 @@ theorem exportedSessionReduce_complete {poll : Unit → Bool} (quiet : poll () =
       (SessionReductionWire.input_table decoded) hit) n within
 
 /-- The session variant checker accepts with status 1 only. -/
-theorem exportedSessionVariantCheck_correct {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedSessionVariantCheck_correct {poll : Unit → Bool} (quiet : poll () = false) :
     SessionVariantCheckWire.Correct (Executable.sessionVariantCheck poll) :=
   sessionVariantCheck_quiet quiet ▸ SessionVariantCheckWire.correct
 
 /-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
 says stop. It decides nothing about the family. -/
-theorem exportedSessionVariantCheck_interrupted (poll : Unit → Bool)
+private theorem exportedSessionVariantCheck_interrupted (poll : Unit → Bool)
     (ds ns es extra roots family fuel work) :
     Executable.sessionVariantCheck poll ds ns es extra roots family fuel work = #[#[4]] ↔
       poll () = true := by
@@ -417,7 +420,7 @@ theorem exportedSessionVariantCheck_interrupted (poll : Unit → Bool)
 accepted on a call that adds node rows to that packet is a complete set of
 variants of the observations the rows denote, with exactly the proposed
 substitutions on the variables of the observations. -/
-theorem exportedSessionVariantCheck_certified {poll : Unit → Bool} (quiet : poll () = false)
+private theorem exportedSessionVariantCheck_certified {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra roots family fuel work d rs q members budget}
     (decoded : SessionVariantCheckWire.input ds ns es extra roots family = some ⟨d,rs,q,members⟩)
     (hit : Executable.certifyTable ds ns es budget = true)
@@ -442,7 +445,7 @@ terms of the query, their instances by the members, and the values of the
 most general narrowing successors of the members. All of this is stated
 through the rewrite relation and subsumption modulo the declared laws: no
 unifier, narrower or reducer is named. -/
-theorem exportedSessionVariantCheck_decides {poll : Unit → Bool} (quiet : poll () = false) :
+private theorem exportedSessionVariantCheck_decides {poll : Unit → Bool} (quiet : poll () = false) :
     SessionVariantCheckWire.Decides (Executable.sessionVariantCheck poll) :=
   sessionVariantCheck_quiet quiet ▸ SessionVariantCheckWire.decides
 
@@ -451,7 +454,7 @@ whose depth exceeds every rewrite path from the terms the check has to
 normalize, and whose work limit is zero or covers the narrowing layers of the
 members, never replies with status 3, and replies with status 1 exactly when
 the family is closed. -/
-theorem exportedSessionVariantCheck_complete {poll : Unit → Bool} (quiet : poll () = false)
+private theorem exportedSessionVariantCheck_complete {poll : Unit → Bool} (quiet : poll () = false)
     {ds ns es extra roots family d rs q members budget}
     (decoded : SessionVariantCheckWire.input ds ns es extra roots family = some ⟨d,rs,q,members⟩)
     (hit : Executable.certifyTable ds ns es budget = true) (fuel work : UInt64)
@@ -499,7 +502,7 @@ theorem variantDemand_bounded {s : Signature} [DecidableEq s.FreeSym] [Decidable
 /-- The packet dictionary may contain only the query's symbols. Every reply
 other than the decline word still covers caller solutions involving other
 symbols. The hypothesis is one the caller observes. -/
-theorem exportedTotalUnify_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+private theorem exportedTotalUnify_ambient {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
     (answered : Executable.totalUnify poll ds ns es ≠ #[#[0]]) :
     ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalUnify poll ds ns es) answers ∧
@@ -511,7 +514,7 @@ theorem exportedTotalUnify_ambient {poll : Unit → Bool} (quiet : poll () = fal
 
 /-- A decodable query without solutions is never declined: its reply is the
 bare status row of the empty family. -/
-theorem exportedTotalUnify_unsatisfiable {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+private theorem exportedTotalUnify_unsatisfiable {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) (unsolvable : ¬ p.Satisfiable) :
     Executable.totalUnify poll ds ns es = #[#[1]] := by
   obtain ⟨answers,ok,reply⟩ := (exportedTotalUnify_correct quiet).valid _ _ _ _ _ decoded
@@ -541,7 +544,7 @@ theorem exportedNameUnifiers_correct : UnifierNames.Correct Executable.nameUnifi
 a complete family of unifiers of the query, with every variable of its range
 named apart from the query. The hypothesis is one the caller observes: its
 reader succeeded. -/
-theorem exportedNameUnifiers_total {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+private theorem exportedNameUnifiers_total {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
     (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
     (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal true low) true
@@ -564,7 +567,7 @@ theorem exportedNameUnifiers_total {poll : Unit → Bool} (quiet : poll () = fal
 the members with a variable of that sort. It still decides every solution
 whose images have no such variable: such a solution solves the query exactly
 when it is an instance of a member that is read. -/
-theorem exportedNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
+private theorem exportedNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = false) {ds ns es d p}
     (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
     (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (low : Bool) {named}
     (read : UnifierNames.apply (Executable.nameUnifiers names heads ranges proposal false low) false
@@ -592,9 +595,9 @@ theorem exportedNameUnifiers_natFree {poll : Unit → Bool} (quiet : poll () = f
 
 The `tamarin_theory_*` exports take the theory of the file (`Theory.Signature`,
 `Theory.Table`) instead of declaration words and add the rules of the enabled
-builtins themselves. Each is the export above on the packet the theory gives
-(`Theory.Table.packet`), so every statement below is a statement above with
-that packet, the decoded query or table being read through `Theory`. A call on
+builtins themselves. Each is the definition above on the packet the theory gives
+(`Theory.Table.packet`), so every statement below is a lemma above with that
+packet, the decoded query or table being read through `Theory`. A call on
 a table names the table it runs on by the same arguments `theoryCertify`
 receives, so the certificate of a session is the one of its own table. -/
 
@@ -1087,15 +1090,7 @@ run_cmd do
   -- Exports with a contract: each is mentioned by a theorem of this file.
   let contractExports : List (Name × Name) := [
     (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
-    (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
-    (``Tamarin.Executable.totalUnifyExists, `tamarin_total_unify_exists),
     (``Tamarin.Executable.nameUnifiers, `tamarin_name_unifiers),
-    (``Tamarin.Executable.totalMatch, `tamarin_total_match),
-    (``Tamarin.Executable.totalMatchExists, `tamarin_total_match_exists),
-    (``Tamarin.Executable.pathReduce, `tamarin_path_reduce),
-    (``Tamarin.Executable.certifyTable, `tamarin_certify_table),
-    (``Tamarin.Executable.sessionReduce, `tamarin_session_reduce),
-    (``Tamarin.Executable.sessionVariantCheck, `tamarin_session_variant_check),
     (``Tamarin.Executable.theoryUnify, `tamarin_theory_unify),
     (``Tamarin.Executable.theoryUnifyExists, `tamarin_theory_unify_exists),
     (``Tamarin.Executable.theoryMatch, `tamarin_theory_match),
@@ -1105,7 +1100,7 @@ run_cmd do
     (``Tamarin.Executable.theoryReduce, `tamarin_theory_reduce),
     (``Tamarin.Executable.theoryVariantCheck, `tamarin_theory_variant_check)]
   -- Proposer exports carry no contract. The caller uses their output only as a
-  -- proposal that `tamarin_session_variant_check` has to accept, so no theorem of
+  -- proposal that `tamarin_theory_variant_check` has to accept, so no theorem of
   -- this file may mention them. Their theorems are in `TamarinProposers.lean`.
   let proposerExports : List (Name × Name) := [
     (``Tamarin.Executable.flatACEqual, `tamarin_flat_ac_equal),

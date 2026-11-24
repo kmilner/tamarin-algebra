@@ -6,12 +6,12 @@
 # owner and can be changed under the gate alone.
 #
 # The exports are in two classes, both listed in lean/ExportManifest.txt.
-#   * A contract export (`export` lines, eleven of them) is one whose reply
+#   * A contract export (`export` lines, ten of them) is one whose reply
 #     the Rust backend uses as the answer. What is promised about it is
 #     exactly the theorems of lean/TamarinCI.lean that mention it.
 #   * A proposer export (`proposer` lines) has no contract. The Rust backend
 #     uses its output only inside a proposed family of variants, and uses that
-#     family only after the contract export tamarin_session_variant_check
+#     family only after the contract export tamarin_theory_variant_check
 #     accepted it. A wrong proposal is rejected there, so nothing needs to be
 #     promised about a proposer and its algorithm can be changed arbitrarily.
 #     Moving an export between the classes changes what is trusted and is an
@@ -57,8 +57,8 @@
 #
 # What the gate does not enforce: anything no theorem of lean/TamarinCI.lean
 # states. That includes how often a contract export declines where no theorem
-# limits it (certify_table beyond its class of constructor-pattern tables
-# and three concrete packets), everything about a proposer (the generators
+# limits it (theory_certify beyond its class of constructor-pattern tables
+# and the tables of the builtins alone), everything about a proposer (the generators
 # general_variants, checked_variants and fold_variants are proposers),
 # running time and memory, that the Rust backend really passes every
 # proposed family through the checker, and the files under

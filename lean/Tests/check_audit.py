@@ -168,20 +168,20 @@ SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
 SESSION_CHECK = "@SessionVariantCheckWire.run i ds ns rules extra roots family fuel work"
 NAME_RUN = "UnifierNames.run names heads ranges proposal nat low"
 EXPORT_MUTATIONS = [
-    ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem exportedCertifyTable_sound"),
+    ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem theoryCertify_sound"),
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
-     "theorem exportedCertifyTable_sound"),
-    ("refuses_all_certificates", CERTIFY_RUN, "false", "theorem exportedPhysicalXorTable_admitted"),
+     "theorem theoryCertify_builtin"),
+    ("refuses_all_certificates", CERTIFY_RUN, "false", "theorem theoryCertify_builtin"),
     ("refuses_joint_group_table", CERTIFY_RUN,
      "(ds != JointGroupWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
-     "theorem exportedPhysicalJointGroupTable_admitted"),
+     "theorem theoryCertify_builtin"),
     ("refuses_bilinear_table", CERTIFY_RUN,
      "(ds != BilinearWire.declarations && CertifiedTableWire.run ds ns rules fuel)",
-     "theorem exportedPhysicalBilinearTable_admitted"),
+     "theorem theoryCertify_builtin"),
     ("refuses_subterm_tables", CERTIFY_RUN,
      "((ds == XorConstructorWire.declarations || ds == JointGroupWire.declarations || "
      "ds == BilinearWire.declarations) && CertifiedTableWire.run ds ns rules fuel)",
-     "theorem exportedCertifyTable_subterm"),
+     "theorem theoryCertify_builtin"),
     # An interruptible export is tied to its search by one equation, on which
     # its contract theorems rest: a wrong search breaks that equation.
     ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),
@@ -421,7 +421,7 @@ def standalone_audit(directory: str, env: dict) -> None:
     donor = other.splitlines()[1]
     mutated = mutated.replace(misplaced, misplaced + donor + "\n")
     # A theorem of the root that the manifest no longer lists anywhere.
-    unlisted = "Tamarin.exportedTotalUnify_unsatisfiable"
+    unlisted = "Tamarin.theoryUnify_unsatisfiable"
     line = next(l for l in manifest.splitlines() if l.split()[:2] == ["theorem", unlisted])
     assert manifest.count(line) == 1 and all(unlisted not in b for b in blocks[:6]), "manifest layout changed"
     mutated = mutated.replace(line + "\n", "")
@@ -450,7 +450,7 @@ def standalone_audit(directory: str, env: dict) -> None:
     code, output = audit("--manifest", str(path), "--spec", str(spec_path),
                          "--contract-typed", "Tamarin.TotalUnifyWire.input",
                          "--contract-typed", "Tamarin.CertifiedReductionWire.path",
-                         "--contract-typed", "Tamarin.Executable.totalUnify")
+                         "--contract-typed", "Tamarin.Executable.theoryUnify")
     assert code != 0, output
     for label, expected in [
         ("export missing from the manifest",
@@ -473,7 +473,7 @@ def standalone_audit(directory: str, env: dict) -> None:
          "Tamarin.CertifiedReductionWire.path is listed to be followed by type only, "
          "but no contract statement depends on it"),
         ("export listed as a type-only constant",
-         "Tamarin.Executable.totalUnify cannot be followed by type only: it is an export"),
+         "Tamarin.Executable.theoryUnify cannot be followed by type only: it is an export"),
         ("theorem of the proof root missing from the manifest",
          f"theorem {unlisted} of TamarinCI is not in the manifest"),
         ("proposer export missing from the manifest",
@@ -487,20 +487,20 @@ def standalone_audit(directory: str, env: dict) -> None:
 
     # A contract export cannot be turned into a proposer while its theorems
     # stay in the proof root, however the manifest lists them.
-    demoted = next(b for b in blocks if b.startswith("export tamarin_total_match "))
+    demoted = next(b for b in blocks if b.startswith("export tamarin_theory_match "))
     header, *statements = demoted.splitlines()
     as_proposer = header.replace("export", "proposer", 1) + "\n"
     names = [l.split()[1] for l in statements]
     for label, text, expected in [
         ("contract export listed as a proposer with its theorems",
          manifest.replace(demoted, as_proposer + "\n".join(statements) + "\n"),
-         ["a proposer export carries no contract, but a theorem is listed under tamarin_total_match"]),
+         ["a proposer export carries no contract, but a theorem is listed under tamarin_theory_match"]),
         ("contract export listed as a proposer, its theorems listed as other",
          manifest.replace(demoted, as_proposer) + "other\n" + "\n".join(statements) + "\n",
-         [f"proposer export tamarin_total_match is mentioned by contract theorem {n}" for n in names]),
+         [f"proposer export tamarin_theory_match is mentioned by contract theorem {n}" for n in names]),
         ("contract export listed as a proposer, its theorems unlisted",
          manifest.replace(demoted, as_proposer),
-         [f"proposer export tamarin_total_match is mentioned by contract theorem {names[0]}",
+         [f"proposer export tamarin_theory_match is mentioned by contract theorem {names[0]}",
           f"theorem {names[-1]} of TamarinCI is not in the manifest"]),
     ]:
         path.write_text(text)

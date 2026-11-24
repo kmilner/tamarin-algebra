@@ -76,7 +76,7 @@ namespace Tamarin
 is finitary: every simultaneous problem, including kind-level inputs and
 caller-reserved names, has a finite complete family that leaves other
 variables alone and avoids those names. No search is named here.
-`exportedTotalUnify_correct` in the proof root says what the export returns. -/
+`theoryUnify_correct` in the proof root says what the export returns. -/
 theorem mixedUnification_finitary {s : Signature}
     [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
     (p : Problem s) (avoid : List Variable) :

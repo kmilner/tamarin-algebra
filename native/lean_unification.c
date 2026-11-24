@@ -3,12 +3,11 @@
 #include <stdint.h>
 
 /* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
- * export is specified by theorems and may be used as the answer: total_unify, unpack_conjunction,
- * total_unify_exists, total_match, total_match_exists, certify_table, session_reduce,
- * path_reduce, session_variant_check and the theory_* exports over the theory of a Tamarin file.
- * Every other export, checked_variants, general_variants and
- * fold_variants included, is a proposer with no contract: its output may only go into a
- * proposed family of variants that tamarin_lean_session_variant_check then has to accept. */
+ * export is specified by theorems and may be used as the answer: unpack_conjunction,
+ * name_unifiers and the eight theory_* exports over the theory of a Tamarin file. Every other
+ * export, checked_variants, general_variants and fold_variants included, is a proposer with no
+ * contract: its output may only go into a proposed family of variants that
+ * tamarin_lean_theory_variant_check then has to accept. */
 
 /* The generated module initializer and export use the pinned Lean ABI. */
 extern lean_object *initialize_tamarin_x2dspec_TamarinRuntime(uint8_t builtin);
@@ -375,19 +374,6 @@ void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count
     return wrap_rows(tamarin_unpack_conjunction(word_rows(rows, count), limit, lhs, rhs));
 }
 
-extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *, lean_object *);
-
-extern uint8_t tamarin_certify_table(lean_object *, lean_object *, lean_object *, uint64_t);
-
-/* 1 certifies the table: it decodes, is range restricted, convergent modulo the declared C and AC
-   laws and has the finite variant property. 0 carries no information: it is the reply to a
-   malformed packet and may be the reply to any table, certified or not. */
-uint8_t tamarin_lean_certify_table(whole_word_slice decls, const whole_word_slice *rows,
-                                   size_t count, whole_word_slice rules, uint64_t fuel) {
-    return tamarin_certify_table(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                atom_array(rules.data, rules.size), fuel);
-}
-
 extern uint8_t tamarin_factor_refutes(lean_object *, lean_object *, lean_object *);
 
 uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_slice *rows,
@@ -396,19 +382,11 @@ uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_sli
                                  atom_array(equations.data, equations.size));
 }
 
-/* NULL when the call was interrupted: see interrupt_watch. */
-void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice equations, interrupt_watch *watch) {
-    return watched_rows(watch, tamarin_total_unify(watch_closure(watch),
-                        atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(equations.data, equations.size)));
-}
-
 extern lean_object *tamarin_name_unifiers(lean_object *, lean_object *, lean_object *, lean_object *,
                                           uint8_t, uint8_t);
 
 /* Tables that name the variables a family of unifiers adds to its query. The reply of
-   tamarin_lean_total_unify is read through them; no other reading of it is specified.
+   tamarin_lean_theory_unify is read through them; no other reading of it is specified.
    names holds two words for each variable row of the request, by the identifier of the row: the
    caller's identifier of the variable's name hint and its index. heads holds the identifier and
    sort words of the query variables in the order of the rows of every arm. ranges holds one row
@@ -433,61 +411,15 @@ void *tamarin_lean_name_unifiers(whole_word_slice names, whole_word_slice heads,
 
 extern lean_object *tamarin_apply_names(lean_object *, uint8_t, lean_object *);
 
-/* The reply of tamarin_lean_total_unify read through the tables of tamarin_lean_name_unifiers, in
+/* The reply of tamarin_lean_theory_unify read through the tables of tamarin_lean_name_unifiers, in
    words: {0} when there is no reading, or the status row {1} and then, for each arm with a table,
    an empty row and one row {variable row, sort, tokens...} for each query variable the arm binds.
    A token {5 + sort, index, hint} is a variable of the range; the other tokens are those of
-   tamarin_lean_total_unify. The caller's reader is tested against this function. */
+   tamarin_lean_theory_unify. The caller's reader is tested against this function. */
 void *tamarin_lean_apply_names(const whole_word_slice *tables, size_t table_count, uint8_t nat,
                                const whole_word_slice *reply, size_t reply_count) {
     return wrap_rows(tamarin_apply_names(word_rows(tables, table_count), nat != 0,
                                         word_rows(reply, reply_count)));
-}
-
-extern lean_object *tamarin_path_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
-                                       uint64_t, uint64_t);
-
-/* Reduce on a table that is only range restricted: one rewrite path is followed. The packet is a
-   table packet with the term among its rows, and root is its node index. {1, term} is an
-   irreducible reduct (not known to be unique), {2} an unsupported table or a reduct that lost a
-   sort, {3} a request for more depth, {0} a malformed packet. NULL when the call was
-   interrupted: see interrupt_watch. */
-void *tamarin_lean_path_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel,
-                               interrupt_watch *watch) {
-    return watched_rows(watch, tamarin_path_reduce(watch_closure(watch),
-                        atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(rules.data, rules.size), root, fuel));
-}
-
-extern lean_object *tamarin_total_match(lean_object *, lean_object *, lean_object *, lean_object *);
-
-void *tamarin_lean_total_match(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice equations, whole_word_slice bindable) {
-    return wrap_rows(tamarin_total_match(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                        atom_array(equations.data, equations.size), atom_array(bindable.data, bindable.size)));
-}
-
-extern uint8_t tamarin_total_unify_exists(lean_object *, lean_object *, lean_object *, lean_object *);
-
-/* Same packet as tamarin_lean_total_unify. 1: a unifier exists; 2: none exists; 0: malformed packet;
-   4: the call was interrupted and decided nothing (see interrupt_watch). */
-uint8_t tamarin_lean_total_unify_exists(whole_word_slice decls, const whole_word_slice *rows,
-                                        size_t count, whole_word_slice equations,
-                                        interrupt_watch *watch) {
-    uint8_t reply = tamarin_total_unify_exists(watch_closure(watch),
-                        atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(equations.data, equations.size));
-    return watch->stopped ? 4 : reply;
-}
-
-extern uint8_t tamarin_total_match_exists(lean_object *, lean_object *, lean_object *, lean_object *);
-
-/* 1: a scoped match exists; 2: none exists; 0: malformed packet. */
-uint8_t tamarin_lean_total_match_exists(whole_word_slice decls, const whole_word_slice *rows,
-                                        size_t count, whole_word_slice equations, whole_word_slice bindable) {
-    return tamarin_total_match_exists(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                     atom_array(equations.data, equations.size), atom_array(bindable.data, bindable.size));
 }
 
 extern lean_object *tamarin_checked_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t);
@@ -499,59 +431,21 @@ void *tamarin_lean_checked_variants(whole_word_slice decls, const whole_word_sli
                     atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel));
 }
 
-extern lean_object *tamarin_session_reduce(lean_object *, lean_object *, lean_object *, lean_object *,
-                                          lean_object *, uint64_t, uint64_t);
-
-/* Reduce on the table that tamarin_lean_certify_table accepted. decls, rows and rules are exactly
-   the words of that rules-only packet. The term arrives as further node rows: row i of extra has
-   node index count + i, and a child index may name a table row or an earlier further row. root is
-   a node index. The reply is {1, term} with the unique normal form, {3} a request for more depth,
-   or {0} for a malformed packet. NULL when the call was interrupted: see interrupt_watch. */
-void *tamarin_lean_session_reduce(whole_word_slice decls, const whole_word_slice *rows, size_t count,
-                                  whole_word_slice rules, const whole_word_slice *extra,
-                                  size_t added, uint64_t root, uint64_t fuel,
-                                  interrupt_watch *watch) {
-    return watched_rows(watch, tamarin_session_reduce(watch_closure(watch),
-                        atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(rules.data, rules.size), word_rows(extra, added), root, fuel));
-}
-
-extern lean_object *tamarin_session_variant_check(lean_object *, lean_object *, lean_object *,
-                                                 lean_object *, lean_object *, lean_object *,
-                                                 lean_object *, uint64_t, uint64_t);
-
-/* Check a proposed family of variants on the table that tamarin_lean_certify_table accepted, with
-   the observations and the images of the family in further node rows as in
-   tamarin_lean_session_reduce. roots are node indices and each family row lists node pairs
-   (variable node, image node). The reply has one row: {1} accepted, {2, reason, member} rejected,
-   {3} budget exhausted, {0} malformed packet. Only {1} accepts. NULL when the call was
-   interrupted: see interrupt_watch. */
-void *tamarin_lean_session_variant_check(whole_word_slice decls, const whole_word_slice *rows,
-                                         size_t count, whole_word_slice rules,
-                                         const whole_word_slice *extra, size_t added,
-                                         whole_word_slice roots, const whole_word_slice *family,
-                                         size_t members, uint64_t fuel, uint64_t work,
-                                         interrupt_watch *watch) {
-    return watched_rows(watch, tamarin_session_variant_check(watch_closure(watch),
-                        atom_array(decls.data, decls.size),
-                        word_rows(rows, count), atom_array(rules.data, rules.size),
-                        word_rows(extra, added), atom_array(roots.data, roots.size),
-                        word_rows(family, members), fuel, work));
-}
-
-/* The tamarin_lean_theory_* functions are the functions above on the packet of the theory of a
-   Tamarin file (lean/Tamarin/Theory.lean). Instead of declaration words they take flags (dh 1,
-   xor 2, bp 4, mset 8, nat 16), the arities of the other free symbols (ids 16, 17, ...) and the
-   number of user AC symbols (ids 16, 17, ...). The rows and rules of a table are the user rules
-   only, with node indices from 0; the rules of the enabled builtins are added by Lean. The terms
-   of a call on a table are the rows of extra, numbered from 0, and root, roots and the node pairs
-   of family index them. Arguments that are not those of a valid signature get the reply to a
-   malformed packet. */
+/* The tamarin_lean_theory_* functions take the theory of a Tamarin file
+   (lean/Tamarin/Theory.lean) instead of declaration words: flags (dh 1, xor 2, bp 4, mset 8,
+   nat 16), the arities of the other free symbols (ids 16, 17, ...) and the number of user AC
+   symbols (ids 16, 17, ...). Lean derives the declarations of every symbol from them. The rows
+   and rules of a table are the user rules only, with node indices from 0; the rules of the
+   enabled builtins are added by Lean. The terms of a call on a table are the rows of extra,
+   numbered from 0, and root, roots and the node pairs of family index them. Arguments that are
+   not those of a valid signature get the reply to a malformed packet. */
 
 extern lean_object *tamarin_theory_unify(lean_object *, uint64_t, lean_object *, uint64_t,
                                          lean_object *, lean_object *);
 
-/* NULL when the call was interrupted: see interrupt_watch. */
+/* The complete family of unifiers of the equations between the roots of rows: {1} and then, for
+   each unifier, an empty row and one binding row per query variable; {0} for a malformed packet.
+   NULL when the call was interrupted: see interrupt_watch. */
 void *tamarin_lean_theory_unify(uint64_t flags, whole_word_slice free, uint64_t ac,
                                 const whole_word_slice *rows, size_t count,
                                 whole_word_slice equations, interrupt_watch *watch) {
@@ -563,7 +457,8 @@ void *tamarin_lean_theory_unify(uint64_t flags, whole_word_slice free, uint64_t 
 extern uint8_t tamarin_theory_unify_exists(lean_object *, uint64_t, lean_object *, uint64_t,
                                            lean_object *, lean_object *);
 
-/* 1: a unifier exists; 2: none exists; 0: malformed packet; 4: interrupted. */
+/* Same packet as tamarin_lean_theory_unify. 1: a unifier exists; 2: none exists; 0: malformed
+   packet; 4: the call was interrupted and decided nothing (see interrupt_watch). */
 uint8_t tamarin_lean_theory_unify_exists(uint64_t flags, whole_word_slice free, uint64_t ac,
                                          const whole_word_slice *rows, size_t count,
                                          whole_word_slice equations, interrupt_watch *watch) {
@@ -599,8 +494,10 @@ uint8_t tamarin_lean_theory_match_exists(uint64_t flags, whole_word_slice free, 
 extern uint8_t tamarin_theory_certify(uint64_t, lean_object *, uint64_t, lean_object *, lean_object *,
                                       uint64_t);
 
-/* 1 certifies the table of the theory, builtin rules and user rules: see
-   tamarin_lean_certify_table. */
+/* 1 certifies the table of the theory, builtin rules and user rules: it decodes, is range
+   restricted, convergent modulo the declared C and AC laws and has the finite variant property.
+   0 carries no information: it is the reply to a malformed packet and may be the reply to any
+   table, certified or not. */
 uint8_t tamarin_lean_theory_certify(uint64_t flags, whole_word_slice free, uint64_t ac,
                                     const whole_word_slice *rows, size_t count,
                                     whole_word_slice rules, uint64_t fuel) {
@@ -612,7 +509,10 @@ extern lean_object *tamarin_theory_path_reduce(lean_object *, uint64_t, lean_obj
                                                lean_object *, lean_object *, lean_object *, uint64_t,
                                                uint64_t);
 
-/* Replies as tamarin_lean_path_reduce. NULL when the call was interrupted. */
+/* Reduce on a table that is only range restricted: one rewrite path is followed. {1, term} is an
+   irreducible reduct (not known to be unique), {2} an unsupported table or a reduct that lost a
+   sort, {3} a request for more depth, {0} a malformed packet. NULL when the call was
+   interrupted: see interrupt_watch. */
 void *tamarin_lean_theory_path_reduce(uint64_t flags, whole_word_slice free, uint64_t ac,
                                       const whole_word_slice *rows, size_t count,
                                       whole_word_slice rules, const whole_word_slice *extra,
@@ -627,8 +527,10 @@ extern lean_object *tamarin_theory_reduce(lean_object *, uint64_t, lean_object *
                                           lean_object *, lean_object *, lean_object *, uint64_t,
                                           uint64_t);
 
-/* Replies as tamarin_lean_session_reduce, on the table tamarin_lean_theory_certify accepted for
-   the same flags, free, ac, rows and rules. NULL when the call was interrupted. */
+/* Reduce on the table that tamarin_lean_theory_certify accepted for the same flags, free, ac,
+   rows and rules. The reply is {1, term} with the unique normal form, {3} a request for more
+   depth, or {0} for a malformed packet. NULL when the call was interrupted: see
+   interrupt_watch. */
 void *tamarin_lean_theory_reduce(uint64_t flags, whole_word_slice free, uint64_t ac,
                                  const whole_word_slice *rows, size_t count, whole_word_slice rules,
                                  const whole_word_slice *extra, size_t added, uint64_t root,
@@ -642,8 +544,11 @@ extern lean_object *tamarin_theory_variant_check(lean_object *, uint64_t, lean_o
                                                  lean_object *, lean_object *, lean_object *,
                                                  lean_object *, lean_object *, uint64_t, uint64_t);
 
-/* Replies as tamarin_lean_session_variant_check, on the table tamarin_lean_theory_certify accepted
-   for the same flags, free, ac, rows and rules. NULL when the call was interrupted. */
+/* Check a proposed family of variants on the table that tamarin_lean_theory_certify accepted
+   for the same flags, free, ac, rows and rules. roots index the observations in extra and each
+   family row lists pairs (variable row, image row) of extra. The reply has one row: {1}
+   accepted, {2, reason, member} rejected, {3} budget exhausted, {0} malformed packet. Only {1}
+   accepts. NULL when the call was interrupted: see interrupt_watch. */
 void *tamarin_lean_theory_variant_check(uint64_t flags, whole_word_slice free, uint64_t ac,
                                         const whole_word_slice *rows, size_t count,
                                         whole_word_slice rules, const whole_word_slice *extra,
