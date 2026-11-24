@@ -201,6 +201,65 @@ def refineProblem (p : Problem s) :
     obtain ⟨ia,ib,ha,hb,ok⟩ := pairs_at [] ts z hz
     exact ⟨by simpa using ia,by simpa using ib,(List.mem_filter.mp ha).1,(List.mem_filter.mp hb).1,ok⟩)
 
+/-- Some subterm is a free or C application. -/
+private def hasRigid : Term s → Bool
+  | .free .. | .comm .. => true
+  | .ac _ a b => hasRigid a || hasRigid b
+  | _ => false
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem hasRigid_of_subterm : ∀ (u : Term s) {t : Term s}, t ∈ subterms u →
+    rigid t = true → hasRigid u = true
+  | .var _, t, h, r => by
+    simp only [subterms, List.mem_singleton] at h
+    subst h; simp [rigid] at r
+  | .atom _, t, h, r => by
+    simp only [subterms, List.mem_singleton] at h
+    subst h; simp [rigid] at r
+  | .free .., _, _, _ => rfl
+  | .comm .., _, _, _ => rfl
+  | .ac _ a b, t, h, r => by
+    simp only [subterms, List.mem_cons, List.mem_append] at h
+    rcases h with rfl | h | h
+    · simp [rigid] at r
+    · simp [hasRigid, hasRigid_of_subterm a h r]
+    · simp [hasRigid, hasRigid_of_subterm b h r]
+
+private theorem loop_nil (table : Array (Term s)) (todo : List (Pair s)) (p : Problem s)
+    (inside : ∀ z ∈ todo, Known table p z) (h : todo = []) :
+    (loop table todo p inside).val = [p] := by
+  subst h
+  unfold loop
+  simp
+
+/-- `refineProblem` of a problem without free or C subterms. There is no
+rigid pair to align, and the problem is its own only child. -/
+private def refineProblemPlain (p : Problem s) :
+    {ps : List (Problem s) // (∀ child ∈ ps, ∀ e ∈ p, e ∈ child) ∧
+      ∀ θ, Solves p θ → ∃ child ∈ ps, Solves child θ} :=
+  if p.any (fun e => hasRigid e.lhs || hasRigid e.rhs) then refineProblem p
+  else ⟨[p],by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩
+
+@[csimp] private theorem refineProblem_eq_plain : @refineProblem = @refineProblemPlain := by
+  funext s _ _ _ p
+  unfold refineProblemPlain
+  split
+  · rfl
+  · next plain =>
+    apply Subtype.ext
+    have none : (inventory p).filter rigid = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro t ht r
+      obtain ⟨e,he,mem⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp ht)
+      apply plain
+      apply List.any_eq_true.mpr
+      refine ⟨e,he,?_⟩
+      rcases List.mem_append.mp mem with l | r'
+      · simp [hasRigid_of_subterm _ l r]
+      · simp [hasRigid_of_subterm _ r' r]
+    unfold refineProblem
+    exact loop_nil _ _ _ _ (by rw [none]; rfl)
+
 variable [Interrupt]
 
 /-- The answers of each child in order, or `none` at the first child that
