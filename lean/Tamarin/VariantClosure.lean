@@ -1153,35 +1153,35 @@ def distance : List Nat → List Nat → Nat
   | a :: as, b :: bs => (if a ≤ b then b - a else a - b) + distance as bs
   | _, _ => 0
 
-/-- The rows, each with the sizes of its entries, in order of their distance
-from the sizes of the entries of the list of terms. -/
-def nearest (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
-    List (List (Term s)) :=
-  let sizes := child.map nodes
-  ((table.map fun g => (distance g.2 sizes,g.1)).mergeSort fun a b => a.1 ≤ b.1).map (·.2)
+/-- Whether one of the listed rows subsumes the list of terms by a guessed
+substitution. -/
+def guessedAny (rows : List (Nat × List (Term s))) (child : List (Term s)) : Bool :=
+  rows.any fun e => plausibleAll e.2 child && guessedInstance e.2 child
 
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
-theorem nearest_perm (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
-    (nearest table child).Perm (table.map (·.1)) := by
-  unfold nearest
-  dsimp only
-  have sorted := List.mergeSort_perm (table.map fun g => (distance g.2 (child.map nodes),g.1))
-    fun a b => decide (a.1 ≤ b.1)
-  refine (sorted.map (·.2)).trans ?_
-  rw [List.map_map]
-  rfl
-
-/-- `covered` with the guessed substitutions tried on the rows in order of
-their distance from the list of terms. A row whose entries have the sizes of
-those of the list is most often the one that subsumes it. The order is the
-only difference, and `List.any` does not depend on it. -/
+/-- `covered` with the guessed substitutions tried first on the rows whose
+entries have the sizes of those of the list of terms, and then on the other
+rows in order of the distance of their sizes from those of the list. A row
+whose entries have the sizes of those of the list is most often the one that
+subsumes it, and the others are sorted only when none of them does. The
+order is the only difference, and `List.any` does not depend on it. -/
 def coveredNear (table : List (List (Term s) × List Nat)) (child : List (Term s)) : Bool :=
-  covered (nearest table child) child
+  let sizes := child.map nodes
+  let scored := table.map fun g => (distance g.2 sizes,g.1)
+  guessedAny (scored.filter fun e => e.1 == 0) child ||
+    guessedAny ((scored.filter fun e => !(e.1 == 0)).mergeSort fun a b => a.1 ≤ b.1) child ||
+      table.any fun g => instanceOf g.1 child
 
 theorem coveredNear_eq (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
     coveredNear table child = covered (table.map (·.1)) child := by
-  unfold coveredNear covered
-  rw [(nearest_perm table child).any_eq,(nearest_perm table child).any_eq]
+  unfold coveredNear covered guessedAny
+  dsimp only
+  have sorted := List.mergeSort_perm ((table.map fun g => (distance g.2 (child.map nodes),g.1)).filter
+    fun e => !(e.1 == 0)) fun a b => decide (a.1 ≤ b.1)
+  have split := List.filter_append_perm (fun e : Nat × List (Term s) => e.1 == 0)
+    (table.map fun g => (distance g.2 (child.map nodes),g.1))
+  rw [sorted.any_eq,← List.any_append,split.any_eq,List.any_map,List.any_map,
+    List.any_map]
+  rfl
 
 /-- A row with the sizes of its entries. -/
 def withSizes (g : List (Term s)) : List (Term s) × List Nat := (g,g.map nodes)
