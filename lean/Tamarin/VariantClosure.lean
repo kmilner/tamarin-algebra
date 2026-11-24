@@ -917,8 +917,9 @@ theorem settleF_eq (bound : ReferenceReduction.Bound rules) (fuel : Nat) (made :
       rw [apply_untouched b.subst (value i) same]
     · simp only [same,Bool.false_eq_true,↓reduceIte]
 
-/-- `childOk` with the unchanged images and values read from the member. -/
-def childF (rules : List (Equation s)) (fuel : Nat) (rows : List (List (Term s)))
+/-- `childOk` with the unchanged images and values read from the member, and
+the coverage test given as a function. -/
+def childF (rules : List (Equation s)) (fuel : Nat) (cover : List (Term s) → Bool)
     (keyCells : List (Term s × List Variable × Bool))
     (valueCells : List (Fin n × Term s × List Variable × Option (Term s))) (j : Fin n)
     (made : Quiets rules) (b : RootNarrowing.Branch s) : Quiets rules × Option Bool :=
@@ -927,12 +928,13 @@ def childF (rules : List (Equation s)) (fuel : Nat) (rows : List (List (Term s))
     match quietCells rules b.subst made keyCells with
     | (more,true) =>
       (more,(settleF rules fuel more j b valueCells).map fun values =>
-        covered rows (imagesF b.subst keyCells ++ values))
+        cover (imagesF b.subst keyCells ++ values))
     | (more,false) => (more,some true)
 
-theorem childF_eq (bound : ReferenceReduction.Bound rules) (keys : List Variable) (fuel : Nat) (rows : List (List (Term s))) (p : Point s n)
-    (j : Fin n) (made : Quiets rules) (b : RootNarrowing.Branch s) :
-    (childF rules fuel rows ((keys.map p.assignment.image).map (keyCell rules))
+theorem childF_eq (bound : ReferenceReduction.Bound rules) (keys : List Variable) (fuel : Nat)
+    {cover : List (Term s) → Bool} {rows : List (List (Term s))} (same : ∀ c, cover c = covered rows c)
+    (p : Point s n) (j : Fin n) (made : Quiets rules) (b : RootNarrowing.Branch s) :
+    (childF rules fuel cover ((keys.map p.assignment.image).map (keyCell rules))
       ((List.finRange n).map (valueCell rules fuel p.value)) j made b).2 =
       childOk rules keys fuel rows p j b := by
   unfold childF childOk
@@ -941,17 +943,17 @@ theorem childF_eq (bound : ReferenceReduction.Bound rules) (keys : List Variable
       (keys.map p.assignment.image).map b.subst.apply := by
     rw [List.map_map]
     rfl
-  have same := quietCells_eq bound b.subst made (keys.map p.assignment.image)
+  have quiet := quietCells_eq bound b.subst made (keys.map p.assignment.image)
   rw [images,imagesF_eq]
-  simp only [settleF_eq bound]
+  simp only [settleF_eq bound,same]
   split
   · next more ok =>
-    rw [ok] at same
-    simp only [← same,↓reduceIte]
+    rw [ok] at quiet
+    simp only [← quiet,↓reduceIte]
   · next more ok =>
-    rw [ok] at same
-    change false = _ at same
-    rw [← same]
+    rw [ok] at quiet
+    change false = _ at quiet
+    rw [← quiet]
     rfl
 
 /-- What the closure test keeps from one member to the next: the root
@@ -962,7 +964,7 @@ abbrev Memo (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
 /-- `closedAt` for the narrower of the checker, with the root branches and
 the normality tests looked up. -/
 def strictAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
-    (query : Fin n → Term s) (keys : List Variable) (fuel : Nat) (rows : List (List (Term s)))
+    (query : Fin n → Term s) (keys : List Variable) (fuel : Nat) (cover : List (Term s) → Bool)
     (state : Memo rules bound) (p : Point s n) : Memo rules bound × Option Bool :=
   let keyCells := (keys.map p.assignment.image).map (keyCell rules)
   let valueCells := (List.finRange n).map (valueCell rules fuel p.value)
@@ -971,13 +973,14 @@ def strictAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rule
     if idle (query j) then (st,some true)
     else
       let found := positionsS (rootsS bound avoid) st.1 (p.value j)
-      let done := everyS (childF rules fuel rows keyCells valueCells j) st.2 found.2
+      let done := everyS (childF rules fuel cover keyCells valueCells j) st.2 found.2
       ((found.1,done.1),done.2)) state (List.finRange n)
 
 theorem strictAtF_eq (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel : Nat)
-    (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
-    (strictAtF rules bound query (keysOf query) fuel rows state p).2 =
+    {cover : List (Term s) → Bool} {rows : List (List (Term s))} (same : ∀ c, cover c = covered rows c)
+    (state : Memo rules bound) (p : Point s n) :
+    (strictAtF rules bound query (keysOf query) fuel cover state p).2 =
       strictAt rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
         fuel rows p := by
   unfold strictAtF strictAt
@@ -987,7 +990,7 @@ theorem strictAtF_eq (bound : ReferenceReduction.Bound rules)
   split
   · rfl
   · dsimp only
-    rw [everyS_eq (childF_eq bound (keysOf query) fuel rows p j),
+    rw [everyS_eq (childF_eq bound (keysOf query) fuel same p j),
       positionsS_eq (rootsS_eq bound (TableNarrowing.cells (keysOf query) p))]
     rfl
 
@@ -997,22 +1000,23 @@ them, only when the depth ended the scan. -/
 def closedAtF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
     (query : Fin n → Term s) (keys : List Variable)
     (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
-    (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
-    Memo rules bound × Option Bool :=
-  match strictAtF rules bound query keys fuel rows state p with
+    (cover : List (Term s) → Bool) (rows : List (List (Term s))) (state : Memo rules bound)
+    (p : Point s n) : Memo rules bound × Option Bool :=
+  match strictAtF rules bound query keys fuel cover state p with
   | (next,none) => (next,rescue rules query keys branches fuel rows p)
   | other => other
 
 theorem closedAtF_eq (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel : Nat)
-    (rows : List (List (Term s))) (state : Memo rules bound) (p : Point s n) :
+    {cover : List (Term s) → Bool} {rows : List (List (Term s))} (same : ∀ c, cover c = covered rows c)
+    (state : Memo rules bound) (p : Point s n) :
     (closedAtF rules bound query (keysOf query) (TableNarrowing.checking bound vars query).branches
-        fuel rows state p).2 =
+        fuel cover rows state p).2 =
       closedAt rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
         fuel rows p := by
   unfold closedAtF closedAt
-  have head := strictAtF_eq (query := query) bound vars fuel rows state p
-  generalize strictAtF rules bound query (keysOf query) fuel rows state p = result at head ⊢
+  have head := strictAtF_eq (query := query) bound vars fuel same state p
+  generalize strictAtF rules bound query (keysOf query) fuel cover state p = result at head ⊢
   obtain ⟨next,value⟩ := result
   change value = _ at head
   rw [← head]
@@ -1095,7 +1099,8 @@ handed to the next. -/
 def closureF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
     (query : Fin n → Term s) (keys : List Variable)
     (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel work limit : Nat)
-    (rows : List (List (Term s))) : Memo rules bound → List (Point s n) → Nat → Verdict
+    (cover : List (Term s) → Bool) (rows : List (List (Term s))) :
+    Memo rules bound → List (Point s n) → Nat → Verdict
   | _, [], _ => .accepted
   | state, p :: rest, index =>
     if work != 0 && decide (limit ≤ index) then .exhausted
@@ -1103,26 +1108,27 @@ def closureF (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules
       -- The caller is asked before every member. Its reply is `false` for
       -- every caller that is a function, so this is the plain computation.
       Interrupt.guard .exhausted fun _ =>
-        match closedAtF rules bound query keys branches fuel rows state p with
+        match closedAtF rules bound query keys branches fuel cover rows state p with
         | (_,none) => .exhausted
         | (next,some true) =>
-          closureF rules bound query keys branches fuel work limit rows next rest (index + 1)
+          closureF rules bound query keys branches fuel work limit cover rows next rest (index + 1)
         | (_,some false) => .rejected 3 index
 
 theorem closureF_eq (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (fuel work limit : Nat)
-    (rows : List (List (Term s))) (state : Memo rules bound) (todo : List (Point s n)) (index : Nat) :
+    {cover : List (Term s) → Bool} {rows : List (List (Term s))} (same : ∀ c, cover c = covered rows c)
+    (state : Memo rules bound) (todo : List (Point s n)) (index : Nat) :
     closureF rules bound query (keysOf query) (TableNarrowing.checking bound vars query).branches
-        fuel work limit rows state todo index =
+        fuel work limit cover rows state todo index =
       closure rules query (keysOf query) (TableNarrowing.checking bound vars query).branches
         fuel work limit rows todo index := by
   induction todo generalizing state index with
   | nil => rfl
   | cons p rest ih =>
     rw [closureF,closure]
-    have head := closedAtF_eq (query := query) bound vars fuel rows state p
+    have head := closedAtF_eq (query := query) bound vars fuel same state p
     generalize closedAtF rules bound query (keysOf query)
-      (TableNarrowing.checking bound vars query).branches fuel rows state p = result at head ⊢
+      (TableNarrowing.checking bound vars query).branches fuel cover rows state p = result at head ⊢
     obtain ⟨next,value⟩ := result
     change value = _ at head
     rw [← head]
@@ -1134,8 +1140,60 @@ theorem closureF_eq (bound : ReferenceReduction.Bound rules)
       | some true => exact ih next (index + 1)
       | some false => rfl
 
+/-- The number of positions of a term, variables included. -/
+def nodes : Term s → Nat
+  | .var _ => 1
+  | .atom _ => 1
+  | .free _ xs => 1 + (List.ofFn fun i => nodes (xs i)).sum
+  | .comm _ a b => 1 + nodes a + nodes b
+  | .ac _ a b => 1 + nodes a + nodes b
+
+/-- How far apart two lists of sizes are: the sum of the differences at each place. -/
+def distance : List Nat → List Nat → Nat
+  | a :: as, b :: bs => (if a ≤ b then b - a else a - b) + distance as bs
+  | _, _ => 0
+
+/-- The rows, each with the sizes of its entries, in order of their distance
+from the sizes of the entries of the list of terms. -/
+def nearest (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
+    List (List (Term s)) :=
+  let sizes := child.map nodes
+  ((table.map fun g => (distance g.2 sizes,g.1)).mergeSort fun a b => a.1 ≤ b.1).map (·.2)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem nearest_perm (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
+    (nearest table child).Perm (table.map (·.1)) := by
+  unfold nearest
+  dsimp only
+  have sorted := List.mergeSort_perm (table.map fun g => (distance g.2 (child.map nodes),g.1))
+    fun a b => decide (a.1 ≤ b.1)
+  refine (sorted.map (·.2)).trans ?_
+  rw [List.map_map]
+  rfl
+
+/-- `covered` with the guessed substitutions tried on the rows in order of
+their distance from the list of terms. A row whose entries have the sizes of
+those of the list is most often the one that subsumes it. The order is the
+only difference, and `List.any` does not depend on it. -/
+def coveredNear (table : List (List (Term s) × List Nat)) (child : List (Term s)) : Bool :=
+  covered (nearest table child) child
+
+theorem coveredNear_eq (table : List (List (Term s) × List Nat)) (child : List (Term s)) :
+    coveredNear table child = covered (table.map (·.1)) child := by
+  unfold coveredNear covered
+  rw [(nearest_perm table child).any_eq,(nearest_perm table child).any_eq]
+
+/-- A row with the sizes of its entries. -/
+def withSizes (g : List (Term s)) : List (Term s) × List Nat := (g,g.map nodes)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem withSizes_rows (rows : List (List (Term s))) : (rows.map withSizes).map (·.1) = rows := by
+  rw [List.map_map]
+  exact List.map_id' rows
+
 /-- `saturated` with the root branches and the normality tests kept from one
-member to the next. -/
+member to the next, and the rows tried in order of their distance from each
+successor. -/
 def saturatedFast (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
     (fuel work : Nat) (members : List (Point s n)) : Verdict :=
@@ -1143,10 +1201,10 @@ def saturatedFast (rules : List (Equation s)) (bound : ReferenceReduction.Bound 
   match settle rules fuel query with
   | none => .exhausted
   | some first =>
-    let rows := members.map (terms keys)
-    if covered rows (keys.map (Substitution.identity (sig := s)).image ++ first) then
+    let table := (members.map (terms keys)).map withSizes
+    if coveredNear table (keys.map (Substitution.identity (sig := s)).image ++ first) then
       closureF rules bound query keys (TableNarrowing.checking bound vars query).branches fuel work
-        (admitted work 0 (members.map (charge query))) rows
+        (admitted work 0 (members.map (charge query))) (coveredNear table) (table.map (·.1))
         (Array.replicate 4096 [],Array.replicate 4096 []) members 0
     else .rejected 2 0
 
@@ -1154,7 +1212,11 @@ omit [Interrupt] in
 @[csimp] theorem saturated_fast : @saturated = @saturatedFast := by
   funext s n _ _ _ _ _ rules bound vars query fuel work members
   unfold saturated saturatedFast
-  simp only [closureF_eq bound vars]
+  cases settle rules fuel query with
+  | none => rfl
+  | some first =>
+    dsimp only
+    rw [coveredNear_eq,closureF_eq bound vars (same := coveredNear_eq _),withSizes_rows]
 
 omit [Interrupt] in
 private theorem sum_strict {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) (j : Fin n) (lt : a j < b j) :
