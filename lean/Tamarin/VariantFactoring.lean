@@ -349,5 +349,66 @@ theorem factored_hits (bound : ReferenceReduction.Bound rules)
   · obtain ⟨e,he,hi,_⟩ := slot i
     exact (fits e he).2 i hi
 
+/-- `allJoined` with the shapes of the chosen representatives read from their
+groups instead of computed for every choice. -/
+def allJoinedS (index : Index s n) :
+    List (Group s n) → List (Group s n × Point s n) → List (List (Term s)) → Bool
+  | [], acc, wanted =>
+    -- The caller is asked before every choice.
+    Interrupt.guard false fun _ =>
+      let number := codes wanted
+      match index.find? fun e => e.1 == number && e.2.1 == wanted with
+      | some e => joins e.2.2 acc [] []
+      | none => false
+  | g :: gs, acc, wanted =>
+    (g.reps.zip g.shapes).all fun e => allJoinedS index gs ((g,e.1) :: acc) (e.2 :: wanted)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+private theorem zip_map_self {α β : Type} (xs : List α) (f : α → β) :
+    xs.zip (xs.map f) = xs.map fun x => (x,f x) := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => simp [ih]
+
+theorem allJoinedS_eq (index : Index s n) :
+    ∀ (gs : List (Group s n)) (acc : List (Group s n × Point s n)),
+      (∀ g ∈ gs, g.shapes = g.reps.map (shape g)) →
+      allJoinedS index gs acc (acc.map fun e => shape e.1 e.2) = allJoined index gs acc
+  | [], acc, _ => rfl
+  | g :: gs, acc, own => by
+    unfold allJoinedS allJoined
+    rw [own g List.mem_cons_self,zip_map_self,List.all_map]
+    apply List.all_congr rfl
+    intro rep
+    exact allJoinedS_eq index gs ((g,rep) :: acc) fun g' hg' => own g' (List.mem_cons_of_mem _ hg')
+
+/-- `factored` with the shapes of the representatives computed once. -/
+def factoredS (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (fuel work : Nat) (members : List (Point s n)) : Bool :=
+  let groups := resolve query members (split query (keysOf query) members)
+  let index : Index s n := members.map fun m =>
+    let shapes := groups.reverse.map fun g => shape g m
+    (codes shapes,shapes,m)
+  decide (1 < groups.length) &&
+    (groups.all fun g => decide (g.reps.length < members.length)) &&
+    ((List.finRange n).all fun i => groups.any fun g => g.slots.contains i) &&
+    (groups.all fun g => accepted (saturated rules bound vars (restrict query g.slots) fuel work
+      (g.reps.map (pick · g.slots)))) &&
+    allJoinedS index groups [] []
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] [Interrupt] in
+theorem resolve_shapes {members : List (Point s n)} {plans : List (Plan n)} {g : Group s n}
+    (h : g ∈ resolve query members plans) : g.shapes = g.reps.map (shape g) := by
+  obtain ⟨plan,_,rfl⟩ := List.mem_map.mp h
+  rfl
+
+omit [Interrupt] in
+@[csimp] theorem factored_shapes : @factored = @factoredS := by
+  funext s n _ _ _ _ _ rules bound vars query fuel work members
+  unfold factored factoredS
+  dsimp only
+  rw [← allJoinedS_eq _ _ [] fun g hg => resolve_shapes hg,List.map_nil]
+
 end
 end Tamarin.VariantCertificate
