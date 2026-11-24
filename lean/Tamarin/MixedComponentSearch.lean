@@ -238,28 +238,106 @@ terms that are subterms of the problem. -/
 private def extent (p : Problem s) : Nat :=
   p.length + 4 * (p.map fun e => width e.lhs + width e.rhs).sum
 
+/-- A resolution that has been found, or the variable itself. -/
+private def found (done : List (Variable × Term s)) (v : Variable) : Term s :=
+  ((done.find? fun d => decide (d.1 = v)).map (·.2)).getD (.var v)
+
 /-- The image of a variable with the bindings of the rows substituted, at most
-the given number of times. -/
-private def resolve (rows : List (Row s)) : Nat → Variable → Term s
-  | 0, v => .var v
-  | n+1, v =>
-    match bound rows v with
-    | some t => t.subst (resolve rows n)
-    | none => .var v
+the given number of times, together with the resolutions found so far. A
+variable that has been resolved is not resolved again. -/
+private def resolveWith (rows : List (Row s)) :
+    Nat → List (Variable × Term s) → Variable → List (Variable × Term s) × Term s
+  | 0, done, v => (done,.var v)
+  | n+1, done, v =>
+    match done.find? fun d => decide (d.1 = v) with
+    | some d => (done,d.2)
+    | none =>
+      match bound rows v with
+      | none => (done,.var v)
+      | some t =>
+        let more := t.variables.foldl (fun acc u => (resolveWith rows n acc u).1) done
+        let r := t.subst (found more)
+        ((v,r) :: more,r)
+
+/-- Every resolution in the list denotes what its variable denotes. -/
+private def Resolved (W : Env s) (done : List (Variable × Term s)) : Prop :=
+  ∀ d ∈ done, EquivB (W d.1) (d.2.subst W)
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 omit [Interrupt] in
-private theorem resolve_equiv (rows : List (Row s)) (W : Env s) (model : Models rows W) :
-    ∀ (n : Nat) (v : Variable), EquivB (W v) ((resolve rows n v).subst W)
-  | 0, v => .refl _
-  | n+1, v => by
-    unfold resolve
+private theorem found_equiv {W : Env s} {done : List (Variable × Term s)} (h : Resolved W done)
+    (v : Variable) : EquivB (W v) ((found done v).subst W) := by
+  unfold found
+  cases hit : done.find? fun d => decide (d.1 = v) with
+  | none => exact .refl _
+  | some d =>
+    have key : d.1 = v := by simpa using List.find?_some hit
+    have here := h d (List.mem_of_find?_eq_some hit)
+    rw [key] at here
+    exact here
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem resolveWith_equiv (rows : List (Row s)) (W : Env s) (model : Models rows W) :
+    ∀ (n : Nat) (done : List (Variable × Term s)) (v : Variable), Resolved W done →
+      Resolved W (resolveWith rows n done v).1 ∧
+        EquivB (W v) ((resolveWith rows n done v).2.subst W)
+  | 0, done, v, h => ⟨h,.refl _⟩
+  | n+1, done, v, h => by
+    unfold resolveWith
     split
-    · next t found =>
-      refine (bound_equiv model found).trans ?_
-      rw [Term.subst_comp]
-      exact t.subst_equiv _ _ fun u _ => resolve_equiv rows W model n u
-    · exact .refl _
+    · next d hit =>
+      have key : d.1 = v := by simpa using List.find?_some hit
+      have here := h d (List.mem_of_find?_eq_some hit)
+      rw [key] at here
+      exact ⟨h,here⟩
+    · split
+      · exact ⟨h,.refl _⟩
+      · next t hb =>
+        have fold : ∀ (us : List Variable) (acc : List (Variable × Term s)), Resolved W acc →
+            Resolved W (us.foldl (fun acc u => (resolveWith rows n acc u).1) acc) := by
+          intro us
+          induction us with
+          | nil => exact fun _ h => h
+          | cons u us ih =>
+            intro acc ha
+            exact ih _ (resolveWith_equiv rows W model n acc u ha).1
+        have more := fold t.variables done h
+        have value : EquivB (W v)
+            ((t.subst (found (t.variables.foldl (fun acc u => (resolveWith rows n acc u).1) done))).subst W) := by
+          refine (bound_equiv model hb).trans ?_
+          rw [Term.subst_comp]
+          exact t.subst_equiv _ _ fun u _ => found_equiv more u
+        refine ⟨?_,value⟩
+        intro d hd
+        rcases List.mem_cons.mp hd with rfl | old
+        · exact value
+        · exact more d old
+
+/-- The resolution of every bound variable, each found once. -/
+private def resolveAll (rows : List (Row s)) : List (Variable × Term s) :=
+  let keys := rows.map (·.1)
+  let done := keys.foldl (fun acc v => (resolveWith rows (rows.length + 1) acc v).1) []
+  keys.map fun v => (v,found done v)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+omit [Interrupt] in
+private theorem resolveAll_equiv (rows : List (Row s)) (W : Env s) (model : Models rows W) :
+    Resolved W (resolveAll rows) := by
+  unfold resolveAll
+  dsimp only
+  have fold : ∀ (vs : List Variable) (acc : List (Variable × Term s)), Resolved W acc →
+      Resolved W (vs.foldl (fun acc v => (resolveWith rows (rows.length + 1) acc v).1) acc) := by
+    intro vs
+    induction vs with
+    | nil => exact fun _ h => h
+    | cons v vs ih =>
+      intro acc ha
+      exact ih _ (resolveWith_equiv rows W model _ acc v ha).1
+  have done := fold (rows.map (·.1)) [] (fun _ hd => nomatch hd)
+  intro d hd
+  obtain ⟨v,_,rfl⟩ := List.mem_map.mp hd
+  exact found_equiv done v
 
 /-- A valuation given by its images of the listed variables. -/
 private def tabulate : List (Variable × Term s) → Variable → Term s
@@ -306,32 +384,20 @@ private theorem tabulate_sorted (table : List (Variable × Term s))
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 omit [Interrupt] in
-/-- A variable that no row binds resolves to itself. -/
-private theorem resolve_unbound (rows : List (Row s)) (n : Nat) {v : Variable}
-    (h : v ∉ rows.map (·.1)) : resolve rows n v = .var v := by
-  cases n with
-  | zero => rfl
-  | succ n =>
-    have none : bound rows v = none := by
-      unfold bound
-      rw [Option.map_eq_none_iff, List.find?_eq_none]
-      intro d hd same
-      exact h (List.mem_map.mpr ⟨d,hd,of_decide_eq_true same⟩)
-    unfold resolve
-    rw [none]
-
-omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
-omit [Interrupt] in
-/-- The table of the bound variables gives the resolution of every variable. -/
-private theorem tabulate_resolve (rows : List (Row s)) (n : Nat) (v : Variable) :
-    tabulate ((rows.map (·.1)).map fun w => (w, resolve rows n w)) v = resolve rows n v := by
-  by_cases h : v ∈ rows.map (·.1)
-  · exact tabulate_map _ _ h
-  · rw [resolve_unbound rows n h]
-    apply tabulate_outside
-    intro d hd same
-    obtain ⟨w,hw,rfl⟩ := List.mem_map.mp hd
-    exact h (same ▸ hw)
+/-- A table of resolutions gives the resolution of every variable. -/
+private theorem tabulate_equiv {W : Env s} {table : List (Variable × Term s)}
+    (h : Resolved W table) (v : Variable) : EquivB (W v) ((tabulate table v).subst W) := by
+  induction table with
+  | nil => exact .refl _
+  | cons e rest ih =>
+    obtain ⟨w,t⟩ := e
+    simp only [tabulate]
+    split
+    · next same =>
+      have here := h (w,t) List.mem_cons_self
+      rw [same]
+      exact here
+    · exact ih fun d hd => h d (List.mem_cons_of_mem _ hd)
 
 /-- The answer of a problem whose equations, oriented and followed through
 their bindings, never equate two different terms that are not variables. The
@@ -342,13 +408,14 @@ private def solvedLeaf (p : Problem s) : Option (Substitution s) :=
   | none => none
   | some rows =>
     let keys := rows.map (·.1)
-    let table := keys.map fun v => (v, resolve rows (rows.length + 1) v)
+    let table := resolveAll rows
     if ok : (table.all fun d => d.2.checkSort d.1.sort) &&
         p.all (fun e => decide (e.lhs.subst (tabulate table) = e.rhs.subst (tabulate table))) then
       some {
         image := tabulate table
         support := keys
         outside := fun v out => tabulate_outside table v fun d hd same => by
+          unfold table resolveAll at hd
           obtain ⟨w,hw,rfl⟩ := List.mem_map.mp hd
           exact out (same ▸ hw)
         sorted := tabulate_sorted table fun d hd =>
@@ -375,8 +442,7 @@ private theorem solvedLeaf_spec {p : Problem s} {σ : Substitution s} (h : solve
         exact .refl _
       · have model := rowsOf_rows _ [] p hr δ.image (fun _ hd => nomatch hd) (fun e he => sol e he)
         change EquivB _ ((tabulate _ v).subst δ.image)
-        rw [tabulate_resolve]
-        exact resolve_equiv rows δ.image model _ v
+        exact tabulate_equiv (resolveAll_equiv rows δ.image model) v
     · cases h
 
 end Solved
