@@ -34,6 +34,62 @@ def check (rules : List (Equation s)) (q : List (Term s)) (family : List (Substi
     else .rejected 4 0
   else .rejected 4 0
 
+/-- `check` with the cells of the members read off their images and values:
+the check has tested their images, and their values are where `follow`
+stopped, so neither is tested again. -/
+def checkK (rules : List (Equation s)) (q : List (Term s)) (family : List (Substitution s))
+    (fuel work : Nat) : Verdict :=
+  if hb : CheckedReduction.rangeBound rules then
+    if hv : rules.all (fun r => CheckedVariants.nonvar r.lhs) then
+      let bound := (CheckedReduction.rangeBound_iff rules).mp hb
+      let vars := CheckedVariants.varsNormal rules hv
+      let query := fun i : Fin q.length => q[i.val]
+      match family.mapM (member rules query fuel) with
+      | none => .exhausted
+      | some members =>
+        match members.findIdx? (fun p => !normalOn rules (keysOf query) p.assignment) with
+        | some index => .rejected 1 index
+        | none =>
+          if factoredK rules bound vars query fuel work members then .accepted
+          else saturatedK rules bound vars query fuel work members
+    else .rejected 4 0
+  else .rejected 4 0
+
+/-- The members of a family that passed the normality test are settled. -/
+theorem members_settled {query : Fin n → Term s} {fuel : Nat} {family : List (Substitution s)}
+    {members : List (Point s n)} (built : family.mapM (member rules query fuel) = some members)
+    (normal : members.findIdx? (fun p => !normalOn rules (keysOf query) p.assignment) = none) :
+    ∀ p ∈ members, Settled rules (keysOf query) fuel p := by
+  intro p hp
+  obtain ⟨σ,_,made⟩ := mapM_some_source _ built p hp
+  obtain ⟨rfl,values⟩ := member_form made
+  have quietKeys : normalOn rules (keysOf query) p.assignment = true := by
+    have := List.findIdx?_eq_none_iff.mp normal p hp
+    simpa using this
+  refine ⟨fun k hk => List.all_eq_true.mp quietKeys k hk,fun i => ?_⟩
+  have once := values i
+  cases fuel with
+  | zero => cases once
+  | succ m => exact follow_fixed once m
+
+omit [Interrupt] in
+@[csimp] theorem check_eq_known : @check = @checkK := by
+  funext s _ _ _ _ _ rules q family fuel work
+  unfold check checkK
+  split
+  · split
+    · dsimp only
+      split
+      · rfl
+      · next members built =>
+        split
+        · rfl
+        · next normal =>
+          have settled := members_settled built normal
+          rw [factoredK_eq _ _ _ _ _ _ settled,saturatedK_eq _ _ _ _ _ _ settled]
+    · rfl
+  · rfl
+
 /-- The members of an accepted family: one per proposed substitution, each
 normal on the keys with normal forms as values, and together covering every
 normal substitution. -/

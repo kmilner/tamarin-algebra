@@ -1218,6 +1218,143 @@ omit [Interrupt] in
     dsimp only
     rw [coveredNear_eq,closureF_eq bound vars (same := coveredNear_eq _),withSizes_rows]
 
+/-! ### Members known to be formed
+
+A member of a checked family has normal images on the keys, which the check
+has tested, and values that are where `follow` stopped. Its cells are then
+known without testing its images or normalizing its values again. -/
+
+/-- A term where `follow` stopped is where it stops again, at any depth. -/
+theorem follow_fixed {fuel : Nat} {t u : Term s} (h : ReferenceReduction.follow rules fuel t = some u) :
+    ∀ m, ReferenceReduction.follow rules (m + 1) u = some u := by
+  induction fuel generalizing t with
+  | zero => cases h
+  | succ fuel ih =>
+    rw [ReferenceReduction.follow_succ] at h
+    split at h
+    · next none =>
+      cases h
+      intro m
+      rw [ReferenceReduction.follow_succ,none]
+    · exact ih h
+
+/-- What the closure test may assume of a member without testing it: its
+images of the keys are normal and its values are where `follow` stops. -/
+def Settled (rules : List (Equation s)) (keys : List Variable) (fuel : Nat) (p : Point s n) : Prop :=
+  (∀ k ∈ keys, quiet rules (p.assignment.image k) = true) ∧
+    ∀ i, ReferenceReduction.follow rules fuel (p.value i) = some (p.value i)
+
+/-- `strictAtF` for a settled member: its cells are read off its images and
+values instead of being computed. -/
+def strictAtK (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (query : Fin n → Term s) (keys : List Variable) (fuel : Nat) (cover : List (Term s) → Bool)
+    (state : Memo rules bound) (p : Point s n) : Memo rules bound × Option Bool :=
+  let keyCells := (keys.map p.assignment.image).map fun t => (t,t.variables,true)
+  let valueCells := (List.finRange n).map fun i => (i,p.value i,(p.value i).variables,some (p.value i))
+  let avoid := (TableNarrowing.cells keys p).flatMap Term.variables
+  everyS (fun (st : Memo rules bound) j =>
+    if idle (query j) then (st,some true)
+    else
+      let found := positionsS (rootsS bound avoid) st.1 (p.value j)
+      let done := everyS (childF rules fuel cover keyCells valueCells j) st.2 found.2
+      ((found.1,done.1),done.2)) state (List.finRange n)
+
+theorem strictAtK_eq {keys : List Variable} {fuel : Nat} {p : Point s n} (settled : Settled rules keys fuel p)
+    (bound : ReferenceReduction.Bound rules) (query : Fin n → Term s) (cover : List (Term s) → Bool)
+    (state : Memo rules bound) :
+    strictAtK rules bound query keys fuel cover state p = strictAtF rules bound query keys fuel cover state p := by
+  have keysSame : ((keys.map p.assignment.image).map fun t => (t,t.variables,true)) =
+      (keys.map p.assignment.image).map (keyCell rules) := by
+    rw [List.map_map,List.map_map]
+    apply List.map_congr_left
+    intro k hk
+    simp [keyCell,settled.1 k hk]
+  have valuesSame : ((List.finRange n).map fun i => (i,p.value i,(p.value i).variables,some (p.value i))) =
+      (List.finRange n).map (valueCell rules fuel p.value) := by
+    apply List.map_congr_left
+    intro i _
+    simp [valueCell,settled.2 i]
+  unfold strictAtK strictAtF
+  rw [keysSame,valuesSame]
+
+/-- `closedAtF` for a settled member. -/
+def closedAtK (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel : Nat)
+    (cover : List (Term s) → Bool) (rows : List (List (Term s))) (state : Memo rules bound)
+    (p : Point s n) : Memo rules bound × Option Bool :=
+  match strictAtK rules bound query keys fuel cover state p with
+  | (next,none) => (next,rescue rules query keys branches fuel rows p)
+  | other => other
+
+/-- `closureF` for settled members. -/
+def closureK (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (query : Fin n → Term s) (keys : List Variable)
+    (branches : Point s n → Fin n → List (RootNarrowing.Branch s)) (fuel work limit : Nat)
+    (cover : List (Term s) → Bool) (rows : List (List (Term s))) :
+    Memo rules bound → List (Point s n) → Nat → Verdict
+  | _, [], _ => .accepted
+  | state, p :: rest, index =>
+    if work != 0 && decide (limit ≤ index) then .exhausted
+    else
+      -- The caller is asked before every member, as in `closureF`.
+      Interrupt.guard .exhausted fun _ =>
+        match closedAtK rules bound query keys branches fuel cover rows state p with
+        | (_,none) => .exhausted
+        | (next,some true) =>
+          closureK rules bound query keys branches fuel work limit cover rows next rest (index + 1)
+        | (_,some false) => .rejected 3 index
+
+theorem closureK_eq (bound : ReferenceReduction.Bound rules) (query : Fin n → Term s)
+    (keys : List Variable) (branches : Point s n → Fin n → List (RootNarrowing.Branch s))
+    (fuel work limit : Nat) (cover : List (Term s) → Bool) (rows : List (List (Term s)))
+    (state : Memo rules bound) (todo : List (Point s n)) (index : Nat)
+    (settled : ∀ p ∈ todo, Settled rules keys fuel p) :
+    closureK rules bound query keys branches fuel work limit cover rows state todo index =
+      closureF rules bound query keys branches fuel work limit cover rows state todo index := by
+  induction todo generalizing state index with
+  | nil => rfl
+  | cons p rest ih =>
+    unfold closureK closureF closedAtK closedAtF
+    rw [strictAtK_eq (settled p List.mem_cons_self)]
+    simp only [Interrupt.guard]
+    split
+    · rfl
+    · split
+      · rfl
+      · next next _ => exact ih next (index + 1) (fun q hq => settled q (List.mem_cons_of_mem _ hq))
+      · rfl
+
+/-- `saturatedFast` for settled members. -/
+def saturatedK (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (fuel work : Nat) (members : List (Point s n)) : Verdict :=
+  let keys := keysOf query
+  match settle rules fuel query with
+  | none => .exhausted
+  | some first =>
+    let table := (members.map (terms keys)).map withSizes
+    if coveredNear table (keys.map (Substitution.identity (sig := s)).image ++ first) then
+      closureK rules bound query keys (TableNarrowing.checking bound vars query).branches fuel work
+        (admitted work 0 (members.map (charge query))) (coveredNear table) (table.map (·.1))
+        (Array.replicate 4096 [],Array.replicate 4096 []) members 0
+    else .rejected 2 0
+
+theorem saturatedK_eq (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (fuel work : Nat) (members : List (Point s n))
+    (settled : ∀ p ∈ members, Settled rules (keysOf query) fuel p) :
+    saturatedK rules bound vars query fuel work members = saturated rules bound vars query fuel work members := by
+  rw [saturated_fast]
+  unfold saturatedK saturatedFast
+  cases settle rules fuel query with
+  | none => rfl
+  | some first =>
+    dsimp only
+    split
+    · exact closureK_eq bound query _ _ fuel work _ _ _ _ members 0 settled
+    · rfl
+
 omit [Interrupt] in
 private theorem sum_strict {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) (j : Fin n) (lt : a j < b j) :
     (List.ofFn a).sum < (List.ofFn b).sum := by

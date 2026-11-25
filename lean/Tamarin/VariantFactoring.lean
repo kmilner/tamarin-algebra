@@ -410,5 +410,44 @@ omit [Interrupt] in
   dsimp only
   rw [← allJoinedS_eq _ _ [] fun g hg => resolve_shapes hg,List.map_nil]
 
+/-- `factoredS` for settled members: the groups are tested by `saturatedK`. -/
+def factoredK (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (fuel work : Nat) (members : List (Point s n)) : Bool :=
+  let groups := resolve query members (split query (keysOf query) members)
+  let index : Index s n := members.map fun m =>
+    let shapes := groups.reverse.map fun g => shape g m
+    (codes shapes,shapes,m)
+  decide (1 < groups.length) &&
+    (groups.all fun g => decide (g.reps.length < members.length)) &&
+    ((List.finRange n).all fun i => groups.any fun g => g.slots.contains i) &&
+    (groups.all fun g => accepted (saturatedK rules bound vars (restrict query g.slots) fuel work
+      (g.reps.map (pick · g.slots)))) &&
+    allJoinedS index groups [] []
+
+/-- The point on the slots of a group of a settled member is settled. -/
+theorem settled_pick {fuel : Nat} {p : Point s n} (settled : Settled rules (keysOf query) fuel p)
+    (slots : List (Fin n)) : Settled rules (keysOf (restrict query slots)) fuel (pick p slots) :=
+  ⟨fun k hk => settled.1 k (keys_restrict hk),fun i => settled.2 slots[i]⟩
+
+theorem factoredK_eq (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (fuel work : Nat) (members : List (Point s n))
+    (settled : ∀ p ∈ members, Settled rules (keysOf query) fuel p) :
+    factoredK rules bound vars query fuel work members = factored rules bound vars query fuel work members := by
+  rw [factored_shapes]
+  unfold factoredK factoredS
+  dsimp only
+  congr 2
+  rw [Bool.eq_iff_iff,List.all_eq_true,List.all_eq_true]
+  apply forall_congr'
+  intro g
+  apply imp_congr_right
+  intro hg
+  rw [saturatedK_eq]
+  intro q hq
+  obtain ⟨rep,hrep,rfl⟩ := List.mem_map.mp hq
+  exact settled_pick (settled rep ((resolve_spec hg).2 rep hrep)) g.slots
+
 end
 end Tamarin.VariantCertificate
