@@ -171,6 +171,48 @@ def product : FTerm → Bool
   | .app k .. => k == 4
   | _ => false
 
+mutual
+/-- Every variable identifier and argument count fits a word. -/
+def fits : FTerm → Bool
+  | .var v => v.id < UInt64.size
+  | .atom .. => true
+  | .app _ _ _ _ args => args.length < UInt64.size && fitsAll args
+def fitsAll : List FTerm → Bool
+  | [] => true
+  | t :: ts => fits t && fitsAll ts
+end
+
+mutual
+/-- `emit` for a term that fits, without the option at every node. -/
+def emitU : FTerm → Array UInt64 → Array UInt64
+  | .var v, acc => ((acc.push 0).push (UInt64.ofNat v.id)).push (sortCode v.sort)
+  | .atom i k, acc => ((acc.push 1).push i).push (sortCode k)
+  | .app k i _ _ args, acc => (((emitAllU args acc).push k).push i).push (UInt64.ofNat args.length)
+def emitAllU : List FTerm → Array UInt64 → Array UInt64
+  | [], acc => acc
+  | t :: ts, acc => emitAllU ts (emitU t acc)
+end
+
+mutual
+theorem emit_eq_U : ∀ (t : FTerm) (acc : Array UInt64),
+    emit t acc = if fits t then some (emitU t acc) else none
+  | .var v, acc => by
+    by_cases h : v.id < UInt64.size <;> simp [emit, emitU, fits, WordEncoding.pack, h]
+  | .atom .., acc => by simp [emit, emitU, fits]
+  | .app k i o ins args, acc => by
+    simp only [emit, emitU, fits, emitAll_eq_U args acc, Option.bind_eq_bind]
+    by_cases h : args.length < UInt64.size <;> by_cases g : fitsAll args = true <;>
+      simp [h, g, WordEncoding.pack]
+theorem emitAll_eq_U : ∀ (ts : List FTerm) (acc : Array UInt64),
+    emitAll ts acc = if fitsAll ts then some (emitAllU ts acc) else none
+  | [], acc => by simp [emitAll, emitAllU, fitsAll]
+  | t :: ts, acc => by
+    simp only [emitAll, emitAllU, fitsAll, emit_eq_U t acc, Option.bind_eq_bind]
+    by_cases h : fits t = true
+    · simp only [h, ↓reduceIte, Option.bind_some, emitAll_eq_U ts, Bool.true_and]
+    · simp [h]
+end
+
 end FTerm
 
 section Lower
@@ -879,7 +921,8 @@ theorem lookupD_resolve (bs : List (Variable × FTerm)) (u : Variable) :
 /-- The binding row of a variable, read from the table. -/
 def row (table : List (Variable × FTerm)) (v : Variable) : Option (Array UInt64) := do
   let id ← WordEncoding.pack v.id
-  (lookupD table v).emit #[id, sortCode v.sort]
+  let t := lookupD table v
+  if t.fits then some (t.emitU #[id, sortCode v.sort]) else none
 
 section Reply
 variable {d : Dictionary}
@@ -888,7 +931,7 @@ theorem row_binding (σ : Substitution d.sig) (table : List (Variable × FTerm))
     (same : ∀ v, lower (σ.image v) = lookupD table v) (v : Variable) :
     row table v = binding σ v := by
   unfold row binding
-  simp only [← same, lower_emit]
+  simp only [← FTerm.emit_eq_U, ← same, lower_emit]
   cases WordEncoding.pack v.id with
   | none => rfl
   | some id =>
@@ -943,15 +986,19 @@ theorem dedupVars_eq (l seen : List Variable) :
     cases h : seen.any (fun b => v == b) <;> simp [dedupVars, List.eraseDupsBy.loop, this, h, ih]
 
 /-- The variables of the lowered query without repeats, in order. -/
+def varsEqs : List FEq → List Variable
+  | [] => []
+  | e :: es => varsInto e.1 (varsInto e.2 (varsEqs es))
+
 def keysOf (eqs : List FEq) : List Variable :=
-  dedupVars (eqs.foldr (fun e acc => varsInto e.1 (varsInto e.2 acc)) []) []
+  dedupVars (varsEqs eqs) []
 
 theorem keysOf_eq (eqs : List FEq) : keysOf eqs = (problemVars eqs).eraseDups := by
-  have vars : eqs.foldr (fun e acc => varsInto e.1 (varsInto e.2 acc)) [] = problemVars eqs := by
+  have vars : varsEqs eqs = problemVars eqs := by
     induction eqs with
     | nil => rfl
     | cons e es ih =>
-      rw [List.foldr_cons, ih, varsInto_eq, varsInto_eq]
+      rw [varsEqs, ih, varsInto_eq, varsInto_eq]
       simp [problemVars]
   rw [keysOf, vars, dedupVars_eq]
   rfl
@@ -1201,7 +1248,7 @@ def decodeLeaf (k id arg : UInt64) : Option FTerm :=
   else none
 
 /-- `TotalUnifyWire.node` on lowered terms. -/
-def decodeNode (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64) : Option FTerm :=
+def decodeNodeList (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64) : Option FTerm :=
   match row.toList with
   | k :: id :: tail =>
     if k ≤ 1 then
@@ -1211,16 +1258,117 @@ def decodeNode (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64)
     else do decodeApp ds k id (← tail.mapM fun (i : UInt64) => prior[i.toNat]?)
   | _ => none
 
+/-- `decodeNodeList`, reading a leaf row in place. -/
+def decodeNode (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64) : Option FTerm :=
+  if h : row.size = 3 then
+    if row[0] ≤ 1 then decodeLeaf row[0] row[1] row[2] else decodeNodeList ds prior row
+  else decodeNodeList ds prior row
+
+theorem decodeNode_eq (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64) :
+    decodeNode ds prior row = decodeNodeList ds prior row := by
+  unfold decodeNode
+  split
+  · next h =>
+    split
+    · next k =>
+      have list : row.toList = [row[0], row[1], row[2]] := by
+        apply List.ext_getElem
+        · simp [h]
+        · intro n h1 h2
+          have : n < 3 := by simpa [h] using h1
+          match n, this with
+          | 0, _ | 1, _ | 2, _ => simp
+      simp [decodeNodeList, list, k]
+    · rfl
+  · rfl
+
 /-- `TotalUnifyWire.equations` on lowered terms. -/
 def decodeEquations (ts : Array FTerm) : List UInt64 → Option (List FEq)
   | [] => some []
   | i :: j :: rest => do return (← ts[i.toNat]?, ← ts[j.toNat]?) :: (← decodeEquations ts rest)
   | [_] => none
 
+/-- Some declaration has the kind and the identifier. -/
+def declared (kind id : UInt64) : List Whole.Decl → Bool
+  | [] => false
+  | d :: ds => (d.kind == kind && d.id == id) || declared kind id ds
+
+theorem declared_eq (kind id : UInt64) (ds : List Whole.Decl) :
+    declared kind id ds = ds.any (fun d => d.kind == kind && d.id == id) := by
+  induction ds with
+  | nil => rfl
+  | cons d ds ih => simp [declared, ih]
+
+/-- `Whole.declarations` read from position `i` of the word array. -/
+def declsFrom (w : Array UInt64) (i : Nat) : Option (List Whole.Decl) :=
+  if h : i + 4 ≤ w.size then
+    let kind := w[i]
+    let id := w[i + 1]
+    let arity := w[i + 2]
+    let output := w[i + 3]
+    let inputs := (w.extract (i + 4) (i + 4 + arity.toNat)).toList
+    if inputs.length = arity.toNat && output ≤ 4 && inputs.all (· ≤ 4) then
+      if kind == 2 || ((kind == 3 || kind == 4) && inputs == [output, output]) then
+        match declsFrom w (i + 4 + arity.toNat) with
+        | none => none
+        | some tail =>
+          if !declared kind id tail then some (⟨kind, id, output, inputs⟩ :: tail)
+          else none
+      else none
+    else none
+  else if w.size ≤ i then some [] else none
+termination_by w.size - i
+
+theorem declsFrom_eq (w : Array UInt64) (i : Nat) :
+    declsFrom w i = Whole.declarations (w.toList.drop i) := by
+  rw [declsFrom]
+  simp only [declared_eq]
+  split
+  · next h =>
+    have e : w.toList.drop i = w[i] :: w[i + 1] :: w[i + 2] :: w[i + 3] :: w.toList.drop (i + 4) := by
+      rw [List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega),
+        List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega)]
+      simp [Nat.add_assoc]
+    have take : (w.extract (i + 4) (i + 4 + w[i + 2].toNat)).toList =
+        (w.toList.drop (i + 4)).take w[i + 2].toNat := by
+      simp [Array.toList_extract]
+    have drop : (w.toList.drop (i + 4)).drop w[i + 2].toNat = w.toList.drop (i + 4 + w[i + 2].toNat) := by
+      simp [List.drop_drop]
+    have ih := declsFrom_eq w (i + 4 + w[i + 2].toNat)
+    rw [e, Whole.declarations]
+    simp only [take, drop, ← ih]
+    simp only [Option.bind_eq_bind, guard, Option.bind, pure, failure]
+    split
+    · next h1 =>
+      simp
+      split
+      · next h2 =>
+        simp
+        cases declsFrom w (i + 4 + w[i + 2].toNat) with
+        | none => rfl
+        | some tail =>
+          simp only
+          split
+          · next h3 => simp
+          · next h3 => simp
+      · next h2 => simp
+    · next h1 => simp
+  · next h =>
+    split
+    · next hs => rw [List.drop_of_length_le (by simpa using hs), Whole.declarations]
+    · next hs =>
+      have : w.toList.drop i ≠ [] := by simp; omega
+      have short : (w.toList.drop i).length < 4 := by simp; omega
+      generalize w.toList.drop i = l at this short
+      match l, this, short with
+      | [_], _, _ | [_, _], _, _ | [_, _, _], _, _ => rw [Whole.declarations] <;> simp
+termination_by w.size - i
+decreasing_by omega
+
 /-- `TotalUnifyWire.input`, lowered. -/
 def decode (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Option (List FEq) := do
-  let ds ← Whole.declarations decls.toList
+  let ds ← declsFrom decls 0
   let ts ← nodes.foldlM (fun acc r => do return acc.push (← decodeNode ds acc r)) #[]
   decodeEquations ts roots.toList
 
@@ -1339,7 +1487,8 @@ theorem decodeNode_sound (prior : Array (Term d.sig)) (row : Array UInt64) (ft :
     (member : ∀ id arg, row.toList = [1, id, arg] → (id, sortOf arg) ∈ d.atoms)
     (h : decodeNode d.decls (prior.map lower) row = some ft) :
     ∃ t, node d prior row = some t ∧ lower t = ft := by
-  unfold decodeNode at h
+  rw [decodeNode_eq] at h
+  unfold decodeNodeList at h
   unfold node
   split at h
   · next k id tail list =>
@@ -1408,6 +1557,7 @@ theorem decode_sound (decls : Array UInt64) (nodes : Array (Array UInt64)) (root
     (eqs : List FEq) (h : decode decls nodes roots = some eqs) :
     ∃ d p, input decls nodes roots = some ⟨d, p⟩ ∧ p.map lowerEq = eqs := by
   unfold decode at h
+  rw [declsFrom_eq, List.drop_zero] at h
   cases hds : Whole.declarations decls.toList with
   | none => simp [hds] at h
   | some ds =>
