@@ -305,7 +305,7 @@ theorem Index.position_of {α : Type} [BEq α] [LawfulBEq α] (key : α → Nat)
 
 /-- The first position at or after `i` of an entry equal to `x` by `eq`, or
 the size. -/
-@[specialize] def scanFrom {α : Type} (eq : α → α → Bool) (xs : Array α) (x : α) (i : Nat) : Nat :=
+def scanFrom {α : Type} (eq : α → α → Bool) (xs : Array α) (x : α) (i : Nat) : Nat :=
   if h : i < xs.size then if eq xs[i] x then i else scanFrom eq xs x (i + 1) else xs.size
 termination_by xs.size - i
 
@@ -353,6 +353,23 @@ theorem labelKeyEq_eq (a b : Label × SortId) : labelKeyEq a b = (a == b) := by
   rw [Bool.eq_iff_iff]
   simp only [labelKeyEq, Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq, and_assoc]
 
+/-- `scanFrom labelKeyEq`, compiled on its own. -/
+def scanLabelsFrom (xs : Array (Label × SortId)) (x : Label × SortId) (i : Nat) : Nat :=
+  if h : i < xs.size then if labelKeyEq xs[i] x then i else scanLabelsFrom xs x (i + 1) else xs.size
+termination_by xs.size - i
+
+theorem scanLabelsFrom_at (xs : Array (Label × SortId)) (x : Label × SortId) (i : Nat) :
+    scanLabelsFrom xs x i = scanFrom labelKeyEq xs x i := by
+  rw [scanLabelsFrom, scanFrom]
+  by_cases h : i < xs.size
+  · simp only [h, ↓reduceDIte, scanLabelsFrom_at xs x (i + 1)]
+  · simp only [h, ↓reduceDIte]
+termination_by xs.size - i
+
+theorem scanLabelsFrom_eq : scanLabelsFrom = scanFrom labelKeyEq := by
+  funext xs x i
+  exact scanLabelsFrom_at xs x i
+
 /-- Equality of targets at a sort, field by field. -/
 def targetKeyEq (a b : Target × SortId) : Bool :=
   (match a.1, b.1 with
@@ -367,6 +384,23 @@ theorem targetKeyEq_eq (a b : Target × SortId) : targetKeyEq a b = (a == b) := 
   cases a1 <;> cases b1 <;>
     simp only [targetKeyEq, Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq, Target.name.injEq,
       Target.self.injEq, reduceCtorEq, Bool.false_eq_true, false_and, ← Prod.ext_iff]
+
+/-- `scanFrom targetKeyEq`, compiled on its own. -/
+def scanTargetsFrom (xs : Array (Target × SortId)) (x : Target × SortId) (i : Nat) : Nat :=
+  if h : i < xs.size then if targetKeyEq xs[i] x then i else scanTargetsFrom xs x (i + 1) else xs.size
+termination_by xs.size - i
+
+theorem scanTargetsFrom_at (xs : Array (Target × SortId)) (x : Target × SortId) (i : Nat) :
+    scanTargetsFrom xs x i = scanFrom targetKeyEq xs x i := by
+  rw [scanTargetsFrom, scanFrom]
+  by_cases h : i < xs.size
+  · simp only [h, ↓reduceDIte, scanTargetsFrom_at xs x (i + 1)]
+  · simp only [h, ↓reduceDIte]
+termination_by xs.size - i
+
+theorem scanTargetsFrom_eq : scanTargetsFrom = scanFrom targetKeyEq := by
+  funext xs x i
+  exact scanTargetsFrom_at xs x i
 
 /-- Every entry of the list is at the position found for it, counted from
 `i`: no entry occurs twice. -/
@@ -421,13 +455,13 @@ def queryScan (names heads : Array UInt64) : Option Query :=
   ((headVariables heads.toList).bind (queryLabels names)).bind fun qs =>
     let keys := queryKeys qs
     let a := keys.toArray
-    let position := if a.size ≤ scanLength then (fun k => scanFrom labelKeyEq a k 0)
+    let position := if a.size ≤ scanLength then (fun k => scanLabelsFrom a k 0)
       else (Index.of labelKey keys).position
     if distinctFrom position 0 keys then some ⟨qs.toArray, position, indexBound qs⟩ else none
 
 @[csimp] theorem query_eq_scan : @query = @queryScan := by
   funext names heads
-  simp only [query, queryScan, scan_or_index labelKeyEq labelKeyEq_eq]
+  simp only [query, queryScan, scanLabelsFrom_eq, scan_or_index labelKeyEq labelKeyEq_eq]
 
 /-- The test of the table of an arm: no target twice at one sort, no variable
 of a sort the caller lacks, a label only if no query variable of that sort
@@ -453,7 +487,7 @@ def tableOK (q : Query) (nat above unused : Bool) (es : List Entry) : Bool :=
 def tableOKScan (q : Query) (nat above unused : Bool) (es : List Entry) : Bool :=
   let keys := es.map entryKey
   let a := keys.toArray
-  let position := if a.size ≤ scanLength then (fun k => scanFrom targetKeyEq a k 0)
+  let position := if a.size ≤ scanLength then (fun k => scanTargetsFrom a k 0)
     else (Index.of targetKey keys).position
   distinctFrom position 0 keys &&
   es.all fun e =>
@@ -471,7 +505,7 @@ def tableOKScan (q : Query) (nat above unused : Bool) (es : List Entry) : Bool :
 
 @[csimp] theorem tableOK_eq_scan : @tableOK = @tableOKScan := by
   funext q nat above unused es
-  simp only [tableOK, tableOKScan, scan_or_index targetKeyEq targetKeyEq_eq]
+  simp only [tableOK, tableOKScan, scanTargetsFrom_eq, scan_or_index targetKeyEq targetKeyEq_eq]
 
 /-- The test of the tables of a family, on the words the caller will read. -/
 def admissible (heads : Array UInt64) (q : Query) (nat above unused : Bool)
@@ -1882,13 +1916,15 @@ words of the request, without the lists and the closures of `query`,
 `tablesFor` and `admissible`. Whenever it gives tables they are the ones
 `run` gives (`proposedFast_run`); otherwise `run` is called. -/
 
-/-- The first `i` from `i` on below `n` that passes, or `n`. -/
-@[specialize] def firstFrom (p : Nat → Bool) (n i : Nat) : Nat :=
+/-- The first `i` from `i` on below `n` that passes, or `n`. The loops of the
+shortcut are written out for each test, and proved to be instances of this
+and of `allFrom`. -/
+def firstFrom (p : Nat → Bool) (n i : Nat) : Nat :=
   if i < n then if p i then i else firstFrom p n (i + 1) else n
 termination_by n - i
 
 /-- Every `i` from `i` on below `n` passes. -/
-@[specialize] def allFrom (p : Nat → Bool) (n i : Nat) : Bool :=
+def allFrom (p : Nat → Bool) (n i : Nat) : Bool :=
   if i < n then p i && allFrom p n (i + 1) else true
 termination_by n - i
 
@@ -1903,21 +1939,47 @@ termination_by n - i
 /-- The sort of the query variable in row `i`. -/
 @[inline] def sortAt (heads : Array UInt64) (i : Nat) : SortId := sortOf (heads.getD (2 * i + 1) 0)
 
+/-- The first row from `i` on of the query variable with this label and sort,
+or `n`. -/
+def rowFrom (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) (i : Nat) : Nat :=
+  if i < n then
+    if hintAt names heads i == a && indexAt names heads i == b && sortAt heads i == s then i
+    else rowFrom names heads n a b s (i + 1)
+  else n
+termination_by n - i
+
 /-- The row of the query variable with this label and sort, or `n`. -/
 @[inline] def rowOf (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) : Nat :=
-  firstFrom (fun i => hintAt names heads i == a && indexAt names heads i == b && sortAt heads i == s) n 0
+  rowFrom names heads n a b s 0
+
+/-- Every query variable from row `i` on has a label. -/
+def labelledFrom (names heads : Array UInt64) (n i : Nat) : Bool :=
+  if i < n then
+    decide (2 * (heads.getD (2 * i) 0).toNat + 1 < names.size) && labelledFrom names heads n (i + 1)
+  else true
+termination_by n - i
+
+/-- No query variable from row `j` on has this label and sort. -/
+def otherLabelsFrom (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) (j : Nat) : Bool :=
+  if j < n then
+    !(hintAt names heads j == a && indexAt names heads j == b && sortAt heads j == s) &&
+      otherLabelsFrom names heads n a b s (j + 1)
+  else true
+termination_by n - j
+
+/-- No query variable from row `i` on has the label and sort of a later one. -/
+def distinctLabelsFrom (names heads : Array UInt64) (n i : Nat) : Bool :=
+  if i < n then
+    otherLabelsFrom names heads n (hintAt names heads i) (indexAt names heads i) (sortAt heads i) (i + 1) &&
+      distinctLabelsFrom names heads n (i + 1)
+  else true
+termination_by n - i
 
 /-- The words of the query make a query: every variable has a label, and no
 two of one sort have the same. -/
 def queryOK (names heads : Array UInt64) : Bool :=
   heads.size % 2 == 0 && decide (heads.size < UInt64.size) &&
-  allFrom (fun i => decide (2 * (heads.getD (2 * i) 0).toNat + 1 < names.size)) (heads.size / 2) 0 &&
-  allFrom (fun i =>
-    let a := hintAt names heads i
-    let b := indexAt names heads i
-    let s := sortAt heads i
-    allFrom (fun j => !(hintAt names heads j == a && indexAt names heads j == b && sortAt heads j == s))
-      (heads.size / 2) (i + 1)) (heads.size / 2) 0
+  labelledFrom names heads (heads.size / 2) 0 && distinctLabelsFrom names heads (heads.size / 2) 0
 
 /-- `entryWords`, with the row of the label found. -/
 def pushEntry (n row : Nat) (id sort a b : UInt64) (acc : Array UInt64) : Array UInt64 :=
@@ -1936,17 +1998,35 @@ def armFrom (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (i : Nat
   else acc
 termination_by r.size - 2 * i
 
+/-- Every range variable from the `t`-th on has a sort the caller has. -/
+def sortsFrom (nat : Bool) (r : Array UInt64) (m t : Nat) : Bool :=
+  if t < m then
+    (decide (r.getD (2 * t + 1) 0 ≤ 4) && (nat || r.getD (2 * t + 1) 0 != 4)) && sortsFrom nat r m (t + 1)
+  else true
+termination_by m - t
+
+/-- No range variable from the `u`-th on gets this label at this sort. -/
+def otherProposalsFrom (r p : Array UInt64) (m : Nat) (a b : UInt64) (s : SortId) (u : Nat) : Bool :=
+  if u < m then
+    !(p.getD (2 * u) 0 == a && p.getD (2 * u + 1) 0 == b && sortOf (r.getD (2 * u + 1) 0) == s) &&
+      otherProposalsFrom r p m a b s (u + 1)
+  else true
+termination_by m - u
+
+/-- No range variable from the `t`-th on gets the label of a later one at its
+sort. -/
+def distinctProposalsFrom (r p : Array UInt64) (m t : Nat) : Bool :=
+  if t < m then
+    otherProposalsFrom r p m (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0) (sortOf (r.getD (2 * t + 1) 0)) (t + 1) &&
+      distinctProposalsFrom r p m (t + 1)
+  else true
+termination_by m - t
+
 /-- The range and the proposal of an arm fit, every sort is one the caller
 has, and no two range variables of one sort get one label. -/
 def armOK (nat : Bool) (r p : Array UInt64) : Bool :=
-  r.size % 2 == 0 && p.size == r.size &&
-  allFrom (fun t => let s := r.getD (2 * t + 1) 0; decide (s ≤ 4) && (nat || s != 4)) (r.size / 2) 0 &&
-  allFrom (fun t =>
-    let a := p.getD (2 * t) 0
-    let b := p.getD (2 * t + 1) 0
-    let s := sortOf (r.getD (2 * t + 1) 0)
-    allFrom (fun u => !(p.getD (2 * u) 0 == a && p.getD (2 * u + 1) 0 == b &&
-      sortOf (r.getD (2 * u + 1) 0) == s)) (r.size / 2) (t + 1)) (r.size / 2) 0
+  r.size % 2 == 0 && p.size == r.size && sortsFrom nat r (r.size / 2) 0 &&
+    distinctProposalsFrom r p (r.size / 2) 0
 
 /-- `hasNat` on the words from `i` on. -/
 def hasNatFrom (r : Array UInt64) (i : Nat) : Bool :=
@@ -2030,6 +2110,95 @@ theorem allFrom_spec (p : Nat → Bool) (n i : Nat) (h : allFrom p n i = true) :
     · exact allFrom_spec p n (i + 1) h.2 j (by omega) hj
   · omega
 termination_by n - i
+
+theorem rowFrom_eq (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) (i : Nat) :
+    rowFrom names heads n a b s i =
+      firstFrom (fun i => hintAt names heads i == a && indexAt names heads i == b && sortAt heads i == s) n i := by
+  rw [rowFrom, firstFrom]
+  by_cases h : i < n
+  · simp only [h, ↓reduceIte, rowFrom_eq names heads n a b s (i + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by n - i
+
+theorem rowOf_eq (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) :
+    rowOf names heads n a b s =
+      firstFrom (fun i => hintAt names heads i == a && indexAt names heads i == b && sortAt heads i == s) n 0 :=
+  rowFrom_eq names heads n a b s 0
+
+theorem labelledFrom_eq (names heads : Array UInt64) (n i : Nat) :
+    labelledFrom names heads n i =
+      allFrom (fun i => decide (2 * (heads.getD (2 * i) 0).toNat + 1 < names.size)) n i := by
+  rw [labelledFrom, allFrom]
+  by_cases h : i < n
+  · simp only [h, ↓reduceIte, labelledFrom_eq names heads n (i + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by n - i
+
+theorem otherLabelsFrom_eq (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) (j : Nat) :
+    otherLabelsFrom names heads n a b s j =
+      allFrom (fun j => !(hintAt names heads j == a && indexAt names heads j == b && sortAt heads j == s))
+        n j := by
+  rw [otherLabelsFrom, allFrom]
+  by_cases h : j < n
+  · simp only [h, ↓reduceIte, otherLabelsFrom_eq names heads n a b s (j + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by n - j
+
+theorem distinctLabelsFrom_eq (names heads : Array UInt64) (n i : Nat) :
+    distinctLabelsFrom names heads n i =
+      allFrom (fun i => allFrom (fun j => !(hintAt names heads j == hintAt names heads i &&
+        indexAt names heads j == indexAt names heads i && sortAt heads j == sortAt heads i)) n (i + 1)) n i := by
+  rw [distinctLabelsFrom, allFrom]
+  by_cases h : i < n
+  · simp only [h, ↓reduceIte, otherLabelsFrom_eq, distinctLabelsFrom_eq names heads n (i + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by n - i
+
+theorem queryOK_eq (names heads : Array UInt64) :
+    queryOK names heads = (heads.size % 2 == 0 && decide (heads.size < UInt64.size) &&
+      allFrom (fun i => decide (2 * (heads.getD (2 * i) 0).toNat + 1 < names.size)) (heads.size / 2) 0 &&
+      allFrom (fun i => allFrom (fun j => !(hintAt names heads j == hintAt names heads i &&
+        indexAt names heads j == indexAt names heads i && sortAt heads j == sortAt heads i))
+          (heads.size / 2) (i + 1)) (heads.size / 2) 0) := by
+  simp only [queryOK, labelledFrom_eq, distinctLabelsFrom_eq]
+
+theorem sortsFrom_eq (nat : Bool) (r : Array UInt64) (m t : Nat) :
+    sortsFrom nat r m t =
+      allFrom (fun t => decide (r.getD (2 * t + 1) 0 ≤ 4) && (nat || r.getD (2 * t + 1) 0 != 4)) m t := by
+  rw [sortsFrom, allFrom]
+  by_cases h : t < m
+  · simp only [h, ↓reduceIte, sortsFrom_eq nat r m (t + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by m - t
+
+theorem otherProposalsFrom_eq (r p : Array UInt64) (m : Nat) (a b : UInt64) (s : SortId) (u : Nat) :
+    otherProposalsFrom r p m a b s u =
+      allFrom (fun u => !(p.getD (2 * u) 0 == a && p.getD (2 * u + 1) 0 == b &&
+        sortOf (r.getD (2 * u + 1) 0) == s)) m u := by
+  rw [otherProposalsFrom, allFrom]
+  by_cases h : u < m
+  · simp only [h, ↓reduceIte, otherProposalsFrom_eq r p m a b s (u + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by m - u
+
+theorem distinctProposalsFrom_eq (r p : Array UInt64) (m t : Nat) :
+    distinctProposalsFrom r p m t =
+      allFrom (fun t => allFrom (fun u => !(p.getD (2 * u) 0 == p.getD (2 * t) 0 &&
+        p.getD (2 * u + 1) 0 == p.getD (2 * t + 1) 0 &&
+        sortOf (r.getD (2 * u + 1) 0) == sortOf (r.getD (2 * t + 1) 0))) m (t + 1)) m t := by
+  rw [distinctProposalsFrom, allFrom]
+  by_cases h : t < m
+  · simp only [h, ↓reduceIte, otherProposalsFrom_eq, distinctProposalsFrom_eq r p m (t + 1)]
+  · simp only [h, ↓reduceIte]
+termination_by m - t
+
+theorem armOK_eq (nat : Bool) (r p : Array UInt64) :
+    armOK nat r p = (r.size % 2 == 0 && p.size == r.size &&
+      allFrom (fun t => decide (r.getD (2 * t + 1) 0 ≤ 4) && (nat || r.getD (2 * t + 1) 0 != 4)) (r.size / 2) 0 &&
+      allFrom (fun t => allFrom (fun u => !(p.getD (2 * u) 0 == p.getD (2 * t) 0 &&
+        p.getD (2 * u + 1) 0 == p.getD (2 * t + 1) 0 &&
+        sortOf (r.getD (2 * u + 1) 0) == sortOf (r.getD (2 * t + 1) 0))) (r.size / 2) (t + 1)) (r.size / 2) 0) := by
+  simp only [armOK, sortsFrom_eq, distinctProposalsFrom_eq]
 
 theorem pairwise_of_allFrom (P : Nat → Nat → Bool) (n : Nat)
     (h : allFrom (fun i => allFrom (fun j => P i j) n (i + 1)) n 0 = true) :
@@ -2161,7 +2330,7 @@ structure FastQuery (names heads : Array UInt64) (q : Query) : Prop where
 
 theorem query_fast (names heads : Array UInt64) (ok : queryOK names heads = true) :
     ∃ q, query names heads = some q ∧ FastQuery names heads q := by
-  unfold queryOK at ok
+  rw [queryOK_eq] at ok
   simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at ok
   obtain ⟨⟨⟨even, small⟩, labelled⟩, distinct⟩ := ok
   have hv : headVariables heads.toList = some ((List.range' 0 (heads.size / 2)).map (varAt heads)) := by
@@ -2202,8 +2371,7 @@ theorem query_fast (names heads : Array UInt64) (ok : queryOK names heads = true
   · refine ⟨by simp, by omega, fun a b s => ?_, fun i h => ?_⟩
     · simp only
       rw [Index.position_of, keys]
-      unfold rowOf
-      rw [firstFrom_eq _ ((List.range' 0 (heads.size / 2)).map
+      rw [rowOf_eq, firstFrom_eq _ ((List.range' 0 (heads.size / 2)).map
           fun i => ((hintAt names heads i, indexAt names heads i), sortAt heads i)) ((a, b), s)
           (heads.size / 2) (by simp) (fun j hj => ?_) 0 (Nat.zero_le _)]
       · simp
@@ -2215,6 +2383,7 @@ theorem rowOf_lt {names heads : Array UInt64} {n : Nat} {a b : UInt64} {s : Sort
     (h : rowOf names heads n a b s < n) :
     hintAt names heads (rowOf names heads n a b s) = a ∧
       indexAt names heads (rowOf names heads n a b s) = b ∧ sortAt heads (rowOf names heads n a b s) = s := by
+  rw [rowOf_eq] at h ⊢
   have := firstFrom_lt _ n 0 h
   simp only [Bool.and_eq_true, beq_iff_eq] at this
   exact ⟨this.1.1, this.1.2, this.2⟩
@@ -2300,7 +2469,7 @@ theorem tableOK_fast {names heads : Array UInt64} {q : Query} (hq : FastQuery na
     (r p : Array UInt64) (ok : armOK nat r p = true) :
     tableOK q nat false false
       ((List.range' 0 (r.size / 2)).map (entryAt names heads (heads.size / 2) r p)) = true := by
-  unfold armOK at ok
+  rw [armOK_eq] at ok
   simp only [Bool.and_eq_true, beq_iff_eq] at ok
   obtain ⟨⟨⟨even, same⟩, sorts⟩, distinct⟩ := ok
   have small : heads.size / 2 < UInt64.size := hq.small
@@ -2368,7 +2537,7 @@ theorem arm_fast {names heads : Array UInt64} {q : Query} (hq : FastQuery names 
         some (armFrom names heads (heads.size / 2) r p 0 ((Array.mkEmpty c).push (UInt64.ofNat k))) ∧
       Good q nat (armFrom names heads (heads.size / 2) r p 0 ((Array.mkEmpty c).push (UInt64.ofNat k))) := by
   have tab := tableOK_fast hq nat r p ok
-  unfold armOK at ok
+  rw [armOK_eq] at ok
   simp only [Bool.and_eq_true, beq_iff_eq] at ok
   obtain ⟨⟨⟨even, same⟩, sorts⟩, _⟩ := ok
   refine ⟨?_, ?_⟩
