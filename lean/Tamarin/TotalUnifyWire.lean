@@ -23,7 +23,7 @@ def decl (ds : List Decl) (k id : UInt64) :=
 
 abbrev Symbol (ds : List Decl) (k : UInt64) := { id : UInt64 // (decl ds k id).isSome }
 
-private def resolve (ds : List Decl) (k id : UInt64) : Option (Symbol ds k) :=
+def resolve (ds : List Decl) (k id : UInt64) : Option (Symbol ds k) :=
   if h : (decl ds k id).isSome then some ⟨id,h⟩ else none
 
 def info {ds k} (f : Symbol ds k) := (decl ds k f.val).get f.property
@@ -44,7 +44,7 @@ abbrev Dictionary.sig (d : Dictionary) : Signature where
   acSort f := sortOf (info f).output
   atomSort a := a.val.2
 
-private def atom (d : Dictionary) (id : UInt64) (s : SortId) : Option d.sig.Atom :=
+def atom (d : Dictionary) (id : UInt64) (s : SortId) : Option d.sig.Atom :=
   if h : (id,s) ∈ d.atoms then some ⟨(id,s),h⟩ else none
 
 def leaf (d : Dictionary) (k id arg : UInt64) : Option (Term d.sig) := do

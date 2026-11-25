@@ -846,7 +846,7 @@ def lookupD : List (Variable × FTerm) → Variable → FTerm
 
 /-- One pass over the bindings, the latest first: every entry gets the image
 of its term under the entries of the later bindings. -/
-def resolve (bs : List (Variable × FTerm)) : List (Variable × FTerm) :=
+def resolveBinds (bs : List (Variable × FTerm)) : List (Variable × FTerm) :=
   bs.foldl (fun table b => (b.1, FTerm.subst (lookupD table) b.2) :: table) []
 
 theorem lookupD_foldl (L : List (Variable × FTerm)) (tab : List (Variable × FTerm)) (u : Variable) :
@@ -863,8 +863,8 @@ theorem lookupD_foldl (L : List (Variable × FTerm)) (tab : List (Variable × FT
     by_cases h : x = w <;> simp [lookupD, h, FTerm.subst]
 
 theorem lookupD_resolve (bs : List (Variable × FTerm)) (u : Variable) :
-    lookupD (resolve bs) u = chain bs u := by
-  rw [resolve, lookupD_foldl]
+    lookupD (resolveBinds bs) u = chain bs u := by
+  rw [resolveBinds, lookupD_foldl]
   have : lookupD [] = FTerm.var := rfl
   rw [this, FTerm.subst_var]
 
@@ -1024,23 +1024,23 @@ theorem family_clash (p : Problem d.sig) (kept : declines p = false)
     NarrowingClash.unifier, clash, List.map_nil]
   rfl
 
-/-- The reply to a decoded query: free factoring on the lowered terms when it
-solves the query, the packed family otherwise. -/
-def reply (p : Problem d.sig) : Array (Array UInt64) :=
-  if declines p || p.any NarrowingClash.quick then (pack p (family p)).getD #[#[0]]
-  else
-    let eqs := p.map lowerEq
-    let st := factor eqs
-    if st.todo.isEmpty && st.kept.isEmpty then
-      let table := resolve st.binds
-      match (Buckets.dedup Variable.id (problemVars eqs)).mapM (row table) with
-      | some rows => (#[1] :: #[] :: rows).toArray
-      | none => (pack p (family p)).getD #[#[0]]
-    else if (st.todo ++ st.kept).any impossible &&
-        ((st.todo ++ st.kept).all (fun e => !e.1.product && !e.2.product) ||
-          ((st.todo ++ st.kept).map fun e => e.1.leaves + e.2.leaves).sum < ForcedOperands.floor) then
-      #[#[1]]
-    else (pack p (family p)).getD #[#[0]]
+/-- The reply for a query on which neither the decline test nor the root test
+fires, from free factoring on its lowered equations: the images of the query
+variables when no equation is left, the empty family when the residual has an
+impossible equation and too few product operands to force any, and `slow ()`
+otherwise. -/
+def solved (eqs : List FEq) (slow : Unit → Array (Array UInt64)) : Array (Array UInt64) :=
+  let st := factor eqs
+  if st.todo.isEmpty && st.kept.isEmpty then
+    let table := resolveBinds st.binds
+    match (Buckets.dedup Variable.id (problemVars eqs)).mapM (row table) with
+    | some rows => (#[1] :: #[] :: rows).toArray
+    | none => slow ()
+  else if (st.todo ++ st.kept).any impossible &&
+      ((st.todo ++ st.kept).all (fun e => !e.1.product && !e.2.product) ||
+        ((st.todo ++ st.kept).map fun e => e.1.leaves + e.2.leaves).sum < ForcedOperands.floor) then
+    #[#[1]]
+  else slow ()
 
 omit [Interrupt] in
 theorem pack_single (p : Problem d.sig) (σ : Substitution d.sig) :
@@ -1048,14 +1048,12 @@ theorem pack_single (p : Problem d.sig) (σ : Substitution d.sig) :
   unfold pack arm
   cases h : p.variables.eraseDups.mapM (binding σ) <;> simp [h]
 
-theorem reply_eq (p : Problem d.sig) : reply p = (pack p (family p)).getD #[#[0]] := by
-  unfold reply
-  split
-  · rfl
-  · next stop =>
-    have hd : declines p = false := by simp_all
-    have hq : p.any NarrowingClash.quick = false := by simp_all
-    have sim := factor_sim p
+theorem solved_eq (p : Problem d.sig) (hd : declines p = false)
+    (hq : p.any NarrowingClash.quick = false) (slow : Unit → Array (Array UInt64))
+    (hs : slow () = (pack p (family p)).getD #[#[0]]) :
+    solved (p.map lowerEq) slow = (pack p (family p)).getD #[#[0]] := by
+  unfold solved
+  · have sim := factor_sim p
     dsimp only
     split
     · next done =>
@@ -1072,18 +1070,18 @@ theorem reply_eq (p : Problem d.sig) : reply p = (pack p (family p)).getD #[#[0]
       obtain ⟨σ, hfam, img⟩ := family_solved p hd hq todo left
       have id : σ.image = Term.var := funext img
       have same : ∀ v, lower ((σ.compose (FreeFactoring.factor p).θ).image v) =
-          lookupD (resolve (factor (p.map lowerEq)).binds) v := by
+          lookupD (resolveBinds (factor (p.map lowerEq)).binds) v := by
         intro v
         rw [lookupD_resolve, ← sim.image]
         simp [Substitution.compose, Substitution.apply, id]
       have rows : (Buckets.dedup Variable.id (problemVars (p.map lowerEq))).mapM
-          (row (resolve (factor (p.map lowerEq)).binds)) =
+          (row (resolveBinds (factor (p.map lowerEq)).binds)) =
           p.variables.eraseDups.mapM (binding (σ.compose (FreeFactoring.factor p).θ)) := by
         rw [problemVars_lower, Buckets.dedup_eq]
         congr 1
         funext v
         exact row_binding _ _ same v
-      rw [hfam, pack_single, rows]
+      rw [hs, hfam, pack_single, rows]
       split <;> simp_all
     · split
       · next clash =>
@@ -1107,24 +1105,439 @@ theorem reply_eq (p : Problem d.sig) : reply p = (pack p (family p)).getD #[#[0]
             exact small
         rw [family_clash p hd hq imp flat]
         rfl
-      · rfl
+      · exact hs
 
 end Reply
 
-/-- `TotalUnifyWire.run` through `reply`. -/
+/-! ### Decoding straight to lowered terms -/
+
+/-- `ACRepresentation.fold` on lowered terms. -/
+def foldAC (id : UInt64) (o : SortId) (a : FTerm) : List FTerm → FTerm
+  | [] => a
+  | b :: bs => .app 4 id o [o, o] [a, foldAC id o b bs]
+
+/-- `TotalUnifyWire.app` on lowered children. -/
+def decodeApp (ds : List Whole.Decl) (k id : UInt64) (children : List FTerm) : Option FTerm :=
+  match decl ds k id with
+  | none => none
+  | some dl =>
+    if k == 2 then
+      if children.length = dl.inputs.length then
+        some (.app 2 id (sortOf dl.output) (dl.inputs.map sortOf) children)
+      else none
+    else if k == 3 then
+      match children with
+      | [l, r] => let o := sortOf dl.output; some (.app 3 id o [o, o] [l, r])
+      | _ => none
+    else if k == 4 then
+      match children with
+      | l :: r :: rs => let o := sortOf dl.output; some (.app 4 id o [o, o] [l, foldAC id o r rs])
+      | _ => none
+    else none
+
+/-- `TotalUnifyWire.leaf`, an atom being declared by its own row. -/
+def decodeLeaf (k id arg : UInt64) : Option FTerm :=
+  if arg ≤ 4 then
+    if k == 0 then some (.var ⟨id.toNat, sortOf arg⟩)
+    else if k == 1 then some (.atom id (sortOf arg))
+    else none
+  else none
+
+/-- `TotalUnifyWire.node` on lowered terms. -/
+def decodeNode (ds : List Whole.Decl) (prior : Array FTerm) (row : Array UInt64) : Option FTerm :=
+  match row.toList with
+  | k :: id :: tail =>
+    if k ≤ 1 then
+      match tail with
+      | [arg] => decodeLeaf k id arg
+      | _ => none
+    else do decodeApp ds k id (← tail.mapM fun (i : UInt64) => prior[i.toNat]?)
+  | _ => none
+
+/-- `TotalUnifyWire.equations` on lowered terms. -/
+def decodeEquations (ts : Array FTerm) : List UInt64 → Option (List FEq)
+  | [] => some []
+  | i :: j :: rest => do return (← ts[i.toNat]?, ← ts[j.toNat]?) :: (← decodeEquations ts rest)
+  | [_] => none
+
+/-- `TotalUnifyWire.input`, lowered. -/
+def decode (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Option (List FEq) := do
+  let ds ← Whole.declarations decls.toList
+  let ts ← nodes.foldlM (fun acc r => do return acc.push (← decodeNode ds acc r)) #[]
+  decodeEquations ts roots.toList
+
+section DecodeProof
+variable {d : Dictionary}
+
+theorem lower_fold (f : d.sig.ACSym) (a : Term d.sig) (bs : List (Term d.sig)) :
+    lower (ACRepresentation.fold f a bs) = foldAC f.val (sortOf (info f).output) (lower a) (bs.map lower) := by
+  induction bs generalizing a with
+  | nil => rfl
+  | cons b bs ih => simp [ACRepresentation.fold, foldAC, lower, ih]
+
+theorem resolve_some {k id : UInt64} (h : (decl d.decls k id).isSome) :
+    resolve d.decls k id = some ⟨id, h⟩ := by
+  simp [resolve, h]
+
+theorem info_eq {k id : UInt64} {dl : Whole.Decl} (found : decl d.decls k id = some dl)
+    (h : (decl d.decls k id).isSome) : info (⟨id, h⟩ : Symbol d.decls k) = dl := by
+  simp [info, found]
+
+theorem decodeApp_sound (k id : UInt64) (cs : List (Term d.sig)) (ft : FTerm)
+    (h : decodeApp d.decls k id (cs.map lower) = some ft) :
+    ∃ t, TotalUnifyWire.app d k id cs = some t ∧ lower t = ft := by
+  unfold decodeApp at h
+  split at h
+  · cases h
+  · next dl found =>
+    have hs : (decl d.decls k id).isSome := by simp [found]
+    have hi := info_eq found hs
+    unfold TotalUnifyWire.app
+    by_cases k2 : (k == 2) = true
+    · have kk : k = 2 := by simpa using k2
+      subst kk
+      simp only [k2, ↓reduceIte, List.length_map] at h ⊢
+      split at h
+      · next len =>
+        cases h
+        rw [resolve_some hs]
+        let f : d.sig.FreeSym := ⟨id, hs⟩
+        have arity : d.sig.arity f = dl.inputs.length := by
+          show (info f).inputs.length = _
+          rw [hi]
+        have fits : cs.length = d.sig.arity f := by rw [arity, len]
+        refine ⟨.free f fun i => cs.get (Fin.cast fits.symm i), ?_, ?_⟩
+        · simp only [Option.bind_eq_bind, Option.bind_some]
+          split
+          · rfl
+          · next no => exact absurd fits no
+        · rw [lower_free]
+          have out : d.sig.outputSort f = sortOf dl.output := by
+            show sortOf (info f).output = _
+            rw [hi]
+          have ofFnGet (l : List UInt64) :
+              (List.ofFn fun i : Fin l.length => sortOf (l.get i)) = l.map sortOf := by
+            apply List.ext_getElem <;> simp
+          have ins : List.ofFn (d.sig.inputSort f) = dl.inputs.map sortOf := by
+            show (List.ofFn fun i : Fin (info f).inputs.length => sortOf ((info f).inputs.get i)) = _
+            rw [ofFnGet, hi]
+          have args : (List.ofFn fun i => lower (cs.get (Fin.cast fits.symm i))) = cs.map lower := by
+            apply List.ext_getElem <;> simp [fits]
+          rw [out, ins, args]
+      · cases h
+    · by_cases k3 : (k == 3) = true
+      · have kk : k = 3 := by simpa using k3
+        subst kk
+        simp only [k3, ↓reduceIte] at h ⊢
+        rw [resolve_some hs]
+        match cs, h with
+        | [a, b], h =>
+          cases h
+          refine ⟨.comm ⟨id, hs⟩ a b, rfl, ?_⟩
+          simp [lower, hi]
+      · by_cases k4 : (k == 4) = true
+        · have kk : k = 4 := by simpa using k4
+          subst kk
+          simp only [k4, ↓reduceIte] at h ⊢
+          rw [resolve_some hs]
+          match cs, h with
+          | a :: b :: rest, h =>
+            cases h
+            refine ⟨.ac ⟨id, hs⟩ a (ACRepresentation.fold ⟨id, hs⟩ b rest), rfl, ?_⟩
+            simp [lower, hi, lower_fold]
+        · simp [k2, k3, k4] at h
+
+theorem decodeLeaf_sound (k id arg : UInt64) (ft : FTerm)
+    (member : k = 1 → (id, sortOf arg) ∈ d.atoms)
+    (h : decodeLeaf k id arg = some ft) : ∃ t, leaf d k id arg = some t ∧ lower t = ft := by
+  unfold decodeLeaf at h
+  unfold leaf
+  by_cases small : arg ≤ 4
+  · simp only [small, ↓reduceIte] at h
+    by_cases k0 : (k == 0) = true
+    · simp only [k0, ↓reduceIte, Option.some.injEq] at h
+      subst h
+      exact ⟨.var ⟨id.toNat, sortOf arg⟩, by simp [small, k0, guard], rfl⟩
+    · by_cases k1 : (k == 1) = true
+      · simp only [k0, k1, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at h
+        subst h
+        have mem := member (by simpa using k1)
+        refine ⟨.atom ⟨(id, sortOf arg), mem⟩, ?_, rfl⟩
+        simp [small, k0, k1, guard, TotalUnifyWire.atom, mem]
+      · simp [k0, k1] at h
+  · simp [small] at h
+
+theorem mapM_lower (prior : Array (Term d.sig)) (is : List UInt64) :
+    is.mapM (fun (i : UInt64) => (prior.map lower)[i.toNat]?) =
+      (is.mapM fun (i : UInt64) => prior[i.toNat]?).map (List.map lower) := by
+  induction is with
+  | nil => rfl
+  | cons i is ih =>
+    rw [List.mapM_cons, List.mapM_cons, ih]
+    simp only [Array.getElem?_map]
+    cases prior[i.toNat]? <;> cases is.mapM (fun (i : UInt64) => prior[i.toNat]?) <;> rfl
+
+theorem decodeNode_sound (prior : Array (Term d.sig)) (row : Array UInt64) (ft : FTerm)
+    (member : ∀ id arg, row.toList = [1, id, arg] → (id, sortOf arg) ∈ d.atoms)
+    (h : decodeNode d.decls (prior.map lower) row = some ft) :
+    ∃ t, node d prior row = some t ∧ lower t = ft := by
+  unfold decodeNode at h
+  unfold node
+  split at h
+  · next k id tail list =>
+    simp only [list]
+    by_cases leafy : k ≤ 1
+    · simp only [leafy, ↓reduceIte] at h ⊢
+      split at h
+      · next arg =>
+        apply decodeLeaf_sound k id arg ft _ h
+        intro k1
+        subst k1
+        exact member id arg list
+      · cases h
+    · simp only [leafy, ↓reduceIte, Option.bind_eq_bind] at h ⊢
+      rw [mapM_lower] at h
+      cases hcs : tail.mapM (fun (i : UInt64) => prior[i.toNat]?) with
+      | none => simp [hcs] at h
+      | some cs =>
+        simp only [hcs, Option.map_some, Option.bind_some] at h
+        obtain ⟨t, ht, lt⟩ := decodeApp_sound k id cs ft h
+        exact ⟨t, by simp [ht], lt⟩
+  · cases h
+
+theorem decodeEquations_sound (ts : Array (Term d.sig)) : ∀ (roots : List UInt64) (eqs : List FEq),
+    decodeEquations (ts.map lower) roots = some eqs → ∃ p, equations ts roots = some p ∧ p.map lowerEq = eqs
+  | [], eqs, h => by simp [decodeEquations] at h; subst h; exact ⟨[], rfl, rfl⟩
+  | [_], eqs, h => by simp [decodeEquations] at h
+  | i :: j :: rest, eqs, h => by
+    simp only [decodeEquations, Array.getElem?_map, bind_pure_comp, Option.bind_eq_bind] at h
+    cases hi : ts[i.toNat]? with
+    | none => simp [hi] at h
+    | some a =>
+      cases hj : ts[j.toNat]? with
+      | none => simp [hi, hj] at h
+      | some b =>
+        cases hr : decodeEquations (ts.map lower) rest with
+        | none => simp [hi, hj, hr] at h
+        | some more =>
+          simp [hi, hj, hr] at h
+          subst h
+          obtain ⟨p, hp, eq⟩ := decodeEquations_sound ts rest more hr
+          exact ⟨⟨a, b⟩ :: p, by simp [equations, hi, hj, hp], by simp [eq, lowerEq]⟩
+
+theorem fold_sound (L : List (Array UInt64))
+    (member : ∀ row ∈ L, ∀ id arg, row.toList = [1, id, arg] → (id, sortOf arg) ∈ d.atoms) :
+    ∀ (acc : Array (Term d.sig)) (fts : Array FTerm),
+      L.foldlM (fun acc r => do return acc.push (← decodeNode d.decls acc r)) (acc.map lower) = some fts →
+      ∃ ts, L.foldlM (fun acc r => do return acc.push (← node d acc r)) acc = some ts ∧ ts.map lower = fts := by
+  induction L with
+  | nil => intro acc fts h; simp at h; subst h; exact ⟨acc, rfl, rfl⟩
+  | cons r rest ih =>
+    intro acc fts h
+    cases hn : decodeNode d.decls (acc.map lower) r with
+    | none => simp [hn] at h
+    | some ft =>
+      obtain ⟨t, ht, lt⟩ := decodeNode_sound acc r ft (member r List.mem_cons_self) hn
+      have push : (acc.map lower).push ft = (acc.push t).map lower := by simp [lt]
+      have h' : rest.foldlM (fun acc r => do return acc.push (← decodeNode d.decls acc r))
+          ((acc.push t).map lower) = some fts := by
+        rw [← push]
+        simpa [hn] using h
+      obtain ⟨ts, hts, eq⟩ := ih (fun row hr => member row (List.mem_cons_of_mem _ hr)) (acc.push t) fts h'
+      exact ⟨ts, by simpa [ht] using hts, eq⟩
+
+theorem decode_sound (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64)
+    (eqs : List FEq) (h : decode decls nodes roots = some eqs) :
+    ∃ d p, input decls nodes roots = some ⟨d, p⟩ ∧ p.map lowerEq = eqs := by
+  unfold decode at h
+  cases hds : Whole.declarations decls.toList with
+  | none => simp [hds] at h
+  | some ds =>
+    simp only [hds, Option.bind_some, Option.bind_eq_bind] at h
+    let d : Dictionary := ⟨ds, (nodes.toList.filterMap fun row => match row.toList with
+      | [1,id,s] => some (id,sortOf s)
+      | _ => none).eraseDups⟩
+    have member : ∀ row ∈ nodes.toList, ∀ id arg, row.toList = [1, id, arg] → (id, sortOf arg) ∈ d.atoms := by
+      intro row hrow id arg hlist
+      apply List.mem_eraseDups.mpr
+      apply List.mem_filterMap.mpr
+      exact ⟨row, hrow, by simp [hlist]⟩
+    cases hf : nodes.foldlM (fun acc r => do return acc.push (← decodeNode ds acc r)) #[] with
+    | none =>
+      simp only [Option.bind_eq_bind] at hf
+      rw [hf] at h
+      cases h
+    | some fts =>
+      have hf' := hf
+      simp only [Option.bind_eq_bind] at hf'
+      rw [hf'] at h
+      simp only [Option.bind_some] at h
+      rw [← Array.foldlM_toList] at hf
+      have hf2 : List.foldlM (fun acc r => do return acc.push (← decodeNode d.decls acc r))
+          ((#[] : Array (Term d.sig)).map lower) nodes.toList = some fts := by
+        rw [Array.map_empty]
+        exact hf
+      obtain ⟨ts, hts, eq⟩ := fold_sound (d := d) nodes.toList member #[] fts hf2
+      rw [Array.foldlM_toList] at hts
+      subst eq
+      obtain ⟨p, hp, peq⟩ := decodeEquations_sound ts roots.toList eqs h
+      refine ⟨d, p, ?_, peq⟩
+      have hg : graph decls nodes = some ⟨d, ts⟩ := by
+        have h2 : (Array.foldlM (fun acc r => do return acc.push (← node d acc r)) #[] nodes).bind
+            (fun ts => (some ⟨d, ts⟩ : Option ((d : Dictionary) × Array (Term d.sig)))) = some ⟨d, ts⟩ := by
+          rw [hts]; rfl
+        unfold graph
+        rw [hds]
+        exact h2
+      simp only [input, Option.bind_eq_bind, hg, Option.bind_some, hp]
+      rfl
+
+end DecodeProof
+
+/-- `TotalUnifyWire.run` with its own body, for the fallback of `runFast`. -/
+def runSlow [Interrupt] (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  (do
+    let ⟨_,p⟩ ← input decls nodes roots
+    pack p (family p)).getD #[#[0]]
+
+
+/-! ### The tests at the head of `family`, on lowered terms -/
+
+/-- `TotalUnifyWire.sumLike`. -/
+def sumLikeF : FTerm → Bool
+  | .var _ => true
+  | .app k .. => k == 4
+  | _ => false
+
+/-- `TotalUnifyWire.spine`. -/
+def spineF : Nat → FTerm → Nat
+  | 0, _ => 0
+  | n + 1, .app k _ _ _ [_, r] => if k == 4 then 1 + spineF n r else 1
+  | _ + 1, _ => 1
+
+/-- The first three conjuncts of `declines`, which decide it when false. -/
+def declinesPre (eqs : List FEq) : Bool :=
+  (eqs.all fun e => sumLikeF e.1 && sumLikeF e.2) &&
+    (eqs.any fun e => wideProduct ≤ spineF wideProduct e.1 || wideProduct ≤ spineF wideProduct e.2) &&
+    32 ≤ (problemVars eqs).length
+
+/-- `NarrowingClash.rootPossible`. -/
+def rootPossibleF : FTerm → SortId → Bool
+  | .var v, k => Subsort.check v.sort k || Subsort.check k v.sort
+  | .atom _ s, k => Subsort.check s k
+  | .app _ _ o _ _, k => Subsort.check o k
+
+/-- `NarrowingClash.shallow`. -/
+def shallowF : FTerm → FTerm → Bool
+  | .var v, b => !(rootPossibleF b v.sort)
+  | _, _ => false
+
+/-- `NarrowingClash.quick`. -/
+def quickF (e : FEq) : Bool := !(FTerm.heads e.1 e.2) || shallowF e.1 e.2 || shallowF e.2 e.1
+
+section Tests
+variable {d : Dictionary}
+
+theorem lower_sumLike (t : Term d.sig) : sumLikeF (lower t) = sumLike t := by
+  cases t <;> rfl
+
+theorem spineF_free (n : Nat) (id : UInt64) (o : SortId) (ins : List SortId) (args : List FTerm) :
+    spineF (n + 1) (.app 2 id o ins args) = 1 := by
+  match args with
+  | [] => rfl
+  | [_] => rfl
+  | [_, _] => rfl
+  | _ :: _ :: _ :: _ => rfl
+
+theorem lower_spine (n : Nat) (t : Term d.sig) : spineF n (lower t) = spine n t := by
+  induction n generalizing t with
+  | zero => cases t <;> rfl
+  | succ n ih =>
+    cases t with
+    | ac f a b => simp [lower, spineF, spine, ih]
+    | comm f a b => simp [lower, spineF, spine]
+    | free f xs =>
+      rw [lower_free, spineF_free]
+      rfl
+    | var | atom => rfl
+
+theorem lower_rootPossible (t : Term d.sig) (k : SortId) :
+    rootPossibleF (lower t) k = NarrowingClash.rootPossible t k := by
+  cases t <;> rfl
+
+theorem lower_shallow (a b : Term d.sig) : shallowF (lower a) (lower b) = NarrowingClash.shallow a b := by
+  cases a <;> simp [lower, shallowF, NarrowingClash.shallow, lower_rootPossible]
+
+theorem lower_quick (e : Equation d.sig) : quickF (lowerEq e) = NarrowingClash.quick e := by
+  simp [quickF, lowerEq, NarrowingClash.quick, lower_heads, lower_shallow]
+
+theorem declinesPre_false {p : Problem d.sig} (h : declinesPre (p.map lowerEq) = false) :
+    declines p = false := by
+  unfold declinesPre at h
+  unfold declines
+  simp only [List.all_map, List.any_map, Function.comp_def, lowerEq, lower_sumLike, lower_spine,
+    problemVars_lower] at h
+  simp [h]
+
+variable [Interrupt]
+
+theorem family_quick (p : Problem d.sig) (kept : declines p = false)
+    (quick : p.any NarrowingClash.quick = true) : family p = [] := by
+  unfold declines at kept
+  unfold family
+  simp only [kept, Bool.false_eq_true, ↓reduceIte]
+  rw [MixedUnification.verified_solve (s := d.sig)]
+  simp [quick]
+
+end Tests
+
+/-- The reply to a query decoded straight to lowered terms; `slow ()` is the
+reply of `TotalUnifyWire.run`, for the queries that are left to it. -/
+def replyF (eqs : List FEq) (slow : Unit → Array (Array UInt64)) : Array (Array UInt64) :=
+  if declinesPre eqs then slow ()
+  else if eqs.any quickF then #[#[1]]
+  else solved eqs slow
+
+theorem replyF_eq [Interrupt] {d : Dictionary} (p : Problem d.sig) (slow : Unit → Array (Array UInt64))
+    (hs : slow () = (pack p (family p)).getD #[#[0]]) :
+    replyF (p.map lowerEq) slow = (pack p (family p)).getD #[#[0]] := by
+  unfold replyF
+  split
+  · exact hs
+  · next pre =>
+    have hd := declinesPre_false (Bool.eq_false_iff.mpr pre)
+    split
+    · next q =>
+      have hq : p.any NarrowingClash.quick = true := by
+        rw [List.any_map] at q
+        simpa [Function.comp_def, lower_quick] using q
+      rw [family_quick p hd hq]
+      rfl
+    · next q =>
+      have hq : p.any NarrowingClash.quick = false := by
+        rw [List.any_map] at q
+        simpa [Function.comp_def, lower_quick] using q
+      exact solved_eq p hd hq slow hs
+
+/-- `TotalUnifyWire.run`, decoding straight to lowered terms. -/
 def runFast [Interrupt] (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Array (Array UInt64) :=
-  match input decls nodes roots with
-  | none => #[#[0]]
-  | some ⟨_, p⟩ => reply p
+  match decode decls nodes roots with
+  | none => runSlow decls nodes roots
+  | some eqs => replyF eqs fun _ => runSlow decls nodes roots
 
 @[csimp] theorem run_eq_fast : @run = @runFast := by
   funext i decls nodes roots
-  unfold run runFast
-  cases input decls nodes roots with
-  | none => rfl
-  | some dp =>
-    obtain ⟨d, p⟩ := dp
-    exact (reply_eq p).symm
+  unfold runFast
+  split
+  · rfl
+  · next eqs found =>
+    obtain ⟨d, p, hin, rfl⟩ := decode_sound decls nodes roots eqs found
+    have slow : runSlow decls nodes roots = (pack p (family p)).getD #[#[0]] := by
+      simp [runSlow, hin]
+    rw [replyF_eq p _ slow]
+    simp [run, hin]
 
 end Tamarin.TotalUnifyFast
