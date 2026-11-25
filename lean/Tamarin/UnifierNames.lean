@@ -1875,4 +1875,644 @@ theorem apply_declined (words : Array (Array UInt64)) (nat : Bool) : apply words
   | none => rfl
   | some t => simp [collect]
 
+/-! ### A shortcut for proposed tables
+
+`runFast` makes the tables of a proposal and tests them in one pass over the
+words of the request, without the lists and the closures of `query`,
+`tablesFor` and `admissible`. Whenever it gives tables they are the ones
+`run` gives (`proposedFast_run`); otherwise `run` is called. -/
+
+/-- The first `i` from `i` on below `n` that passes, or `n`. -/
+@[specialize] def firstFrom (p : Nat → Bool) (n i : Nat) : Nat :=
+  if i < n then if p i then i else firstFrom p n (i + 1) else n
+termination_by n - i
+
+/-- Every `i` from `i` on below `n` passes. -/
+@[specialize] def allFrom (p : Nat → Bool) (n i : Nat) : Bool :=
+  if i < n then p i && allFrom p n (i + 1) else true
+termination_by n - i
+
+/-- The hint of the label of the query variable in row `i`. -/
+@[inline] def hintAt (names heads : Array UInt64) (i : Nat) : UInt64 :=
+  names.getD (2 * (heads.getD (2 * i) 0).toNat) 0
+
+/-- The index of the label of the query variable in row `i`. -/
+@[inline] def indexAt (names heads : Array UInt64) (i : Nat) : UInt64 :=
+  names.getD (2 * (heads.getD (2 * i) 0).toNat + 1) 0
+
+/-- The sort of the query variable in row `i`. -/
+@[inline] def sortAt (heads : Array UInt64) (i : Nat) : SortId := sortOf (heads.getD (2 * i + 1) 0)
+
+/-- The row of the query variable with this label and sort, or `n`. -/
+@[inline] def rowOf (names heads : Array UInt64) (n : Nat) (a b : UInt64) (s : SortId) : Nat :=
+  firstFrom (fun i => hintAt names heads i == a && indexAt names heads i == b && sortAt heads i == s) n 0
+
+/-- The words of the query make a query: every variable has a label, and no
+two of one sort have the same. -/
+def queryOK (names heads : Array UInt64) : Bool :=
+  heads.size % 2 == 0 && decide (heads.size < UInt64.size) &&
+  allFrom (fun i => decide (2 * (heads.getD (2 * i) 0).toNat + 1 < names.size)) (heads.size / 2) 0 &&
+  allFrom (fun i =>
+    let a := hintAt names heads i
+    let b := indexAt names heads i
+    let s := sortAt heads i
+    allFrom (fun j => !(hintAt names heads j == a && indexAt names heads j == b && sortAt heads j == s))
+      (heads.size / 2) (i + 1)) (heads.size / 2) 0
+
+/-- `entryWords`, with the row of the label found. -/
+def pushEntry (n row : Nat) (id sort a b : UInt64) (acc : Array UInt64) : Array UInt64 :=
+  if row < n then ((((acc.push id).push sort).push 1).push (UInt64.ofNat row)).push 0
+  else ((((acc.push id).push sort).push 0).push a).push b
+
+/-- The words of the entries of the range variables from the `i`-th on. -/
+def armFrom (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (i : Nat) (acc : Array UInt64) :
+    Array UInt64 :=
+  if 2 * i + 1 < r.size then
+    let a := p.getD (2 * i) 0
+    let b := p.getD (2 * i + 1) 0
+    let sort := r.getD (2 * i + 1) 0
+    armFrom names heads n r p (i + 1)
+      (pushEntry n (rowOf names heads n a b (sortOf sort)) (r.getD (2 * i) 0) sort a b acc)
+  else acc
+termination_by r.size - 2 * i
+
+/-- The range and the proposal of an arm fit, every sort is one the caller
+has, and no two range variables of one sort get one label. -/
+def armOK (nat : Bool) (r p : Array UInt64) : Bool :=
+  r.size % 2 == 0 && p.size == r.size &&
+  allFrom (fun t => let s := r.getD (2 * t + 1) 0; decide (s ≤ 4) && (nat || s != 4)) (r.size / 2) 0 &&
+  allFrom (fun t =>
+    let a := p.getD (2 * t) 0
+    let b := p.getD (2 * t + 1) 0
+    let s := sortOf (r.getD (2 * t + 1) 0)
+    allFrom (fun u => !(p.getD (2 * u) 0 == a && p.getD (2 * u + 1) 0 == b &&
+      sortOf (r.getD (2 * u + 1) 0) == s)) (r.size / 2) (t + 1)) (r.size / 2) 0
+
+/-- `hasNat` on the words from `i` on. -/
+def hasNatFrom (r : Array UInt64) (i : Nat) : Bool :=
+  if h : i + 1 < r.size then r[i + 1] == 4 || hasNatFrom r (i + 2) else false
+termination_by r.size - i
+
+/-- The rows of the arms from the `k`-th on, with the proposal from its
+`j`-th row on. -/
+def rowsFrom (names heads : Array UInt64) (n : Nat) (ranges proposal : Array (Array UInt64)) (nat : Bool)
+    (k j : Nat) (acc : Array (Array UInt64)) : Option (Array (Array UInt64)) :=
+  if h : k < ranges.size then
+    let r := ranges[k]
+    if nat || !hasNatFrom r 0 then
+      if h' : j < proposal.size then
+        let p := proposal[j]
+        if armOK nat r p then
+          rowsFrom names heads n ranges proposal nat (k + 1) (j + 1)
+            (acc.push (armFrom names heads n r p 0
+              ((Array.mkEmpty (1 + 5 * (r.size / 2))).push (UInt64.ofNat k))))
+        else none
+      else none
+    else rowsFrom names heads n ranges proposal nat (k + 1) j acc
+  else if j = proposal.size then some acc else none
+termination_by ranges.size - k
+
+/-- The proposed tables, where they pass the test of `choose`. -/
+def proposedFast (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (nat : Bool) :
+    Option (Array (Array UInt64)) :=
+  if proposal.size != 0 && queryOK names heads then
+    rowsFrom names heads (heads.size / 2) ranges proposal nat 0 0
+      (((Array.mkEmpty (2 + proposal.size)).push #[1]).push heads)
+  else none
+
+def runFast (names heads : Array UInt64) (ranges proposal : Array (Array UInt64)) (nat low : Bool) :
+    Array (Array UInt64) :=
+  match proposedFast names heads ranges proposal nat with
+  | some out => out
+  | none => run names heads ranges proposal nat low
+
+/-! Why the shortcut gives what `run` gives. -/
+
+theorem firstFrom_lt (p : Nat → Bool) (n i : Nat) (h : firstFrom p n i < n) :
+    p (firstFrom p n i) = true := by
+  rw [firstFrom] at h ⊢
+  by_cases hi : i < n
+  · by_cases hp : p i = true
+    · simp [hi, hp]
+    · simp only [hi, hp, ↓reduceIte, Bool.false_eq_true] at h ⊢
+      exact firstFrom_lt p n (i + 1) h
+  · simp [hi] at h
+termination_by n - i
+
+theorem firstFrom_eq {α : Type} [BEq α] [LawfulBEq α] (p : Nat → Bool) (L : List α) (x : α) (n : Nat)
+    (hn : L.length = n) (hp : ∀ j (hj : j < L.length), p j = (L[j] == x)) (i : Nat) (hi : i ≤ n) :
+    firstFrom p n i = i + (L.drop i).idxOf x := by
+  rw [firstFrom]
+  split
+  · next h =>
+    rw [List.drop_eq_getElem_cons (by omega), List.idxOf_cons, ← hp i (by omega)]
+    by_cases hit : p i = true
+    · simp [hit]
+    · simp only [hit, Bool.false_eq_true, ↓reduceIte]
+      rw [firstFrom_eq p L x n hn hp (i + 1) h]
+      omega
+  · next h =>
+    have : i = n := by omega
+    subst this
+    rw [List.drop_of_length_le (by omega)]
+    simp
+termination_by n - i
+
+theorem allFrom_spec (p : Nat → Bool) (n i : Nat) (h : allFrom p n i = true) :
+    ∀ j, i ≤ j → j < n → p j = true := by
+  rw [allFrom] at h
+  intro j hij hj
+  split at h
+  · next hi =>
+    rw [Bool.and_eq_true] at h
+    by_cases e : j = i
+    · subst e; exact h.1
+    · exact allFrom_spec p n (i + 1) h.2 j (by omega) hj
+  · omega
+termination_by n - i
+
+theorem pairwise_of_allFrom (P : Nat → Nat → Bool) (n : Nat)
+    (h : allFrom (fun i => allFrom (fun j => P i j) n (i + 1)) n 0 = true) :
+    ∀ i j, i < j → j < n → P i j = true := fun i j lt hj =>
+  allFrom_spec _ n (i + 1) (allFrom_spec _ n 0 h i (Nat.zero_le _) (by omega)) j lt hj
+
+theorem nodup_range'_map {α : Type} (f : Nat → α) (n : Nat) (h : ∀ i j, i < j → j < n → f i ≠ f j) :
+    ((List.range' 0 n).map f).Nodup := by
+  rw [List.nodup_iff_pairwise_ne, List.pairwise_map]
+  refine (List.pairwise_lt_range' (s := 0) (n := n)).imp_of_mem fun _ hb lt => h _ _ lt ?_
+  have := List.mem_range'_1.mp hb
+  omega
+
+theorem idxOf_getElem_of_nodup {α : Type} [BEq α] [LawfulBEq α] (l : List α) (h : l.Nodup) (i : Nat)
+    (hi : i < l.length) : l.idxOf l[i] = i := by
+  induction l generalizing i with
+  | nil => simp at hi
+  | cons x xs ih =>
+    rw [List.nodup_cons] at h
+    cases i with
+    | zero => simp
+    | succ i =>
+      have hi' : i < xs.length := by simpa using hi
+      have ne : (x == xs[i]) = false := by
+        rw [beq_eq_false_iff_ne]
+        intro e
+        exact h.1 (e ▸ List.getElem_mem hi')
+      simp [List.idxOf_cons, ne, ih h.2 i hi']
+
+theorem distinctFrom_of {α : Type} (position : α → Nat) (i : Nat) (xs : List α)
+    (h : ∀ j (hj : j < xs.length), position xs[j] = i + j) : distinctFrom position i xs = true := by
+  induction xs generalizing i with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [distinctFrom, Bool.and_eq_true, beq_iff_eq]
+    refine ⟨h 0 (by simp), ih (i + 1) fun j hj => ?_⟩
+    have := h (j + 1) (by simpa using hj)
+    simp only [List.getElem_cons_succ] at this
+    omega
+
+theorem distinctFrom_nodup {α : Type} [BEq α] [LawfulBEq α] (xs : List α) (h : xs.Nodup) :
+    distinctFrom (fun k => xs.idxOf k) 0 xs = true :=
+  distinctFrom_of _ 0 xs fun j hj => by simp [idxOf_getElem_of_nodup xs h j hj]
+
+theorem mapM_some_map {α β : Type} (f : α → Option β) (g : α → β) (xs : List α)
+    (h : ∀ x ∈ xs, f x = some (g x)) : xs.mapM f = some (xs.map g) := by
+  induction xs with
+  | nil => rfl
+  | cons a l ih =>
+    rw [List.mapM_cons, h a List.mem_cons_self, ih fun x hx => h x (List.mem_cons_of_mem _ hx)]
+    rfl
+
+theorem mapM_some_all {α β : Type} (f : α → Option β) (P : β → Prop) (xs : List α)
+    (h : ∀ x ∈ xs, ∃ y, f x = some y ∧ P y) : ∃ ys, xs.mapM f = some ys ∧ ∀ y ∈ ys, P y := by
+  induction xs with
+  | nil => exact ⟨[], rfl, fun y hy => (nomatch hy)⟩
+  | cons a l ih =>
+    obtain ⟨y, hy, py⟩ := h a List.mem_cons_self
+    obtain ⟨ys, hys, pys⟩ := ih fun x hx => h x (List.mem_cons_of_mem _ hx)
+    refine ⟨y :: ys, by rw [List.mapM_cons, hy, hys]; rfl, fun z hz => ?_⟩
+    rcases List.mem_cons.mp hz with rfl | hz
+    · exact py
+    · exact pys z hz
+
+theorem getD_of_lt {α : Type} (a : Array α) (i : Nat) (d : α) (h : i < a.size) : a.getD i d = a[i] := by
+  rw [Array.getD_eq_getD_getElem?, getElem?_pos a i h]
+  rfl
+
+/-- The variable of the query in row `i`. -/
+def varAt (heads : Array UInt64) (i : Nat) : Variable := ⟨(heads.getD (2 * i) 0).toNat, sortAt heads i⟩
+
+/-- The variable of the query in row `i` with its label. -/
+def queryRow (names heads : Array UInt64) (i : Nat) : Variable × Label :=
+  (varAt heads i, (hintAt names heads i, indexAt names heads i))
+
+/-- The label of a proposal for the `t`-th range variable. -/
+def labelAt (p : Array UInt64) (t : Nat) : Label := (p.getD (2 * t) 0, p.getD (2 * t + 1) 0)
+
+theorem headVariables_drop (heads : Array UInt64) (even : heads.size % 2 = 0) (i : Nat)
+    (hi : 2 * i ≤ heads.size) :
+    headVariables (heads.toList.drop (2 * i)) =
+      some ((List.range' i (heads.size / 2 - i)).map (varAt heads)) := by
+  by_cases lt : 2 * i < heads.size
+  · rw [List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega),
+      show 2 * i + 1 + 1 = 2 * (i + 1) by omega,
+      show heads.size / 2 - i = (heads.size / 2 - (i + 1)) + 1 by omega, List.range'_succ]
+    simp only [headVariables, headVariables_drop heads even (i + 1) (by omega), Option.map_some,
+      List.map_cons, Array.getElem_toList]
+    simp [varAt, sortAt, getD_of_lt heads _ 0 lt, getD_of_lt heads (2 * i + 1) 0 (by omega)]
+  · rw [List.drop_of_length_le (by simp; omega), show heads.size / 2 - i = 0 by omega]
+    rfl
+termination_by heads.size - 2 * i
+
+theorem labels_drop (p : Array UInt64) (even : p.size % 2 = 0) (i : Nat) (hi : 2 * i ≤ p.size) :
+    labels (p.toList.drop (2 * i)) = some ((List.range' i (p.size / 2 - i)).map (labelAt p)) := by
+  by_cases lt : 2 * i < p.size
+  · rw [List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega),
+      show 2 * i + 1 + 1 = 2 * (i + 1) by omega,
+      show p.size / 2 - i = (p.size / 2 - (i + 1)) + 1 by omega, List.range'_succ]
+    simp only [labels, labels_drop p even (i + 1) (by omega), Option.map_some,
+      List.map_cons, Array.getElem_toList]
+    simp [labelAt, getD_of_lt p _ 0 lt, getD_of_lt p (2 * i + 1) 0 (by omega)]
+  · rw [List.drop_of_length_le (by simp; omega), show p.size / 2 - i = 0 by omega]
+    rfl
+termination_by p.size - 2 * i
+
+theorem hasNatFrom_eq (r : Array UInt64) (i : Nat) : hasNatFrom r i = hasNat (r.toList.drop i) := by
+  rw [hasNatFrom]
+  split
+  · next h =>
+    rw [List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega)]
+    simp only [hasNat, Array.getElem_toList]
+    rw [hasNatFrom_eq r (i + 1 + 1)]
+  · next h =>
+    have len : (r.toList.drop i).length ≤ 1 := by simp; omega
+    generalize r.toList.drop i = l at len ⊢
+    match l, len with
+    | [], _ => rfl
+    | [_], _ => rfl
+    | _ :: _ :: _, len => exact absurd len (by simp)
+termination_by r.size - i
+
+/-- What the shortcut needs of the query. -/
+structure FastQuery (names heads : Array UInt64) (q : Query) : Prop where
+  size : q.qs.size = heads.size / 2
+  small : heads.size / 2 < UInt64.size
+  position : ∀ a b s, q.position ((a, b), s) = rowOf names heads (heads.size / 2) a b s
+  sort : ∀ i (h : i < q.qs.size), q.qs[i].1.sort = sortAt heads i
+
+theorem query_fast (names heads : Array UInt64) (ok : queryOK names heads = true) :
+    ∃ q, query names heads = some q ∧ FastQuery names heads q := by
+  unfold queryOK at ok
+  simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at ok
+  obtain ⟨⟨⟨even, small⟩, labelled⟩, distinct⟩ := ok
+  have hv : headVariables heads.toList = some ((List.range' 0 (heads.size / 2)).map (varAt heads)) := by
+    simpa using headVariables_drop heads even 0 (Nat.zero_le _)
+  have hl : queryLabels names ((List.range' 0 (heads.size / 2)).map (varAt heads)) =
+      some ((List.range' 0 (heads.size / 2)).map (queryRow names heads)) := by
+    unfold queryLabels
+    rw [mapM_some_map _ (fun v => (v, (names.getD (2 * v.id) 0, names.getD (2 * v.id + 1) 0)))]
+    · simp only [List.map_map]
+      rfl
+    · intro v hv
+      obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hv
+      have room := allFrom_spec _ _ 0 labelled t (Nat.zero_le _)
+        (by have := List.mem_range'_1.mp ht; omega)
+      simp only [decide_eq_true_eq] at room
+      have r0 : 2 * (varAt heads t).id < names.size := by simp only [varAt]; omega
+      have r1 : 2 * (varAt heads t).id + 1 < names.size := room
+      simp only [getD_of_lt names _ 0 r0, getD_of_lt names _ 0 r1]
+      simp [label, r0, r1]
+  have keys : queryKeys ((List.range' 0 (heads.size / 2)).map (queryRow names heads)) =
+      (List.range' 0 (heads.size / 2)).map
+        fun i => ((hintAt names heads i, indexAt names heads i), sortAt heads i) := by
+    simp [queryKeys, queryRow, varAt]
+  have nodup : (queryKeys ((List.range' 0 (heads.size / 2)).map (queryRow names heads))).Nodup := by
+    rw [keys]
+    refine nodup_range'_map _ _ fun i j lt hj same => ?_
+    have := pairwise_of_allFrom (fun i j => !(hintAt names heads j == hintAt names heads i &&
+      indexAt names heads j == indexAt names heads i && sortAt heads j == sortAt heads i)) _ distinct i j lt hj
+    simp only [Prod.mk.injEq] at same
+    simp [same] at this
+  refine ⟨⟨((List.range' 0 (heads.size / 2)).map (queryRow names heads)).toArray,
+    (Index.of labelKey (queryKeys ((List.range' 0 (heads.size / 2)).map (queryRow names heads)))).position,
+    indexBound ((List.range' 0 (heads.size / 2)).map (queryRow names heads))⟩, ?_, ?_⟩
+  · unfold query
+    rw [hv, Option.bind_some, hl, Option.bind_some]
+    simp only
+    rw [ite_eq_left (by rw [Index.position_of]; exact distinctFrom_nodup _ nodup)]
+  · refine ⟨by simp, by omega, fun a b s => ?_, fun i h => ?_⟩
+    · simp only
+      rw [Index.position_of, keys]
+      unfold rowOf
+      rw [firstFrom_eq _ ((List.range' 0 (heads.size / 2)).map
+          fun i => ((hintAt names heads i, indexAt names heads i), sortAt heads i)) ((a, b), s)
+          (heads.size / 2) (by simp) (fun j hj => ?_) 0 (Nat.zero_le _)]
+      · simp
+      · rw [← labelKeyEq_eq]
+        simp [labelKeyEq]
+    · simp [queryRow, varAt]
+
+theorem rowOf_lt {names heads : Array UInt64} {n : Nat} {a b : UInt64} {s : SortId}
+    (h : rowOf names heads n a b s < n) :
+    hintAt names heads (rowOf names heads n a b s) = a ∧
+      indexAt names heads (rowOf names heads n a b s) = b ∧ sortAt heads (rowOf names heads n a b s) = s := by
+  have := firstFrom_lt _ n 0 h
+  simp only [Bool.and_eq_true, beq_iff_eq] at this
+  exact ⟨this.1.1, this.1.2, this.2⟩
+
+theorem armFrom_words {names heads : Array UInt64} {q : Query} (hq : FastQuery names heads q)
+    (r p : Array UInt64) (same : p.size = r.size) (even : r.size % 2 = 0) (i : Nat)
+    (hi : 2 * i ≤ r.size) (acc : Array UInt64) :
+    armWords q (r.toList.drop (2 * i)) ((List.range' i (r.size / 2 - i)).map (labelAt p)) acc =
+      some (armFrom names heads (heads.size / 2) r p i acc) := by
+  rw [armFrom]
+  split
+  · next lt =>
+    rw [List.drop_eq_getElem_cons (by simp; omega), List.drop_eq_getElem_cons (by simp; omega),
+      show 2 * i + 1 + 1 = 2 * (i + 1) by omega,
+      show r.size / 2 - i = (r.size / 2 - (i + 1)) + 1 by omega, List.range'_succ, List.map_cons]
+    simp only [armWords]
+    rw [armFrom_words hq r p same even (i + 1) (by omega)]
+    simp only [entryWords, pushEntry, labelAt, hq.size, hq.position, Array.getElem_toList,
+      Array.getInternal_eq_getElem, getD_of_lt r (2 * i) 0 (by omega)]
+  · next ge =>
+    rw [List.drop_of_length_le (by simp; omega), show r.size / 2 - i = 0 by omega]
+    rfl
+termination_by r.size - 2 * i
+
+/-- The words of the entry of the `t`-th range variable. -/
+def wordsAt (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (t : Nat) : List UInt64 :=
+  (pushEntry n (rowOf names heads n (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0) (sortOf (r.getD (2 * t + 1) 0)))
+    (r.getD (2 * t) 0) (r.getD (2 * t + 1) 0) (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0) #[]).toList
+
+/-- The entry of the `t`-th range variable. -/
+def entryAt (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (t : Nat) : Entry :=
+  ⟨⟨(r.getD (2 * t) 0).toNat, sortOf (r.getD (2 * t + 1) 0)⟩,
+    if rowOf names heads n (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0) (sortOf (r.getD (2 * t + 1) 0)) < n then
+      .self (UInt64.ofNat
+        (rowOf names heads n (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0) (sortOf (r.getD (2 * t + 1) 0)))).toNat
+    else .name (p.getD (2 * t) 0, p.getD (2 * t + 1) 0)⟩
+
+theorem pushEntry_toList (n row : Nat) (id sort a b : UInt64) (acc : Array UInt64) :
+    (pushEntry n row id sort a b acc).toList = acc.toList ++ (pushEntry n row id sort a b #[]).toList := by
+  unfold pushEntry
+  split <;> simp
+
+theorem armFrom_toList (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (i : Nat)
+    (acc : Array UInt64) :
+    (armFrom names heads n r p i acc).toList =
+      acc.toList ++ (List.range' i (r.size / 2 - i)).flatMap (wordsAt names heads n r p) := by
+  rw [armFrom]
+  split
+  · next lt =>
+    dsimp only
+    rw [armFrom_toList names heads n r p (i + 1), pushEntry_toList,
+      show r.size / 2 - i = (r.size / 2 - (i + 1)) + 1 by omega, List.range'_succ, List.flatMap_cons]
+    simp [-Array.getD_eq_getD_getElem?, wordsAt, Array.getInternal_eq_getElem,
+      getD_of_lt r (2 * i + 1) 0 lt]
+  · next ge =>
+    rw [show r.size / 2 - i = 0 by omega]
+    simp
+termination_by r.size - 2 * i
+
+theorem entries_words (names heads : Array UInt64) (n : Nat) (r p : Array UInt64) (ts : List Nat)
+    (sorts : ∀ t ∈ ts, r.getD (2 * t + 1) 0 ≤ 4) :
+    entries (ts.flatMap (wordsAt names heads n r p)) = some (ts.map (entryAt names heads n r p)) := by
+  induction ts with
+  | nil => rfl
+  | cons t ts ih =>
+    have rest := ih fun x hx => sorts x (List.mem_cons_of_mem _ hx)
+    have s := sorts t List.mem_cons_self
+    rw [List.flatMap_cons, List.map_cons]
+    simp only [wordsAt, entryAt, pushEntry]
+    split <;> simp [-Array.getD_eq_getD_getElem?, entries, s, rest]
+
+theorem sortOf_ne_nat (s : UInt64) (le : s ≤ 4) (ne : s ≠ 4) : sortOf s ≠ .nat := by
+  have h1 := UInt64.le_iff_toNat_le.mp le
+  have h2 : s.toNat ≠ 4 := fun e => ne (UInt64.toNat_inj.mp e)
+  have : s.toNat = 0 ∨ s.toNat = 1 ∨ s.toNat = 2 ∨ s.toNat = 3 := by simp at h1; omega
+  rcases this with h | h | h | h
+  · rw [show s = 0 from UInt64.toNat_inj.mp (by simpa using h)]; decide
+  · rw [show s = 1 from UInt64.toNat_inj.mp (by simpa using h)]; decide
+  · rw [show s = 2 from UInt64.toNat_inj.mp (by simpa using h)]; decide
+  · rw [show s = 3 from UInt64.toNat_inj.mp (by simpa using h)]; decide
+
+theorem tableOK_fast {names heads : Array UInt64} {q : Query} (hq : FastQuery names heads q) (nat : Bool)
+    (r p : Array UInt64) (ok : armOK nat r p = true) :
+    tableOK q nat false false
+      ((List.range' 0 (r.size / 2)).map (entryAt names heads (heads.size / 2) r p)) = true := by
+  unfold armOK at ok
+  simp only [Bool.and_eq_true, beq_iff_eq] at ok
+  obtain ⟨⟨⟨even, same⟩, sorts⟩, distinct⟩ := ok
+  have small : heads.size / 2 < UInt64.size := hq.small
+  unfold tableOK
+  rw [Index.position_of, Bool.and_eq_true, List.all_eq_true]
+  refine ⟨distinctFrom_nodup _ ?_, fun e he => ?_⟩
+  · rw [List.map_map]
+    refine nodup_range'_map _ _ fun i j lt hj key => ?_
+    have := pairwise_of_allFrom (fun t u => !(p.getD (2 * u) 0 == p.getD (2 * t) 0 &&
+      p.getD (2 * u + 1) 0 == p.getD (2 * t + 1) 0 &&
+      sortOf (r.getD (2 * u + 1) 0) == sortOf (r.getD (2 * t + 1) 0))) _ distinct i j lt hj
+    simp only [Function.comp, entryKey, entryAt, Prod.mk.injEq] at key
+    obtain ⟨target, sort⟩ := key
+    simp only [sort, Bool.not_eq_true', Bool.and_eq_false_iff, beq_eq_false_iff_ne, ne_eq, not_true_eq_false,
+      or_false] at this
+    split at target <;> split at target
+    · next li lj =>
+      simp only [Target.self.injEq] at target
+      rw [UInt64.toNat_ofNat_of_lt' (by omega), UInt64.toNat_ofNat_of_lt' (by omega)] at target
+      have fi := rowOf_lt li
+      have fj := rowOf_lt lj
+      rw [target] at fi
+      rcases this with ne | ne
+      · exact ne (fj.1.symm.trans fi.1)
+      · exact ne (fj.2.1.symm.trans fi.2.1)
+    · cases target
+    · cases target
+    · simp only [Target.name.injEq, Prod.mk.injEq] at target
+      rcases this with ne | ne
+      · exact ne target.1.symm
+      · exact ne target.2.symm
+  · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp he
+    have tlt : t < r.size / 2 := by have := List.mem_range'_1.mp ht; omega
+    have st := allFrom_spec _ _ 0 sorts t (Nat.zero_le _) tlt
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, bne_iff_ne, ne_eq] at st
+    obtain ⟨le, natOK⟩ := st
+    have sortOK : (nat || sortOf (r.getD (2 * t + 1) 0) != .nat) = true := by
+      rcases natOK with h | h
+      · simp [h]
+      · simp [-Array.getD_eq_getD_getElem?, sortOf_ne_nat _ le h]
+    unfold entryAt
+    split
+    · next lt =>
+      have found := rowOf_lt lt
+      have inq : rowOf names heads (heads.size / 2) (p.getD (2 * t) 0) (p.getD (2 * t + 1) 0)
+          (sortOf (r.getD (2 * t + 1) 0)) < q.qs.size := by rw [hq.size]; exact lt
+      rw [UInt64.toNat_ofNat_of_lt' (Nat.lt_trans lt small)]
+      dsimp only
+      rw [Array.getElem?_eq_getElem inq]
+      simp [-Array.getD_eq_getD_getElem?, sortOK, hq.sort _ inq, found.2.2]
+    · next ge =>
+      simp [-Array.getD_eq_getD_getElem?, sortOK, hq.position, hq.size, ge]
+
+/-- A row of tables that the test of `admissible` passes. -/
+def Good (q : Query) (nat : Bool) (row : Array UInt64) : Prop :=
+  ∃ w rest es, row.toList = w :: rest ∧ entries rest = some es ∧ tableOK q nat false false es = true
+
+/-- The row `tablesFor` makes of a kept arm with its proposal. -/
+def armRow (q : Query) (e : (Array UInt64 × Nat) × Array UInt64) : Option (Array UInt64) :=
+  (labels e.2.toList).bind fun ls => armWords q e.1.1.toList ls #[UInt64.ofNat e.1.2]
+
+theorem arm_fast {names heads : Array UInt64} {q : Query} (hq : FastQuery names heads q) (nat : Bool)
+    (r p : Array UInt64) (k c : Nat) (ok : armOK nat r p = true) :
+    armRow q ((r, k), p) =
+        some (armFrom names heads (heads.size / 2) r p 0 ((Array.mkEmpty c).push (UInt64.ofNat k))) ∧
+      Good q nat (armFrom names heads (heads.size / 2) r p 0 ((Array.mkEmpty c).push (UInt64.ofNat k))) := by
+  have tab := tableOK_fast hq nat r p ok
+  unfold armOK at ok
+  simp only [Bool.and_eq_true, beq_iff_eq] at ok
+  obtain ⟨⟨⟨even, same⟩, sorts⟩, _⟩ := ok
+  refine ⟨?_, ?_⟩
+  · unfold armRow
+    have hl := labels_drop p (same ▸ even) 0 (Nat.zero_le _)
+    simp only [Nat.mul_zero, List.drop_zero, Nat.sub_zero, same] at hl
+    rw [hl, Option.bind_some]
+    have := armFrom_words hq r p same even 0 (Nat.zero_le _) #[UInt64.ofNat k]
+    simpa using this
+  · refine ⟨UInt64.ofNat k, _, _, ?_, entries_words names heads _ r p _ (fun t ht => ?_), tab⟩
+    · rw [armFrom_toList]
+      rfl
+    · have tlt : t < r.size / 2 := by have := List.mem_range'_1.mp ht; omega
+      have st := allFrom_spec _ _ 0 sorts t (Nat.zero_le _) tlt
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at st
+      exact st.1
+
+/-- The arms `tablesFor` keeps, from the `k`-th on. -/
+def keptFrom (ranges : Array (Array UInt64)) (nat : Bool) (k : Nat) : List (Array UInt64 × Nat) :=
+  ((ranges.toList.drop k).zipIdx k).filter fun (e : Array UInt64 × Nat) => nat || !hasNat e.1.toList
+
+theorem rowsFrom_spec {names heads : Array UInt64} {q : Query} (hq : FastQuery names heads q)
+    (ranges proposal : Array (Array UInt64)) (nat : Bool) (k j : Nat) (acc out : Array (Array UInt64))
+    (h : rowsFrom names heads (heads.size / 2) ranges proposal nat k j acc = some out)
+    (hj : j ≤ proposal.size) :
+    ∃ rows, out.toList = acc.toList ++ rows ∧ (keptFrom ranges nat k).length + j = proposal.size ∧
+      ((keptFrom ranges nat k).zip (proposal.toList.drop j)).mapM (armRow q) = some rows ∧
+      ∀ row ∈ rows, Good q nat row := by
+  rw [rowsFrom] at h
+  split at h
+  · next lt =>
+    have kept : keptFrom ranges nat k = if nat || !hasNat ranges[k].toList then
+        (ranges[k], k) :: keptFrom ranges nat (k + 1) else keptFrom ranges nat (k + 1) := by
+      unfold keptFrom
+      rw [List.drop_eq_getElem_cons (by simpa using lt), List.zipIdx_cons, List.filter_cons]
+      simp
+    dsimp only at h
+    rw [hasNatFrom_eq, List.drop_zero] at h
+    split at h
+    · next keep =>
+      split at h
+      · next lj =>
+        split at h
+        · next ok =>
+          obtain ⟨rows, hout, len, maps, good⟩ := rowsFrom_spec hq ranges proposal nat (k + 1) (j + 1) _ out h lj
+          obtain ⟨arm, armGood⟩ := arm_fast hq nat ranges[k] proposal[j] k (1 + 5 * (ranges[k].size / 2)) ok
+          refine ⟨armFrom names heads (heads.size / 2) ranges[k] proposal[j] 0
+            ((Array.mkEmpty (1 + 5 * (ranges[k].size / 2))).push (UInt64.ofNat k)) :: rows, ?_, ?_, ?_, ?_⟩
+          · rw [hout]
+            simp
+          · rw [kept, ite_eq_left keep]
+            simp only [List.length_cons]
+            omega
+          · rw [kept, ite_eq_left keep, List.drop_eq_getElem_cons (by simpa using lj), List.zip_cons_cons,
+              List.mapM_cons, Array.getElem_toList, arm, maps]
+            rfl
+          · intro row hrow
+            rcases List.mem_cons.mp hrow with rfl | hrow
+            · exact armGood
+            · exact good row hrow
+        · cases h
+      · cases h
+    · next skip =>
+      have rest := rowsFrom_spec hq ranges proposal nat (k + 1) j acc out h hj
+      rw [kept, ite_eq_right skip]
+      exact rest
+  · next ge =>
+    split at h
+    · next e =>
+      subst e
+      cases h
+      refine ⟨[], by simp, ?_, ?_, fun row hrow => (nomatch hrow)⟩
+      · simp [keptFrom, List.drop_of_length_le (by simp; omega : ranges.toList.length ≤ k)]
+      · simp [keptFrom, List.drop_of_length_le (by simp; omega : ranges.toList.length ≤ k)]
+    · cases h
+termination_by ranges.size - k
+
+theorem tables_good {q : Query} {nat : Bool} (heads : Array UInt64) (rows : List (Array UInt64))
+    (good : ∀ row ∈ rows, Good q nat row) :
+    ∃ arms, tables (#[1] :: heads :: rows).toArray = some ⟨heads.toList, arms⟩ ∧
+      ∀ a ∈ arms, tableOK q nat false false a.2 = true := by
+  induction rows with
+  | nil => exact ⟨[], by simp [tables], fun a ha => (nomatch ha)⟩
+  | cons row rows ih =>
+    obtain ⟨arms, harms, ok⟩ := ih fun r hr => good r (List.mem_cons_of_mem _ hr)
+    obtain ⟨w, rest, es, hrow, hes, tab⟩ := good row List.mem_cons_self
+    refine ⟨(w.toNat, es) :: arms, ?_, fun a ha => ?_⟩
+    · unfold tables at harms ⊢
+      simp only [↓reduceIte, Option.map_eq_some_iff] at harms ⊢
+      obtain ⟨as, has, he⟩ := harms
+      refine ⟨(w.toNat, es) :: as, ?_, ?_⟩
+      · rw [List.mapM_cons, has]
+        simp [hrow, hes]
+      · simp only [Tables.mk.injEq] at he ⊢
+        rw [he.2]
+        simp
+    · rcases List.mem_cons.mp ha with rfl | ha
+      · exact tab
+      · exact ok a ha
+
+theorem proposedFast_run (names heads : Array UInt64) (ranges proposal : Array (Array UInt64))
+    (nat low : Bool) (out : Array (Array UInt64))
+    (h : proposedFast names heads ranges proposal nat = some out) :
+    run names heads ranges proposal nat low = out := by
+  unfold proposedFast at h
+  split at h
+  · next cond =>
+    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at cond
+    obtain ⟨nonempty, ok⟩ := cond
+    obtain ⟨q, hquery, hq⟩ := query_fast names heads ok
+    obtain ⟨rows, hout, len, maps, good⟩ := rowsFrom_spec hq ranges proposal nat 0 0 _ out h (Nat.zero_le _)
+    have hout' : out = (#[1] :: heads :: rows).toArray := by
+      apply Array.ext'
+      rw [hout]
+      rfl
+    have kept0 : keptFrom ranges nat 0 =
+        ranges.toList.zipIdx.filter fun (e : Array UInt64 × Nat) => nat || !hasNat e.1.toList := by
+      simp [keptFrom]
+    rw [kept0, List.drop_zero] at maps
+    rw [kept0] at len
+    have tf : tablesFor q heads ranges (some proposal.toList) nat false = some out := by
+      unfold tablesFor
+      simp only
+      rw [ite_eq_left (by simp; omega), hout']
+      exact congrArg (Option.map _) maps
+    obtain ⟨arms, harms, armsOK⟩ := tables_good (q := q) (nat := nat) heads rows good
+    have adm : admissible heads q nat false false out = true := by
+      unfold admissible
+      rw [hout', harms]
+      simp only [decide_true, Bool.true_and, List.all_eq_true]
+      exact fun a ha => armsOK a ha
+    unfold run
+    rw [hquery]
+    simp only
+    rw [ite_eq_right nonempty, tf, Option.getD_some]
+    unfold choose
+    rw [ite_eq_left adm]
+  · cases h
+
+@[csimp] theorem run_eq_fast : @run = @runFast := by
+  funext names heads ranges proposal nat low
+  unfold runFast
+  split
+  · next out h => exact proposedFast_run names heads ranges proposal nat low out h
+  · rfl
+
 end Tamarin.UnifierNames
