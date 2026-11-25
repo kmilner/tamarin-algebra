@@ -303,6 +303,71 @@ theorem Index.position_of {α : Type} [BEq α] [LawfulBEq α] (key : α → Nat)
   funext x
   simpa [Index.of, Index.position] using Buckets.lookup_index key (xs.length + 1) (by omega) 0 xs x
 
+/-- The first position at or after `i` of an entry equal to `x` by `eq`, or
+the size. -/
+@[specialize] def scanFrom {α : Type} (eq : α → α → Bool) (xs : Array α) (x : α) (i : Nat) : Nat :=
+  if h : i < xs.size then if eq xs[i] x then i else scanFrom eq xs x (i + 1) else xs.size
+termination_by xs.size - i
+
+theorem scanFrom_eq {α : Type} [BEq α] (eq : α → α → Bool) (same : ∀ a b, eq a b = (a == b))
+    (xs : Array α) (x : α) (i : Nat) (hi : i ≤ xs.size) :
+    scanFrom eq xs x i = i + (xs.toList.drop i).idxOf x := by
+  unfold scanFrom
+  split
+  · next h =>
+    rw [List.drop_eq_getElem_cons (by simpa using h), List.idxOf_cons]
+    simp only [Array.getElem_toList, same]
+    by_cases hit : (xs[i] == x) = true
+    · simp [hit]
+    · simp only [hit, Bool.false_eq_true, ↓reduceIte]
+      rw [scanFrom_eq eq same xs x (i + 1) h]
+      omega
+  · next h =>
+    have : i = xs.size := by omega
+    subst this
+    rw [List.drop_of_length_le (by simp)]
+    rfl
+termination_by xs.size - i
+
+/-- Lists up to this length are searched by a scan instead of buckets. -/
+def scanLength : Nat := 32
+
+/-- `Index.position`, by a scan of a short list. A short list costs more to
+put into buckets than to scan. Callers build the array once and close over it. -/
+theorem scan_or_index {α : Type} [BEq α] [LawfulBEq α] (eq : α → α → Bool)
+    (same : ∀ a b, eq a b = (a == b)) (key : α → Nat) (xs : List α) :
+    (if xs.toArray.size ≤ scanLength then (fun x => scanFrom eq xs.toArray x 0)
+      else (Index.of key xs).position) = (Index.of key xs).position := by
+  split
+  · funext x
+    rw [Index.position_of, scanFrom_eq eq same _ _ 0 (Nat.zero_le _)]
+    simp
+  · rfl
+
+/-- Equality of the keys of query labels, field by field. -/
+def labelKeyEq (a b : Label × SortId) : Bool := a.1.1 == b.1.1 && a.1.2 == b.1.2 && a.2 == b.2
+
+theorem labelKeyEq_eq (a b : Label × SortId) : labelKeyEq a b = (a == b) := by
+  obtain ⟨⟨a1,a2⟩,a3⟩ := a
+  obtain ⟨⟨b1,b2⟩,b3⟩ := b
+  rw [Bool.eq_iff_iff]
+  simp only [labelKeyEq, Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq, and_assoc]
+
+/-- Equality of targets at a sort, field by field. -/
+def targetKeyEq (a b : Target × SortId) : Bool :=
+  (match a.1, b.1 with
+    | .name l, .name l' => l.1 == l'.1 && l.2 == l'.2
+    | .self r, .self r' => r == r'
+    | _, _ => false) && a.2 == b.2
+
+theorem targetKeyEq_eq (a b : Target × SortId) : targetKeyEq a b = (a == b) := by
+  obtain ⟨a1,a3⟩ := a
+  obtain ⟨b1,b3⟩ := b
+  rw [Bool.eq_iff_iff]
+  cases a1 <;> cases b1 <;>
+    simp only [targetKeyEq, Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq, Target.name.injEq,
+      Target.self.injEq, reduceCtorEq, Bool.false_eq_true, false_and, ← Prod.ext_iff]
+
 /-- Every entry of the list is at the position found for it, counted from
 `i`: no entry occurs twice. -/
 def distinctFrom {α : Type} (position : α → Nat) : Nat → List α → Bool
@@ -351,6 +416,19 @@ def query (names heads : Array UInt64) : Option Query :=
     let position := (Index.of labelKey keys).position
     if distinctFrom position 0 keys then some ⟨qs.toArray, position, indexBound qs⟩ else none
 
+/-- `query` with the positions of a short query found by a scan. -/
+def queryScan (names heads : Array UInt64) : Option Query :=
+  ((headVariables heads.toList).bind (queryLabels names)).bind fun qs =>
+    let keys := queryKeys qs
+    let a := keys.toArray
+    let position := if a.size ≤ scanLength then (fun k => scanFrom labelKeyEq a k 0)
+      else (Index.of labelKey keys).position
+    if distinctFrom position 0 keys then some ⟨qs.toArray, position, indexBound qs⟩ else none
+
+@[csimp] theorem query_eq_scan : @query = @queryScan := by
+  funext names heads
+  simp only [query, queryScan, scan_or_index labelKeyEq labelKeyEq_eq]
+
 /-- The test of the table of an arm: no target twice at one sort, no variable
 of a sort the caller lacks, a label only if no query variable of that sort
 has it, and a query variable only of the same sort. When `above` is set,
@@ -371,12 +449,52 @@ def tableOK (q : Query) (nat above unused : Bool) (es : List Entry) : Bool :=
         | some v => v.1.sort == e.source.sort
         | none => false)
 
+/-- `tableOK` with the targets of a short table compared by a scan. -/
+def tableOKScan (q : Query) (nat above unused : Bool) (es : List Entry) : Bool :=
+  let keys := es.map entryKey
+  let a := keys.toArray
+  let position := if a.size ≤ scanLength then (fun k => scanFrom targetKeyEq a k 0)
+    else (Index.of targetKey keys).position
+  distinctFrom position 0 keys &&
+  es.all fun e =>
+    (nat || e.source.sort != .nat) &&
+    match e.target with
+    | .name l =>
+      !(q.position (l, e.source.sort) < q.qs.size) &&
+      (!above || (l.1 == 0 && q.bound ≤ l.2.toNat)) &&
+      (!unused || (l.1 == 0 && q.qs.all fun v => v.2.2 != l.2))
+    | .self row =>
+      !above && !unused &&
+      (match q.qs[row]? with
+        | some v => v.1.sort == e.source.sort
+        | none => false)
+
+@[csimp] theorem tableOK_eq_scan : @tableOK = @tableOKScan := by
+  funext q nat above unused es
+  simp only [tableOK, tableOKScan, scan_or_index targetKeyEq targetKeyEq_eq]
+
 /-- The test of the tables of a family, on the words the caller will read. -/
 def admissible (heads : Array UInt64) (q : Query) (nat above unused : Bool)
     (words : Array (Array UInt64)) : Bool :=
   match tables words with
   | none => false
   | some t => t.heads = heads.toList && t.arms.all fun arm => tableOK q nat above unused arm.2
+
+/-- `admissible` comparing the identifier and sort words with `==`. -/
+def admissibleBEq (heads : Array UInt64) (q : Query) (nat above unused : Bool)
+    (words : Array (Array UInt64)) : Bool :=
+  match tables words with
+  | none => false
+  | some t => t.heads == heads.toList && t.arms.all fun arm => tableOK q nat above unused arm.2
+
+@[csimp] theorem admissible_eq_beq : @admissible = @admissibleBEq := by
+  funext heads q nat above unused words
+  unfold admissible admissibleBEq
+  split
+  · rfl
+  · next t _ =>
+    congr 1
+    by_cases h : t.heads = heads.toList <;> simp [h]
 
 /-- The least index from `c` on that is not in use, among the next `fuel`. -/
 def unused (used : Nat → Bool) : Nat → Nat → Nat
