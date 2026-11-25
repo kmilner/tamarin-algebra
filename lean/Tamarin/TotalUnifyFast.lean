@@ -1381,10 +1381,6 @@ theorem lower_fold (f : d.sig.ACSym) (a : Term d.sig) (bs : List (Term d.sig)) :
   | nil => rfl
   | cons b bs ih => simp [ACRepresentation.fold, foldAC, lower, ih]
 
-theorem resolve_some {k id : UInt64} (h : (decl d.decls k id).isSome) :
-    resolve d.decls k id = some ⟨id, h⟩ := by
-  simp [resolve, h]
-
 theorem info_eq {k id : UInt64} {dl : Whole.Decl} (found : decl d.decls k id = some dl)
     (h : (decl d.decls k id).isSome) : info (⟨id, h⟩ : Symbol d.decls k) = dl := by
   simp [info, found]
@@ -1406,7 +1402,7 @@ theorem decodeApp_sound (k id : UInt64) (cs : List (Term d.sig)) (ft : FTerm)
       split at h
       · next len =>
         cases h
-        rw [resolve_some hs]
+        rw [TotalUnifyWire.resolve_some hs]
         let f : d.sig.FreeSym := ⟨id, hs⟩
         have arity : d.sig.arity f = dl.inputs.length := by
           show (info f).inputs.length = _
@@ -1435,7 +1431,7 @@ theorem decodeApp_sound (k id : UInt64) (cs : List (Term d.sig)) (ft : FTerm)
       · have kk : k = 3 := by simpa using k3
         subst kk
         simp only [k3, ↓reduceIte] at h ⊢
-        rw [resolve_some hs]
+        rw [TotalUnifyWire.resolve_some hs]
         match cs, h with
         | [a, b], h =>
           cases h
@@ -1445,7 +1441,7 @@ theorem decodeApp_sound (k id : UInt64) (cs : List (Term d.sig)) (ft : FTerm)
         · have kk : k = 4 := by simpa using k4
           subst kk
           simp only [k4, ↓reduceIte] at h ⊢
-          rw [resolve_some hs]
+          rw [TotalUnifyWire.resolve_some hs]
           match cs, h with
           | a :: b :: rest, h =>
             cases h
@@ -1469,7 +1465,7 @@ theorem decodeLeaf_sound (k id arg : UInt64) (ft : FTerm)
         subst h
         have mem := member (by simpa using k1)
         refine ⟨.atom ⟨(id, sortOf arg), mem⟩, ?_, rfl⟩
-        simp [small, k0, k1, guard, TotalUnifyWire.atom, mem]
+        simp [small, k0, k1, guard, TotalUnifyWire.atom_some mem]
       · simp [k0, k1] at h
   · simp [small] at h
 
