@@ -410,19 +410,21 @@ void *tamarin_lean_name_unifiers(whole_word_slice names, whole_word_slice heads,
 }
 
 extern lean_object *tamarin_propose_unifier_names(lean_object *, lean_object *, lean_object *,
-                                                  lean_object *, lean_object *);
+                                                  lean_object *, lean_object *, lean_object *);
 
-/* tamarin_lean_name_unifiers on a proposal that Lean makes itself from the reply of the unifier
-   (tamarin_propose_unifier_names, a proposer). The naming export tests that proposal as it tests
-   any other, so the tables are those of tamarin_lean_name_unifiers for that proposal. names, heads,
-   ranges, nat and low are as there. order ranks the caller's hint identifiers by the caller's order
-   of the hints, and reply is the reply of tamarin_lean_theory_unify with each row behind its
-   length. The result has two arms: the tables, and the proposal (no row when nothing was
-   proposed, which leaves the tables those without a proposal). */
+/* tamarin_lean_name_unifiers on a proposal that Lean makes itself (tamarin_propose_unifier_names,
+   a proposer) for a reply of tamarin_lean_theory_unify with one arm. The naming export tests that
+   proposal as it tests any other, so the tables are those of tamarin_lean_name_unifiers for that
+   proposal. names, heads, ranges, nat and low are as there. order ranks the caller's hint
+   identifiers by the caller's order of the hints. singles holds, for each query variable in the
+   order of heads, the position in the range of the variable that is its whole image in the arm,
+   or a larger number when its image is something else; counts holds the number of occurrences
+   in the arm of each variable of the range. The result has two arms: the tables, and the proposal
+   (no row when nothing was proposed, which leaves the tables those without a proposal). */
 void *tamarin_lean_self_name_unifiers(whole_word_slice names, whole_word_slice heads,
                                       whole_word_slice order, const whole_word_slice *ranges,
-                                      size_t range_count, whole_word_slice reply, uint8_t nat,
-                                      uint8_t low) {
+                                      size_t range_count, whole_word_slice singles,
+                                      whole_word_slice counts, uint8_t nat, uint8_t low) {
     lean_object *labels = atom_array(names.data, names.size);
     lean_object *rows = atom_array(heads.data, heads.size);
     lean_object *range = word_rows(ranges, range_count);
@@ -431,7 +433,8 @@ void *tamarin_lean_self_name_unifiers(whole_word_slice names, whole_word_slice h
     lean_inc(rows);
     lean_inc(range);
     lean_object *proposal = tamarin_propose_unifier_names(labels, rows,
-        atom_array(order.data, order.size), range, atom_array(reply.data, reply.size));
+        atom_array(order.data, order.size), range, atom_array(singles.data, singles.size),
+        atom_array(counts.data, counts.size));
     lean_inc(proposal);
     lean_object *tables = tamarin_name_unifiers(labels, rows, range, proposal, nat != 0, low != 0);
     lean_object *outer = lean_alloc_array(2, 2);

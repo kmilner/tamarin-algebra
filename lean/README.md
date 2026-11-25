@@ -193,8 +193,8 @@ layer is listed when it is complete ([`Tamarin/VariantFold.lean`](Tamarin/Varian
 `tamarin_apply_names` is the specified reading of a reply through the tables of
 `tamarin_name_unifiers`, as a function the Rust tests compare the backend's reader with;
 production does not call it. `tamarin_propose_unifier_names` makes a proposal of names for
-`tamarin_name_unifiers` from the reply of the unifier, and the C bridge hands it straight to that
-export in the same call (see the names of the range below).
+`tamarin_name_unifiers` from a family of unifiers with one arm, and the C bridge hands it straight
+to that export in the same call (see the names of the range below).
 A call stops with status 3 beyond a given number of narrowing sites, and the caller retries with a
 larger number. It takes a `poll` like the interruptible contract exports, so a call also stops
 when the caller cancels. They carry no contract. The Rust backend
@@ -466,9 +466,9 @@ every range variable; it proposes the names the Maude backend composes, which ca
 name hints of query variables. The export takes a proposal when no two variables of an arm
 get one target at one sort, where the label of a query variable of that sort means that
 variable's row; otherwise the whole family gets the default names. For a family with one arm
-the proposal can also come from Lean: `tamarin_propose_unifier_names`, a proposer, reads the arm
-and gives each range variable the names the Maude backend composes from the unifier of its own
-free unifier ([Proposer](TamarinRuntime/UnifierSelfNames.lean)), and
+the proposal can also come from Lean: `tamarin_propose_unifier_names`, a proposer, is told which
+query variables each range variable is the whole image of and how often it occurs, and gives each
+range variable the names the Maude backend composes from the unifier of its own free unifier ([Proposer](TamarinRuntime/UnifierSelfNames.lean)), and
 `tamarin_lean_self_name_unifiers` in the C bridge passes that proposal to
 `tamarin_name_unifiers` unchanged. The tables are therefore those of the contract export for
 that proposal, and nothing is assumed about the proposer. Arms with a variable of

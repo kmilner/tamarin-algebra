@@ -221,13 +221,13 @@ def nameUnifiers (names heads : Array UInt64) (ranges proposal : Array (Array UI
     (nat low : Bool) : Array (Array UInt64) :=
   UnifierNames.run names heads ranges proposal nat low
 
-/-- A proposal for `nameUnifiers`, made from the reply of the unifier: see
-`Tamarin.UnifierSelfNames`. Nothing is promised about it; `nameUnifiers` tests
-it as any other proposal. -/
+/-- A proposal for `nameUnifiers`, made from what the caller reads off the
+reply of the unifier: see `Tamarin.UnifierSelfNames`. Nothing is promised about
+it; `nameUnifiers` tests it as any other proposal. -/
 @[export tamarin_propose_unifier_names]
 def proposeUnifierNames (names heads order : Array UInt64) (ranges : Array (Array UInt64))
-    (reply : Array UInt64) : Array (Array UInt64) :=
-  UnifierSelfNames.propose names heads order ranges reply
+    (singles counts : Array UInt64) : Array (Array UInt64) :=
+  UnifierSelfNames.propose names heads order ranges singles counts
 
 /-- The reading of a reply of the unifier through the tables of
 `nameUnifiers`, as the caller's reader has to produce it. The caller's tests
