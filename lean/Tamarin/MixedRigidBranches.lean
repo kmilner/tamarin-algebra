@@ -625,12 +625,44 @@ private theorem filter_loop (q : Term s → Bool) :
       · rw [filter_loop q as (a :: acc)]
         simp [qa]
 
+/-- The free and C subterms of a term, in the order of `subterms`. -/
+private def rigidSubterms : Term s → List (Term s)
+  | .var _ | .atom _ => []
+  | t@(.free _ xs) => t :: (List.ofFn fun i => rigidSubterms (xs i)).flatten
+  | t@(.comm _ a b) => t :: (rigidSubterms a ++ rigidSubterms b)
+  | .ac _ a b => rigidSubterms a ++ rigidSubterms b
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem rigidSubterms_eq (t : Term s) : rigidSubterms t = (subterms t).filter rigid := by
+  induction t with
+  | var => rfl
+  | atom => rfl
+  | free f xs ih =>
+    simp only [rigidSubterms,subterms,List.filter_cons,rigid,↓reduceIte,List.filter_flatten,
+      List.map_ofFn]
+    congr 2
+    congr 1
+    funext i
+    exact ih i
+  | comm f a b ia ib =>
+    simp only [rigidSubterms,subterms,List.filter_cons,rigid,↓reduceIte,List.filter_append,ia,ib]
+  | ac f a b ia ib =>
+    simp only [rigidSubterms,subterms,List.filter_cons,rigid,Bool.false_eq_true,↓reduceIte,
+      List.filter_append,ia,ib]
+
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
 /-- The rigid interned terms, without interning the others. -/
 private theorem rigid_inventory (p : Problem s) :
     (inventory p).filter rigid =
-      Buckets.dedup bucketKey ((p.flatMap fun e => subterms e.lhs ++ subterms e.rhs).filter rigid) := by
+      Buckets.dedup bucketKey (p.flatMap fun e => rigidSubterms e.lhs ++ rigidSubterms e.rhs) := by
   rw [Buckets.dedup_eq]
+  have same : (p.flatMap fun e => rigidSubterms e.lhs ++ rigidSubterms e.rhs) =
+      (p.flatMap fun e => subterms e.lhs ++ subterms e.rhs).filter rigid := by
+    rw [List.filter_flatMap]
+    congr 1
+    funext e
+    rw [List.filter_append,rigidSubterms_eq,rigidSubterms_eq]
+  rw [same]
   unfold inventory List.eraseDups List.eraseDupsBy
   exact filter_loop rigid _ []
 
@@ -641,8 +673,8 @@ private def refineProblemPlain (p : Problem s) :
     {ps : List (Problem s) // (∀ child ∈ ps, ∀ e ∈ p, e ∈ child) ∧
       ∀ θ, Solves p θ → ∃ child ∈ ps, Solves child θ} :=
   if p.any (fun e => hasRigid e.lhs || hasRigid e.rhs) then
-    if (pairs 0 (Buckets.dedup bucketKey ((p.flatMap fun e => subterms e.lhs ++ subterms e.rhs).filter
-        rigid))).all (quietPair (keyedSides p)) then
+    if (pairs 0 (Buckets.dedup bucketKey (p.flatMap fun e => rigidSubterms e.lhs ++
+        rigidSubterms e.rhs))).all (quietPair (keyedSides p)) then
       ⟨[p],by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩
     else refineProblem p
   else ⟨[p],by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩
