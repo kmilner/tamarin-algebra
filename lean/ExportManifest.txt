@@ -96,6 +96,7 @@ proposer tamarin_operand_refine Tamarin.Executable.operandRefine
 proposer tamarin_operand_unify Tamarin.Executable.operandUnify
 proposer tamarin_pairing_variants Tamarin.Executable.pairingVariants
 proposer tamarin_project_answers Tamarin.Executable.projectAnswers
+proposer tamarin_propose_unifier_names Tamarin.Executable.proposeUnifierNames
 proposer tamarin_reduce_rule_slot Tamarin.Executable.reduceRuleSlot
 proposer tamarin_reduction_graph Tamarin.Executable.reductionGraph
 proposer tamarin_residual_rigid Tamarin.Executable.residualRigid

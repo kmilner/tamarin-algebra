@@ -103,4 +103,45 @@ private def sumHeads : Array UInt64 := #[0,4,1,4,2,4]
 #guard read #[#[1],#[]] true #[#[1]] == #[#[1]]
 #guard read (name #[] #[] #[] #[] true false) true #[#[1]] == #[#[1]]
 
+/-! The proposer `proposeUnifierNames`, which makes a proposal from the reply
+of the unifier itself, sent with each row behind its length. -/
+
+private abbrev propose := Executable.proposeUnifierNames
+private def flat (rows : Array (Array UInt64)) : Array UInt64 :=
+  rows.foldl (fun acc r => (acc.push r.size.toUInt64) ++ r) #[]
+
+-- x:Fresh = y:Msg: the range variable stands for both, and its representative
+-- is x, of its sort. It takes the hint of x and the index above the query.
+#guard propose aliasNames aliasHeads #[0,0,0] #[#[0,1]] (flat alias) == #[#[1,6]]
+#guard read (name aliasNames aliasHeads #[#[0,1]] #[#[1,6]] true false) true alias ==
+  #[#[1],#[],#[0,1,6,6,1],#[1,2,6,6,1]]
+
+-- f(a, b) = f(b, a) with a and b of one sort at one index: the representative
+-- is the one whose hint comes first in the caller's order.
+private def swap := unify #[2,9,2,2,2,2] #[#[0,0,2],#[0,1,2],#[2,9,0,1],#[2,9,1,0]] #[2,3]
+#guard swap == #[#[1],#[],#[0,2,0,0,2],#[1,2,0,0,2]]
+#guard propose #[1,3,2,3] #[0,2,1,2] #[0,2,1] #[#[0,2]] (flat swap) == #[#[2,4]]
+#guard propose #[1,3,2,3] #[0,2,1,2] #[0,1,2] #[#[0,2]] (flat swap) == #[#[1,4]]
+-- Without a rank for a hint nothing is proposed.
+#guard propose #[1,3,2,3] #[0,2,1,2] #[0,1] #[#[0,2]] (flat swap) == #[]
+
+-- x = f(y) and z = z: y is moved above the indices of x and y, and z, which
+-- is left alone, keeps its own label and its binding is left out.
+private def lone := unify #[2,8,1,2,2] #[#[0,0,2],#[0,1,2],#[2,8,1],#[0,2,2]] #[0,2,3,3]
+private def loneHeads : Array UInt64 := #[0,2,1,2,2,2]
+#guard lone == #[#[1],#[],#[0,2,0,1,2,2,8,1],#[1,2,0,1,2],#[2,2,0,2,2]]
+#guard propose #[1,1,2,7,3,9] loneHeads #[0,0,0,0] #[#[1,2,2,2]] (flat lone) == #[#[2,8,3,9]]
+#guard read (name #[1,1,2,7,3,9] loneHeads #[#[1,2,2,2]] #[#[2,8,3,9]] true false) true lone ==
+  #[#[1],#[],#[0,2,7,8,2,2,8,1],#[1,2,7,8,2]]
+-- A moved label that is the label of a query variable of the sort is not
+-- proposed.
+#guard propose #[1,1,2,7,2,8] loneHeads #[0,0,0,0] #[#[1,2,2,2]] (flat lone) == #[]
+-- Where the move overflows, the least index the other variables do not use.
+#guard propose #[1,0xFFFFFFFFFFFFFFFF,2,0,3,9] loneHeads #[0,0,0,0] #[#[1,2,2,2]] (flat lone) ==
+  #[#[2,1,3,9]]
+-- A family with other than one arm, or a reply that is not one, gets no
+-- proposal.
+#guard propose #[1,1,2,7,3,9] loneHeads #[0,0,0,0] #[#[1,2,2,2],#[1,2]] (flat lone) == #[]
+#guard propose #[1,1,2,7,3,9] loneHeads #[0,0,0,0] #[#[1,2,2,2]] ((flat lone).pop) == #[]
+
 end Tamarin.UnifierNamesTests
