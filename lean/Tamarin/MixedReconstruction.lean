@@ -988,6 +988,13 @@ theorem reconstructs_singleDefinition (p : Problem s)
     (h : SingleDefinition (purify p).constraints) : (reconstruct? p).isSome :=
   reconstructs_agreeing p (fun c hc d hd eq _ => (h c hc d hd eq) ▸ EquivB.refl _)
 
+/-- The empty problem has one reconstructed template. -/
+theorem reconstruct_empty : ∃ x, reconstruct? (s := s) [] = some [x] := by
+  have empty : (purify (s := s) []).constraints = [] := by simp [purify, inventory]
+  unfold reconstruct? reconstructOf
+  rw [empty, reconstruct_nil]
+  exact ⟨_, rfl⟩
+
 end Solve
 
 namespace System

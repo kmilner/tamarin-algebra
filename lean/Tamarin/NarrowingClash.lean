@@ -7,7 +7,7 @@ required sort remains incompatible even if other variables narrow their sorts. -
 namespace Tamarin.NarrowingClash
 variable {s : Signature}
 
-private def possible : Term s → SortId → Bool
+def possible : Term s → SortId → Bool
   | .var v, k => Subsort.check v.sort k || Subsort.check k v.sort
   | .atom a, k => Subsort.check (s.atomSort a) k
   | .free f xs, k => Subsort.check (s.outputSort f) k &&
@@ -36,7 +36,7 @@ private theorem possible_of_instance (t : Term s) (σ : Substitution s) (k)
     simp only [possible,Bool.and_eq_true]
     exact ⟨⟨h.1.1,ia _ h.1.2⟩,ib _ h.2⟩
 
-private def sortClash (a b : Term s) := a.checkSort a.rootSort && !(possible b a.rootSort)
+def sortClash (a b : Term s) := a.checkSort a.rootSort && !(possible b a.rootSort)
 
 private theorem no_sort_clash (a b : Term s) (σ : Substitution s) (eq : EquivB (σ.apply a) (σ.apply b)) :
     sortClash a b = false := by
@@ -50,7 +50,7 @@ private theorem no_sort_clash (a b : Term s) (σ : Substitution s) (eq : EquivB 
 
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
-private def heads : Term s → Term s → Bool
+def heads : Term s → Term s → Bool
   | .var _, _ | _, .var _ => true
   | .atom a,.atom b => decide (a = b)
   | .free f _,.free g _ => decide (f = g)
@@ -89,7 +89,7 @@ def unifier (u : VerifiedUnifier s (fun _ => True)) : VerifiedUnifier s (fun _ =
   fresh p hp avoid := by split <;> first | simp | exact u.fresh p hp avoid
 
 /-- The outer constructor admits the sort. -/
-private def rootPossible : Term s → SortId → Bool
+def rootPossible : Term s → SortId → Bool
   | .var v, k => Subsort.check v.sort k || Subsort.check k v.sort
   | .atom a, k => Subsort.check (s.atomSort a) k
   | .free f _, k => Subsort.check (s.outputSort f) k
@@ -102,7 +102,7 @@ private theorem rootPossible_of_possible (t : Term s) (k : SortId) (h : possible
   cases t <;> simp_all [possible, rootPossible]
 
 /-- A variable equated with a term whose outer constructor lies outside its sort. -/
-private def shallow : Term s → Term s → Bool
+def shallow : Term s → Term s → Bool
   | .var v, b => !(rootPossible b v.sort)
   | _, _ => false
 

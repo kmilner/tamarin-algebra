@@ -225,13 +225,13 @@ private def packBucketed {d : Dictionary} (p : Problem d.sig) (answers : List (S
   simp only [pack, packBucketed, Buckets.dedup_eq]
 
 /-- A variable or a product at the root. -/
-private def sumLike {d : Dictionary} : Term d.sig → Bool
+def sumLike {d : Dictionary} : Term d.sig → Bool
   | .var _ | .ac _ _ _ => true
   | _ => false
 
 /-- The operands of a product at its root, counted along the right spine up
 to the given bound. -/
-private def spine {d : Dictionary} : Nat → Term d.sig → Nat
+def spine {d : Dictionary} : Nat → Term d.sig → Nat
   | 0, _ => 0
   | fuel + 1, .ac _ _ r => 1 + spine fuel r
   | _ + 1, _ => 1

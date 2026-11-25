@@ -619,4 +619,9 @@ def unifier (raw : Problem s → List (Template s)) (hc : ∀ p, CompleteTemplat
   domain p _ avoid := (correct p _ (hc p) avoid).domain
   fresh p _ avoid := (correct p _ (hc p) avoid).fresh
 
+/-- The empty problem gets one substitution from one template, and it moves
+no variable. -/
+theorem solve_nil (x : Template s) (avoid : List Variable) :
+    ∃ σ, solve [] [x] avoid = [σ] ∧ ∀ v, σ.image v = .var v := ⟨_, rfl, fun _ => rfl⟩
+
 end Tamarin.UnifierSorts

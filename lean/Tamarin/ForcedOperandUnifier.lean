@@ -14,12 +14,12 @@ open ACForcedEquations ACBasis
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym]
   [DecidableEq s.Atom]
 
-private def headOf : Term s → Option s.ACSym
+def headOf : Term s → Option s.ACSym
   | .ac f _ _ => some f
   | _ => none
 
 /-- The AC symbols at the root of a side. -/
-private def heads (p : Problem s) : List s.ACSym :=
+def heads (p : Problem s) : List s.ACSym :=
   (p.flatMap fun e => (headOf e.lhs).toList ++ (headOf e.rhs).toList).eraseDups
 
 private def atHead (f : s.ACSym) (e : Equation s) : Bool :=
@@ -64,6 +64,72 @@ def added (p : Problem s) : {extra : Problem s // Forced p extra} :=
   ⟨found.map (·.val), Forced.of_each fun e he => by
     obtain ⟨x,_,rfl⟩ := List.mem_map.mp he
     exact x.property⟩
+
+/-- The operands of the products at the root, counted without telling the
+product symbols apart. -/
+def leaves : Term s → Nat
+  | .ac _ a b => leaves a + leaves b
+  | _ => 1
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem leaves_pos (t : Term s) : 0 < leaves t := by
+  induction t with
+  | ac g a b ia ib => simp only [leaves]; omega
+  | _ => simp [leaves]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+theorem flatten_length_le (f : s.ACSym) (t : Term s) :
+    (ACRepresentation.flatten f t).length ≤ leaves t := by
+  induction t with
+  | ac g a b ia ib =>
+    unfold ACRepresentation.flatten
+    split
+    · simp only [List.length_append, leaves]; omega
+    · simp only [List.length_singleton, leaves]
+      have := leaves_pos a
+      omega
+  | _ => simp [ACRepresentation.flatten, leaves]
+
+private theorem sum_filter_le {α : Type} (g : α → Nat) (q : α → Bool) (l : List α) :
+    ((l.filter q).map g).sum ≤ (l.map g).sum := by
+  induction l with
+  | nil => simp
+  | cons x xs ih =>
+    simp only [List.filter_cons]
+    split <;> simp <;> omega
+
+private theorem sum_map_le {α : Type} (g h : α → Nat) (l : List α) (le : ∀ x ∈ l, g x ≤ h x) :
+    (l.map g).sum ≤ (l.map h).sum := by
+  induction l with
+  | nil => simp
+  | cons x xs ih =>
+    simp only [List.map_cons, List.sum_cons]
+    have := le x List.mem_cons_self
+    have := ih fun y hy => le y (List.mem_cons_of_mem _ hy)
+    omega
+
+/-- A problem whose products have fewer operands than `floor` in all forces
+nothing. -/
+theorem added_small (p : Problem s) (h : (p.map fun e => leaves e.lhs + leaves e.rhs).sum < floor) :
+    (added p).val = [] := by
+  unfold added
+  split
+  · rfl
+  · have none : (heads p).flatMap (atSymbol p) = [] := by
+      apply List.flatMap_eq_nil_iff.mpr
+      intro f _
+      unfold atSymbol
+      dsimp only
+      split
+      · rfl
+      · have le : ((p.filter (atHead f)).map fun e => (ACRepresentation.flatten f e.lhs).length +
+            (ACRepresentation.flatten f e.rhs).length).sum ≤ (p.map fun e => leaves e.lhs + leaves e.rhs).sum := by
+          have sub := sum_filter_le (fun e => leaves e.lhs + leaves e.rhs) (atHead f) p
+          refine Nat.le_trans (sum_map_le _ _ _ fun e _ => ?_) sub
+          exact Nat.add_le_add (flatten_length_le f e.lhs) (flatten_length_le f e.rhs)
+        simp only [show ((p.filter (atHead f)).map fun e => (ACRepresentation.flatten f e.lhs).length +
+            (ACRepresentation.flatten f e.rhs).length).sum < floor from Nat.lt_of_le_of_lt le h, ↓reduceIte]
+    simp [none]
 
 /-- Solve the problem directly when its products force no equality, and
 otherwise with the forced equalities added. The second solver is built only

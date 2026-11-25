@@ -9,6 +9,7 @@ import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
 import Tamarin.TotalUnifyExists
+import Tamarin.TotalUnifyFast
 import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
 import TamarinRuntime.Candidate

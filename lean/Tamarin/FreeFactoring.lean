@@ -21,7 +21,7 @@ structure Frame (p : Problem s) where
   trace : Trace p .identity (todo ++ kept) θ
 
 /-- A variable may be bound to a term of its sort that does not contain it. -/
-private def bindable (v : Variable) (t : Term s) : Option (PLift (HasSort t v.sort ∧ ¬ t.Occurs v)) :=
+def bindable (v : Variable) (t : Term s) : Option (PLift (HasSort t v.sort ∧ ¬ t.Occurs v)) :=
   letI := Term.occursDecidable v t
   if ho : t.Occurs v then none
   else if hs : t.checkSort v.sort = true then some ⟨Term.checkSort_sound _ _ hs, ho⟩ else none
@@ -29,7 +29,7 @@ private def bindable (v : Variable) (t : Term s) : Option (PLift (HasSort t v.so
 /-- Replace one variable, storing the arguments of every rebuilt free
 application. `Term.subst` leaves them as closures that substitute again on
 every access, one layer per binding. -/
-private def replace (v : Variable) (t : Term s) : Term s → Term s
+def replace (v : Variable) (t : Term s) : Term s → Term s
   | .var w => if w = v then t else .var w
   | .atom a => .atom a
   | .free f xs =>
@@ -39,7 +39,7 @@ private def replace (v : Variable) (t : Term s) : Term s → Term s
   | .ac f a b => .ac f (replace v t a) (replace v t b)
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] in
-private theorem replace_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (u : Term s) :
+theorem replace_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (u : Term s) :
     replace v t u = (Substitution.binding v t ht).apply u := by
   induction u with
   | var w => simp [replace, Substitution.apply, Term.subst, Substitution.binding]
@@ -52,34 +52,34 @@ private theorem replace_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (
     rw [ia, ib]
 
 /-- Terms without the variable are shared, not rebuilt. -/
-private def swap (v : Variable) (t u : Term s) : Term s :=
+def swap (v : Variable) (t u : Term s) : Term s :=
   letI := Term.occursDecidable v u
   if u.Occurs v then replace v t u else u
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] in
-private theorem swap_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (u : Term s) :
+theorem swap_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (u : Term s) :
     swap v t u = (Substitution.binding v t ht).apply u := by
   unfold swap
   split
   · exact replace_eq v t ht u
   · next no => exact (Substitution.binding_apply_of_not_occurs v t u ht no).symm
 
-private def rewrite (v : Variable) (t : Term s) (p : Problem s) : Problem s :=
+def rewrite (v : Variable) (t : Term s) (p : Problem s) : Problem s :=
   p.map fun e => ⟨swap v t e.lhs, swap v t e.rhs⟩
 
 omit [DecidableEq s.Atom] [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] in
-private theorem rewrite_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (p : Problem s) :
+theorem rewrite_eq (v : Variable) (t : Term s) (ht : HasSort t v.sort) (p : Problem s) :
     rewrite v t p = p.substitute (.binding v t ht) := by
   simp only [rewrite, Problem.substitute, swap_eq v t ht]
 
 /-- Deferred equations return to the worklist: the binding may expose a free head. -/
-private def bind (p : Problem s) (v : Variable) (t : Term s) (rest kept : Problem s)
+def bind (p : Problem s) (v : Variable) (t : Term s) (rest kept : Problem s)
     (θ : Substitution s) (ok : HasSort t v.sort ∧ ¬ t.Occurs v)
     (tr : Trace p .identity (⟨.var v,t⟩ :: (rest ++ kept)) θ) : Frame p :=
   ⟨rewrite v t (rest ++ kept), [], (Substitution.binding v t ok.1).compose θ,
     by rw [List.append_nil, rewrite_eq v t ok.1]; exact tr.trans (.bind v t ok.1 ok.2 _ _)⟩
 
-private def settle (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
+def settle (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
     (tr : Trace p .identity (⟨a,b⟩ :: (rest ++ kept)) θ) : Frame p :=
   if same : a = b then ⟨rest, kept, θ, tr.trans (.discard (same ▸ .refl _) _ _)⟩
   else
@@ -109,7 +109,7 @@ private def settle (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : 
 
 /-- Equal free heads decompose at once. Comparing the two sides first would
 walk them again at every level; their leaves are compared when reached. -/
-private def advance (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
+def advance (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
     (tr : Trace p .identity (⟨a,b⟩ :: (rest ++ kept)) θ) : Frame p :=
   match a, b, tr with
   | .free f xs, .free g ys, tr =>
@@ -120,7 +120,7 @@ private def advance (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ :
     else ⟨rest, ⟨.free f xs,.free g ys⟩ :: kept, θ, tr.trans (.perm List.perm_middle.symm _)⟩
   | a, b, tr => settle p a b rest kept θ tr
 
-private def go (p : Problem s) : Nat → Frame p → Frame p
+def go (p : Problem s) : Nat → Frame p → Frame p
   | 0, st => st
   | n+1, st =>
     match st with
@@ -128,7 +128,7 @@ private def go (p : Problem s) : Nat → Frame p → Frame p
     | ⟨⟨a,b⟩ :: rest, kept, θ, tr⟩ => go p n (advance p a b rest kept θ tr)
 
 /-- Decompose free heads and drop identical sides without binding anything. -/
-private def split (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
+def split (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : Substitution s)
     (tr : Trace p .identity (⟨a,b⟩ :: (rest ++ kept)) θ) : Frame p :=
   match a, b, tr with
   | .free f xs, .free g ys, tr =>
@@ -143,17 +143,17 @@ private def split (p : Problem s) (a b : Term s) (rest kept : Problem s) (θ : S
 
 /-- A first pass that only decomposes. Each later binding then rewrites the
 small equations between leaves, not the undecomposed input terms. -/
-private def spread (p : Problem s) : Nat → Frame p → Frame p
+def spread (p : Problem s) : Nat → Frame p → Frame p
   | 0, st => st
   | n+1, st =>
     match st with
     | ⟨[], _, _, _⟩ => st
     | ⟨⟨a,b⟩ :: rest, kept, θ, tr⟩ => spread p n (split p a b rest kept θ tr)
 
-private def restart (p : Problem s) (st : Frame p) : Frame p :=
+def restart (p : Problem s) (st : Frame p) : Frame p :=
   ⟨st.todo ++ st.kept, [], st.θ, by rw [List.append_nil]; exact st.trace⟩
 
-private def weight : Term s → Nat
+def weight : Term s → Nat
   | .var _ | .atom _ => 1
   | .free _ xs => 1 + (List.ofFn fun i => weight (xs i)).sum
   | .comm _ a b | .ac _ a b => 1 + weight a + weight b
@@ -190,7 +190,7 @@ private def weightDirect (t : Term s) : Nat := weightFrom t 0
   simp [weightDirect, weightFrom_eq]
 
 /-- Enough for every input whose bindings do not duplicate large subterms. -/
-private def fuel (p : Problem s) : Nat :=
+def fuel (p : Problem s) : Nat :=
   let size := (p.map fun e => weight e.lhs + weight e.rhs).sum + p.length + 2
   size * size
 

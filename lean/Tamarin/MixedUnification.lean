@@ -115,6 +115,22 @@ theorem verified_solve (p : Problem s) (avoid : List Variable) :
       if p.any NarrowingClash.quick then [] else DistinctAnswers.distinct p
         (FreeFactoring.solve (forcing rounds) p avoid) := wrapped_solve _ p avoid
 
+/-- The residual solver answers the empty problem with one substitution that
+moves no variable. -/
+theorem forcing_empty (avoid : List Variable) :
+    ∃ σ, (forcing (s := s) rounds).solve [] trivial avoid = [σ] ∧ ∀ v, σ.image v = .var v := by
+  obtain ⟨x, hx⟩ := reconstruct_empty (s := s)
+  have rows : solve (s := s) [] = [x] := by
+    unfold solve
+    rw [hx]
+  obtain ⟨σ, hσ, img⟩ := UnifierSorts.solve_nil x avoid
+  refine ⟨σ, ?_, img⟩
+  have none : (ForcedOperands.added (s := s) []).val = [] := by
+    unfold ForcedOperands.added
+    simp
+  simp only [rounds, forcing, ForcedOperands.unifier, none, List.isEmpty_nil, ↓reduceIte, residual,
+    NarrowingClash.unifier, List.any_nil, Bool.false_eq_true, UnifierSorts.unifier, rows, hσ]
+
 /-- Compatibility entry point for callers of the formerly partial reference. -/
 def solve? (p : Problem s) : Option (List (UnifierSorts.Template s)) := some (solve p)
 
