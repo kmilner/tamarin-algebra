@@ -471,6 +471,70 @@ theorem extend_solution (p : Problem s) (θ : UnifierSorts.Template s)
   obtain ⟨V,h,values⟩ := extend_inventory p θ sol
   exact ⟨V,h,fun _ hv => values _ (var_in_inventory hv)⟩
 
+/-- The two sides of an equation of the problem have one slot. -/
+theorem purify_links (p : Problem s) : ∀ e ∈ p, (purify p).slot e.lhs = (purify p).slot e.rhs :=
+  identify_links p _
+
+/-- The sides of the equations are interned. -/
+theorem sides_in_inventory {p : Problem s} {e : Equation s} (he : e ∈ p) :
+    e.lhs ∈ inventory p ∧ e.rhs ∈ inventory p :=
+  ⟨inside he (.inl (self_mem _)),inside he (.inr (self_mem _))⟩
+
+/-- The subterms of an interned term are interned. -/
+theorem inventory_subterms {p : Problem s} {t : Term s} (ht : t ∈ inventory p) :
+    ∀ u ∈ subterms t, u ∈ inventory p := by
+  obtain ⟨e,he,hm⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp ht)
+  exact fun u hu => inside he ((List.mem_append.mp hm).imp
+    (fun h => descend _ h u hu) (fun h => descend _ h u hu))
+
+/-- Slots only identify what the equations link. A list of terms that holds,
+with each side of an equation, the other side holds every interned term that
+has the slot of one of its interned members. -/
+theorem purify_slot_closed (p : Problem s) (S : List (Term s))
+    (closed : ∀ e ∈ p, e.lhs ∈ S ↔ e.rhs ∈ S) {t u : Term s} (ht : t ∈ S) (hti : t ∈ inventory p)
+    (hu : u ∈ inventory p) (same : (purify p).slot t = (purify p).slot u) : u ∈ S := by
+  classical
+  let ts := inventory p
+  let a : Variable := ⟨0,.msg⟩
+  let b : Variable := ⟨1,.msg⟩
+  let V : Nat → Term s := fun n => if ∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = n then .var a else .var b
+  have key (y : Term s) (hy : y ∈ ts) : (∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y) ↔ y ∈ S := by
+    constructor
+    · rintro ⟨x,hx,hxt,eq⟩
+      have left := List.getElem_idxOf (List.idxOf_lt_length_of_mem hxt)
+      have right := List.getElem_idxOf (List.idxOf_lt_length_of_mem hy)
+      have : x = y := by
+        rw [← left,← right]
+        simp only [eq]
+      exact this ▸ hx
+    · intro h
+      exact ⟨y,h,hy,rfl⟩
+  have value (y : Term s) (hy : y ∈ ts) : V (ts.idxOf y) = if y ∈ S then .var a else .var b := by
+    by_cases inS : y ∈ S
+    · have yes : ∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y := (key y hy).mpr inS
+      simp only [V,yes,inS,↓reduceIte]
+    · have no : ¬∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y := fun h => inS ((key y hy).mp h)
+      simp only [V,no,inS,↓reduceIte]
+  have links (e) (he : e ∈ p) : EquivB (V (ts.idxOf e.lhs)) (V (ts.idxOf e.rhs)) := by
+    rw [value _ (sides_in_inventory he).1,value _ (sides_in_inventory he).2]
+    by_cases l : e.lhs ∈ S
+    · simp only [l,(closed e he).mp l,↓reduceIte]
+      exact .refl _
+    · have r : e.rhs ∉ S := fun h => l ((closed e he).mpr h)
+      simp only [l,r,↓reduceIte]
+      exact .refl _
+  have at_t := identify_values p ts.idxOf V links t
+  have at_u := identify_values p ts.idxOf V links u
+  change identify ts.idxOf p t = identify ts.idxOf p u at same
+  rw [← same] at at_u
+  have joint := at_u.trans at_t.symm
+  rw [value u hu,value t hti] at joint
+  by_cases inS : u ∈ S
+  · exact inS
+  · simp only [inS,ht,↓reduceIte] at joint
+    have heads := joint.head_eq
+    simp [Model.eval,headModel,a,b] at heads
+
 end Purification
 
 private def inputs : Constraint s → List Nat

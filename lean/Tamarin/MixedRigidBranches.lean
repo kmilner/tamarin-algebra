@@ -232,19 +232,432 @@ private theorem loop_nil (table : Array (Term s)) (todo : List (Pair s)) (p : Pr
   unfold loop
   simp
 
-/-- `refineProblem` of a problem without free or C subterms. There is no
-rigid pair to align, and the problem is its own only child. -/
+/-- A cheap key of a term: its shape and its variables. Symbols are not read. -/
+private def hkey : Term s → UInt64
+  | .var v => mixHash 11 (hash v.id)
+  | .atom _ => 13
+  | .free f xs => (List.finRange (s.arity f)).foldl (fun h i => mixHash h (hkey (xs i))) 17
+  | .comm _ a b => mixHash 19 (mixHash (hkey a) (hkey b))
+  | .ac _ a b => mixHash 23 (mixHash (hkey a) (hkey b))
+
+/-- A term with its key. -/
+private abbrev Keyed (s : Signature) := UInt64 × Term s
+
+private def keyed (t : Term s) : Keyed s := (hkey t,t)
+
+/-- Membership, comparing the keys before the terms. -/
+private def hasK : List (Keyed s) → Keyed s → Bool
+  | [], _ => false
+  | e :: es, x => (e.1 == x.1 && e.2 == x.2) || hasK es x
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem hasK_eq (S : List (Keyed s)) (x : Keyed s) :
+    hasK S x = S.any fun e => e.1 == x.1 && e.2 == x.2 := by
+  induction S with
+  | nil => rfl
+  | cons e es ih => simp only [hasK,List.any_cons,ih]
+
+/-- The sides of the equations with their keys. -/
+private def keyedSides (p : Problem s) : List (Keyed s × Keyed s) :=
+  p.map fun e => (keyed e.lhs,keyed e.rhs)
+
+/-- One pass over the equations: the other side of each equation with a
+listed side is added. -/
+private def linkStep : List (Keyed s × Keyed s) → List (Keyed s) → List (Keyed s)
+  | [], acc => acc
+  | e :: es, acc =>
+    linkStep es (if hasK acc e.1 then (if hasK acc e.2 then acc else e.2 :: acc)
+      else if hasK acc e.2 then e.1 :: acc else acc)
+
+/-- Passes of `linkStep` until one adds nothing, at most the given number:
+the list it stopped at, or `none` when the passes ran out. -/
+private def linkUntil (eqs : List (Keyed s × Keyed s)) : Nat → List (Keyed s) → Option (List (Keyed s))
+  | 0, _ => none
+  | n+1, S =>
+    let next := linkStep eqs S
+    if next.length == S.length then some S else linkUntil eqs n next
+
+/-- Whether `u` has the slot of `t` in the purification of the problem whose
+keyed sides are given, read from the terms linked to `t`; `none` when the
+passes ran out. -/
+private def sameSlot? (eqs : List (Keyed s × Keyed s)) (t u : Term s) : Option Bool :=
+  (linkUntil eqs (2 * eqs.length + 2) [keyed t]).map fun S => hasK S (keyed u)
+
+/-- Every entry is the term with its key. -/
+private def Honest (S : List (Keyed s)) : Prop := ∀ e ∈ S, e = keyed e.2
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem hasK_iff {S : List (Keyed s)} (h : Honest S) (x : Term s) :
+    hasK S (keyed x) = true ↔ x ∈ S.map (·.2) := by
+  rw [hasK_eq,List.any_eq_true]
+  constructor
+  · rintro ⟨e,he,ok⟩
+    simp only [Bool.and_eq_true,beq_iff_eq] at ok
+    exact List.mem_map.mpr ⟨e,he,ok.2⟩
+  · intro hx
+    obtain ⟨e,he,rfl⟩ := List.mem_map.mp hx
+    refine ⟨e,he,?_⟩
+    rw [h e he]
+    simp [keyed]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem keyedSides_honest {p : Problem s} {d : Keyed s × Keyed s} (hd : d ∈ keyedSides p) :
+    ∃ e ∈ p, d = (keyed e.lhs,keyed e.rhs) := by
+  obtain ⟨e,he,rfl⟩ := List.mem_map.mp hd
+  exact ⟨e,he,rfl⟩
+
+/-- What one step of the pass does to the list. -/
+private def linkOne (acc : List (Keyed s)) (e : Keyed s × Keyed s) : List (Keyed s) :=
+  if hasK acc e.1 then (if hasK acc e.2 then acc else e.2 :: acc)
+  else if hasK acc e.2 then e.1 :: acc else acc
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem linkStep_eq (eqs : List (Keyed s × Keyed s)) (S : List (Keyed s)) :
+    linkStep eqs S = eqs.foldl linkOne S := by
+  induction eqs generalizing S with
+  | nil => rfl
+  | cons e es ih => exact ih _
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem linkOne_sub (acc : List (Keyed s)) (e : Keyed s × Keyed s) :
+    ∀ x ∈ acc, x ∈ linkOne acc e := by
+  intro x hx
+  unfold linkOne
+  split
+  · split
+    · exact hx
+    · exact List.mem_cons_of_mem _ hx
+  · split
+    · exact List.mem_cons_of_mem _ hx
+    · exact hx
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem linkOne_length (acc : List (Keyed s)) (e : Keyed s × Keyed s) :
+    acc.length ≤ (linkOne acc e).length := by
+  unfold linkOne
+  split
+  · split
+    · exact Nat.le_refl _
+    · simp
+  · split
+    · simp
+    · exact Nat.le_refl _
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem fold_sub (eqs : List (Keyed s × Keyed s)) :
+    ∀ (S : List (Keyed s)), ∀ x ∈ S, x ∈ eqs.foldl linkOne S := by
+  induction eqs with
+  | nil => exact fun _ _ h => h
+  | cons e es ih => exact fun S x hx => ih _ x (linkOne_sub S e x hx)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem fold_length (eqs : List (Keyed s × Keyed s)) :
+    ∀ (S : List (Keyed s)), S.length ≤ (eqs.foldl linkOne S).length := by
+  induction eqs with
+  | nil => exact fun _ => Nat.le_refl _
+  | cons e es ih => exact fun S => Nat.le_trans (linkOne_length S e) (ih _)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+/-- A pass that adds nothing found every equation with both sides listed or
+neither. -/
+private theorem fold_closed (eqs : List (Keyed s × Keyed s)) :
+    ∀ (S : List (Keyed s)), (eqs.foldl linkOne S).length = S.length →
+      ∀ e ∈ eqs, hasK S e.1 = hasK S e.2 := by
+  induction eqs with
+  | nil => intro _ _ e he; cases he
+  | cons d ds ih =>
+    intro S same e he
+    simp only [List.foldl_cons] at same
+    have grow := fold_length ds (linkOne S d)
+    have still : linkOne S d = S := by
+      have le := linkOne_length S d
+      have eq : (linkOne S d).length = S.length := by omega
+      unfold linkOne at eq ⊢
+      by_cases l : hasK S d.1 = true
+      · by_cases r : hasK S d.2 = true
+        · simp [l,r]
+        · simp [l,r] at eq
+      · by_cases r : hasK S d.2 = true
+        · simp [l,r] at eq
+        · simp [l,r]
+    rw [still] at same
+    rcases List.mem_cons.mp he with rfl | he
+    · unfold linkOne at still
+      split at still
+      · next l =>
+        split at still
+        · next r => rw [l,r]
+        · next r => exact absurd (congrArg List.length still) (by simp)
+      · next l =>
+        split at still
+        · exact absurd (congrArg List.length still) (by simp)
+        · next r => simp only [Bool.not_eq_true] at l r; rw [l,r]
+    · exact ih S same e he
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem fold_honest (eqs : List (Keyed s × Keyed s))
+    (keys : ∀ d ∈ eqs, d.1 = keyed d.1.2 ∧ d.2 = keyed d.2.2) :
+    ∀ (S : List (Keyed s)), Honest S → Honest (eqs.foldl linkOne S) := by
+  induction eqs with
+  | nil => exact fun _ h => h
+  | cons d ds ih =>
+    intro S hS
+    apply ih (fun d' hd' => keys d' (List.mem_cons_of_mem _ hd'))
+    have kd := keys d List.mem_cons_self
+    intro x hx
+    unfold linkOne at hx
+    split at hx
+    · split at hx
+      · exact hS x hx
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · exact kd.2
+        · exact hS x hx
+    · split at hx
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · exact kd.1
+        · exact hS x hx
+      · exact hS x hx
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+/-- Every term added by a pass has the slot of a listed term. -/
+private theorem fold_slots (k : Term s → Nat) (c : Nat) (eqs : List (Keyed s × Keyed s))
+    (links : ∀ d ∈ eqs, k d.1.2 = k d.2.2) :
+    ∀ (S : List (Keyed s)), (∀ x ∈ S, k x.2 = c) → ∀ x ∈ eqs.foldl linkOne S, k x.2 = c := by
+  induction eqs with
+  | nil => exact fun _ h => h
+  | cons d ds ih =>
+    intro S hS
+    apply ih (fun d' hd' => links d' (List.mem_cons_of_mem _ hd'))
+    have link := links d List.mem_cons_self
+    intro x hx
+    unfold linkOne at hx
+    split at hx
+    · next l =>
+      split at hx
+      · exact hS x hx
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · rw [hasK_eq] at l
+          obtain ⟨y,hy,ok⟩ := List.any_eq_true.mp l
+          simp only [Bool.and_eq_true,beq_iff_eq] at ok
+          rw [← link,← ok.2]
+          exact hS y hy
+        · exact hS x hx
+    · split at hx
+      · next r =>
+        rcases List.mem_cons.mp hx with rfl | hx
+        · rw [hasK_eq] at r
+          obtain ⟨y,hy,ok⟩ := List.any_eq_true.mp r
+          simp only [Bool.and_eq_true,beq_iff_eq] at ok
+          rw [link,← ok.2]
+          exact hS y hy
+        · exact hS x hx
+      · exact hS x hx
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+/-- The list `linkUntil` stops at is honest, holds the start, has the slot of
+its start throughout and is closed under the equations. -/
+private theorem linkUntil_spec (k : Term s → Nat) (c : Nat) (eqs : List (Keyed s × Keyed s))
+    (keys : ∀ d ∈ eqs, d.1 = keyed d.1.2 ∧ d.2 = keyed d.2.2)
+    (links : ∀ d ∈ eqs, k d.1.2 = k d.2.2) :
+    ∀ (n : Nat) (S out : List (Keyed s)), linkUntil eqs n S = some out → Honest S →
+      (∀ x ∈ S, k x.2 = c) →
+      Honest out ∧ (∀ x ∈ S, x ∈ out) ∧ (∀ x ∈ out, k x.2 = c) ∧
+        ∀ d ∈ eqs, hasK out d.1 = hasK out d.2
+  | 0, _, _, h, _, _ => by cases h
+  | n+1, S, out, h, hS, cS => by
+    unfold linkUntil at h
+    dsimp only at h
+    split at h
+    · next same =>
+      cases h
+      refine ⟨hS,fun _ hx => hx,cS,?_⟩
+      rw [linkStep_eq] at same
+      exact fold_closed eqs S (by simpa using same)
+    · obtain ⟨ho,sub,co,cl⟩ := linkUntil_spec k c eqs keys links n _ out h
+        (by rw [linkStep_eq]; exact fold_honest eqs keys S hS)
+        (by rw [linkStep_eq]; exact fold_slots k c eqs links S cS)
+      exact ⟨ho,fun x hx => sub x (by rw [linkStep_eq]; exact fold_sub eqs S x hx),co,cl⟩
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+/-- A decided `sameSlot?` is the comparison of the slots of `purify`. -/
+private theorem sameSlot?_spec {p : Problem s} {t u : Term s} {b : Bool}
+    (h : sameSlot? (keyedSides p) t u = some b) (ht : t ∈ inventory p) (hu : u ∈ inventory p) :
+    b = ((purify p).slot t == (purify p).slot u) := by
+  unfold sameSlot? at h
+  obtain ⟨S,hS,rfl⟩ := Option.map_eq_some_iff.mp h
+  have keys : ∀ d ∈ keyedSides p, d.1 = keyed d.1.2 ∧ d.2 = keyed d.2.2 := by
+    intro d hd
+    obtain ⟨e,_,rfl⟩ := keyedSides_honest hd
+    exact ⟨rfl,rfl⟩
+  have links : ∀ d ∈ keyedSides p, (purify p).slot d.1.2 = (purify p).slot d.2.2 := by
+    intro d hd
+    obtain ⟨e,he,rfl⟩ := keyedSides_honest hd
+    exact purify_links p e he
+  obtain ⟨honest,sub,slots,closedK⟩ := linkUntil_spec (purify p).slot ((purify p).slot t) _ keys links
+    _ [keyed t] S hS (fun x hx => by rw [List.mem_singleton.mp hx]; rfl)
+    (fun x hx => by rw [List.mem_singleton.mp hx]; rfl)
+  have closed : ∀ e ∈ p, e.lhs ∈ S.map (·.2) ↔ e.rhs ∈ S.map (·.2) := by
+    intro e he
+    have := closedK (keyed e.lhs,keyed e.rhs) (List.mem_map.mpr ⟨e,he,rfl⟩)
+    rw [← hasK_iff honest,← hasK_iff honest,this]
+  have self : t ∈ S.map (·.2) := List.mem_map.mpr ⟨_,sub _ List.mem_cons_self,rfl⟩
+  cases hm : hasK S (keyed u) with
+  | true =>
+    obtain ⟨e,he,rfl⟩ := List.mem_map.mp ((hasK_iff honest u).mp hm)
+    have := slots e he
+    simp [this]
+  | false =>
+    have out : u ∉ S.map (·.2) := fun hin => by
+      rw [(hasK_iff honest u).mpr hin] at hm
+      cases hm
+    have ne : (purify p).slot t ≠ (purify p).slot u := fun same =>
+      out (purify_slot_closed p _ closed self ht hu same)
+    simp [ne]
+
+/-- Surely not enabled: the slots of the pair differ, or one of its alignments
+holds already. Decided from the equations alone, without the slots. -/
+private def quietPair (eqs : List (Keyed s × Keyed s)) (z : Pair s) : Bool :=
+  match sameSlot? eqs z.2.2.1 z.2.2.2 with
+  | some false => true
+  | some true =>
+    (align z.2.2.1 z.2.2.2).any fun es => es.all fun e => sameSlot? eqs e.lhs e.rhs == some true
+  | none => false
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq (Term s)] in
+private theorem self_sub (t : Term s) : t ∈ subterms t := by
+  cases t <;> simp [subterms]
+
+omit [DecidableEq (Term s)] in
+private theorem align_subterms {a b : Term s} {es : Problem s} (h : es ∈ align a b) :
+    ∀ e ∈ es, e.lhs ∈ subterms a ∧ e.rhs ∈ subterms b := by
+  intro e he
+  unfold align at h
+  split at h
+  · next f xs g ys =>
+    split at h
+    · next eq =>
+      subst eq
+      obtain rfl := List.mem_singleton.mp h
+      obtain ⟨i,rfl⟩ := List.mem_ofFn.mp he
+      exact ⟨List.mem_cons_of_mem _ (List.mem_flatten.mpr ⟨_,List.mem_ofFn.mpr ⟨i,rfl⟩,self_sub _⟩),
+        List.mem_cons_of_mem _ (List.mem_flatten.mpr ⟨_,List.mem_ofFn.mpr ⟨i,rfl⟩,self_sub _⟩)⟩
+    · cases h
+  · next f a b g c d =>
+    split at h
+    · simp only [List.mem_cons,List.not_mem_nil,or_false] at h
+      rcases h with rfl | rfl <;> simp only [List.mem_cons,List.not_mem_nil,
+        or_false] at he <;> rcases he with rfl | rfl <;> simp [subterms,self_sub]
+    · cases h
+  · cases h
+
+private theorem quietPair_enabled {table : Array (Term s)} {p : Problem s} {z : Pair s}
+    (known : Known table p z) (h : quietPair (keyedSides p) z = true) :
+    enabled (slotsOnly p).slot (table.map (slotsOnly p).slot) z = false := by
+  obtain ⟨ia,ib,ha,hb,_⟩ := known
+  unfold enabled
+  rw [slot_at table _ _ _ ia,slot_at table _ _ _ ib,slotsOnly_slot]
+  unfold quietPair at h
+  split at h
+  · next hs =>
+    have := sameSlot?_spec hs ha hb
+    simp [← this]
+  · next hs =>
+    have := sameSlot?_spec hs ha hb
+    obtain ⟨es,hes,all⟩ := List.any_eq_true.mp h
+    have yes : (align z.2.2.1 z.2.2.2).any (fun es => es.all fun e =>
+        (purify p).slot e.lhs == (purify p).slot e.rhs) = true := by
+      apply List.any_eq_true.mpr
+      refine ⟨es,hes,List.all_eq_true.mpr fun e he => ?_⟩
+      have one := List.all_eq_true.mp all e he
+      have sub := align_subterms hes e he
+      cases hq : sameSlot? (keyedSides p) e.lhs e.rhs with
+      | none => simp [hq] at one
+      | some c =>
+        rw [hq] at one
+        have := sameSlot?_spec hq (inventory_subterms ha _ sub.1) (inventory_subterms hb _ sub.2)
+        simp at one
+        rw [← this, one]
+    simp [yes]
+  · cases h
+
+private theorem loop_quiet (table : Array (Term s)) (todo : List (Pair s)) (p : Problem s)
+    (inside : ∀ z ∈ todo, Known table p z) (h : todo.all (quietPair (keyedSides p)) = true) :
+    (loop table todo p inside).val = [p] := by
+  unfold loop
+  split
+  · rfl
+  · dsimp only
+    have none : todo.filter (enabled (slotsOnly p).slot (table.map (slotsOnly p).slot)) = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro z hz
+      rw [quietPair_enabled (inside z hz) (List.all_eq_true.mp h z hz)]
+      simp
+    split
+    · rfl
+    · next first more found =>
+      rw [none] at found
+      cases found
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+private theorem filter_loop (q : Term s → Bool) :
+    ∀ (l acc : List (Term s)),
+      (List.eraseDupsBy.loop (· == ·) l acc).filter q =
+        List.eraseDupsBy.loop (· == ·) (l.filter q) (acc.filter q)
+  | [], acc => by simp [List.eraseDupsBy.loop,List.filter_reverse]
+  | a :: as, acc => by
+    by_cases qa : q a = true
+    · have same : (acc.filter q).any (fun b => a == b) = acc.any (fun b => a == b) := by
+        rw [List.any_filter]
+        congr 1
+        funext b
+        by_cases ab : a = b
+        · subst ab; simp [qa]
+        · simp [ab]
+      simp only [List.eraseDupsBy.loop,List.filter_cons,qa,↓reduceIte]
+      rw [same]
+      split
+      · exact filter_loop q as acc
+      · rw [filter_loop q as (a :: acc)]
+        simp [qa]
+    · simp only [List.eraseDupsBy.loop,List.filter_cons,qa,Bool.false_eq_true,↓reduceIte]
+      split
+      · exact filter_loop q as acc
+      · rw [filter_loop q as (a :: acc)]
+        simp [qa]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] in
+/-- The rigid interned terms, without interning the others. -/
+private theorem rigid_inventory (p : Problem s) :
+    (inventory p).filter rigid =
+      Buckets.dedup bucketKey ((p.flatMap fun e => subterms e.lhs ++ subterms e.rhs).filter rigid) := by
+  rw [Buckets.dedup_eq]
+  unfold inventory List.eraseDups List.eraseDupsBy
+  exact filter_loop rigid _ []
+
+/-- `refineProblem` of a problem without free or C subterms, or whose pairs of
+rigid terms are surely not enabled. There is no rigid pair to align, and the
+problem is its own only child. -/
 private def refineProblemPlain (p : Problem s) :
     {ps : List (Problem s) // (∀ child ∈ ps, ∀ e ∈ p, e ∈ child) ∧
       ∀ θ, Solves p θ → ∃ child ∈ ps, Solves child θ} :=
-  if p.any (fun e => hasRigid e.lhs || hasRigid e.rhs) then refineProblem p
+  if p.any (fun e => hasRigid e.lhs || hasRigid e.rhs) then
+    if (pairs 0 (Buckets.dedup bucketKey ((p.flatMap fun e => subterms e.lhs ++ subterms e.rhs).filter
+        rigid))).all (quietPair (keyedSides p)) then
+      ⟨[p],by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩
+    else refineProblem p
   else ⟨[p],by simp,fun _ h => ⟨_,List.mem_singleton_self _,h⟩⟩
 
 @[csimp] private theorem refineProblem_eq_plain : @refineProblem = @refineProblemPlain := by
   funext s _ _ _ p
   unfold refineProblemPlain
   split
-  · rfl
+  · split
+    · next quiet =>
+      apply Subtype.ext
+      unfold refineProblem
+      rw [← rigid_inventory] at quiet
+      exact loop_quiet _ _ _ _ quiet
+    · rfl
   · next plain =>
     apply Subtype.ext
     have none : (inventory p).filter rigid = [] := by
