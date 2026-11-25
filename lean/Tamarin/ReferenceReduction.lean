@@ -353,12 +353,35 @@ private def fits : Term s → Term s → Bool
   | .ac f a b, t => rooted f (.ac f a b) t
   | _, _ => true
 
+/-- The operands of a product at its own symbol; nothing for another term. -/
+private def operandsOf : Term s → List (Term s)
+  | t@(.ac g _ _) => ACRepresentation.flatten g t
+  | _ => []
+
+/-- `fits` with the operands of the subject given. -/
+private def fitsAmong : Term s → List (Term s) → Bool
+  | p@(.ac f _ _), ops => (ACRepresentation.flatten f p).all fun x => ops.any (sameHead x)
+  | _, _ => true
+
+omit [Interrupt] in
+private theorem fitsAmong_eq {p t : Term s} (head : sameHead p t = true) :
+    fitsAmong p (operandsOf t) = fits p t := by
+  cases p with
+  | ac f a b =>
+    cases t with
+    | ac g c d =>
+      have same : f = g := by simpa [sameHead] using head
+      subst same
+      rfl
+    | _ => simp [sameHead] at head
+  | _ => rfl
+
 /-- `rootF` with the AC left sides that `rooted` excludes skipped. -/
 private def rootQ (rules : List (Equation s)) (t : Term s) : Option (Term s) :=
+  let ops := operandsOf t
   rules.findSome? fun r =>
-    if sameHead r.lhs t && fits r.lhs t then
-      let p : Problem s := [⟨r.lhs,t⟩]
-      (ReferenceMatching.first p (patternVariables p)).map fun σ => σ.apply r.rhs
+    if sameHead r.lhs t && fitsAmong r.lhs ops then
+      (ReferenceMatching.firstPattern r.lhs t).map fun σ => σ.apply r.rhs
     else none
 
 private theorem rootQ_eq (rules : List (Equation s)) (t : Term s) : rootQ rules t = rootF rules t := by
@@ -366,8 +389,9 @@ private theorem rootQ_eq (rules : List (Equation s)) (t : Term s) : rootQ rules 
   apply BagMatching.findSome_congr
   intro r
   by_cases head : sameHead r.lhs t = true
-  · by_cases ok : fits r.lhs t = true
-    · simp only [head,ok,Bool.and_self,↓reduceIte]
+  · rw [fitsAmong_eq head]
+    by_cases ok : fits r.lhs t = true
+    · simp only [head,ok,Bool.and_self,↓reduceIte,ReferenceMatching.firstPattern_eq]
     · simp only [head,Bool.true_and,ok,Bool.false_eq_true,↓reduceIte]
       symm
       rw [Option.map_eq_none_iff,ReferenceMatching.first_eq,List.head?_eq_none_iff,
@@ -386,16 +410,21 @@ private theorem rootQ_eq (rules : List (Equation s)) (t : Term s) : rootQ rules 
 
 /-- `extensionF` with the left sides that `rooted` excludes skipped. -/
 private def extensionQ (rules : List (Equation s)) (f : s.ACSym) (t : Term s) : Option (Term s) :=
+  let ops := ACRepresentation.flatten f t
   rules.findSome? fun r =>
-    if groups f r.lhs && rooted f r.lhs t then
+    if groups f r.lhs && (ACRepresentation.flatten f r.lhs).all (fun x => ops.any (sameHead x)) then
       (ReferenceMatching.subproductF f r.lhs t).map fun (θ,rest) => Term.ac f (θ.apply r.rhs) rest
     else none
 
 private theorem extensionQ_eq (rules : List (Equation s)) (f : s.ACSym) (t : Term s) :
     extensionQ rules f t = extensionF rules f t := by
   unfold extensionQ extensionF
+  dsimp only
   apply BagMatching.findSome_congr
   intro r
+  have filter : (ACRepresentation.flatten f r.lhs).all (fun x => (ACRepresentation.flatten f t).any
+      (sameHead x)) = rooted f r.lhs t := rfl
+  rw [filter]
   by_cases group : groups f r.lhs = true
   · by_cases ok : rooted f r.lhs t = true
     · simp only [group,ok,Bool.and_self,↓reduceIte]

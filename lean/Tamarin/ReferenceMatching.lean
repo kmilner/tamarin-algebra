@@ -282,6 +282,72 @@ theorem first_eq (p : Problem s) (bindable : List Variable) :
     List.head?_map, BagMatching.findSome_some]
 
 omit [Interrupt] in
+/-- The branches of a pattern read the bindable test only at its variables. -/
+theorem go_bind_congr (tab : List (BagMatching.Bound s)) {bind₁ bind₂ : Variable → Bool}
+    (eq : Term s → Term s → Bool) :
+    ∀ (p : Term s), (∀ v, p.Occurs v → bind₁ v = bind₂ v) → ∀ ctx xs,
+      BagMatching.go tab bind₁ eq p ctx xs = BagMatching.go tab bind₂ eq p ctx xs
+  | .var v, same, ctx, xs => by
+    simp only [BagMatching.go,same v rfl]
+  | .atom _, _, _, _ => by simp only [BagMatching.go]
+  | .free f ps, same, _, xs => by
+    simp only [BagMatching.go]
+    congr 1
+    funext x
+    split
+    · split
+      · next h =>
+        congr 1
+        congr 1
+        funext i
+        rw [go_bind_congr tab eq (ps i) (fun v hv => same v ⟨i,hv⟩) none]
+      · rfl
+    · rfl
+  | .comm f a b, same, _, xs => by
+    have sa := go_bind_congr tab eq a (fun v hv => same v (.inl hv)) none
+    have sb := go_bind_congr tab eq b (fun v hv => same v (.inr hv)) none
+    simp only [BagMatching.go,sa,sb]
+  | .ac g a b, same, ctx, xs => by
+    have sa := go_bind_congr tab eq a (fun v hv => same v (.inl hv))
+    have sb := go_bind_congr tab eq b (fun v hv => same v (.inr hv))
+    simp only [BagMatching.go,sa,sb]
+
+/-- `first` for one equation whose pattern variables are all bindable. The
+bindable test is answered without a list, and the domain of the answer is
+listed only for an answer. -/
+def firstPattern (l t : Term s) : Option (Substitution s) :=
+  BagMatching.joinedF equal [BagMatching.rowsF [] (fun _ => true) equal l t]
+    fun row => some (assignment row l.variables)
+
+theorem firstPattern_eq (l t : Term s) :
+    firstPattern l t = first [⟨l,t⟩] (MaudeOperations.patternVariables [⟨l,t⟩]) := by
+  have vars : MaudeOperations.patternVariables [⟨l,t⟩] = l.variables := by
+    simp [MaudeOperations.patternVariables]
+  have domain : keys [⟨l,t⟩] (MaudeOperations.patternVariables [⟨l,t⟩]) = l.variables := by
+    unfold keys
+    rw [vars]
+    apply List.filter_eq_self.mpr
+    intro v hv
+    exact List.contains_iff_mem.mpr hv
+  have rowsSame : ∀ k : Requirements s → Option (Substitution s),
+      BagMatching.rowsF [] (fun v => (MaudeOperations.patternVariables [⟨l,t⟩]).contains v) equal l t k =
+        BagMatching.rowsF [] (fun _ => true) equal l t k := by
+    intro k
+    rw [BagMatching.rowsF_eq,BagMatching.rowsF_eq]
+    unfold BagMatching.rows
+    congr 2
+    exact go_bind_congr [] equal l (fun v hv => by
+      rw [vars]
+      exact List.contains_iff_mem.mpr ((l.mem_variables v).mpr hv)) none [t]
+  unfold firstPattern first
+  rw [domain]
+  have noBounds : bounds (fun v => (MaudeOperations.patternVariables [⟨l,t⟩]).contains v) [⟨l,t⟩] = [] := rfl
+  simp only [List.map_cons,List.map_nil,noBounds]
+  congr 2
+  funext k
+  exact (rowsSame k).symm
+
+omit [Interrupt] in
 private theorem around_holds (f : s.ACSym) (pattern subject : Term s)
     {out : Requirements s × List (Term s)}
     (member : out ∈ BagMatching.around (fun _ => true) equal f pattern subject) :
