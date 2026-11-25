@@ -10,6 +10,7 @@ import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
 import Tamarin.TotalUnifyExists
 import Tamarin.TotalUnifyFast
+import Tamarin.TheoryWireFast
 import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
 import TamarinRuntime.Candidate

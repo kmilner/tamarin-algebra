@@ -13,6 +13,14 @@ bindings. Everything is proved equal to the definition it replaces. -/
 namespace Tamarin.TotalUnifyFast
 open TotalUnifyWire
 
+/-- Equality of variables, field by field. -/
+def varEq (v w : Variable) : Bool := v.id == w.id && v.sort == w.sort
+
+@[simp] theorem varEq_eq (v w : Variable) : varEq v w = (v == w) := by
+  cases v; cases w
+  rw [Bool.eq_iff_iff]
+  simp [varEq]
+
 /-- A term with the declaration of every application at its node. -/
 inductive FTerm where
   | var (v : Variable)
@@ -24,7 +32,7 @@ namespace FTerm
 mutual
 /-- Syntactic equality. -/
 def beq : FTerm → FTerm → Bool
-  | .var v, .var w => v == w
+  | .var v, .var w => varEq v w
   | .atom i k, .atom j l => i == j && k == l
   | .app k i o ins args, .app k' i' o' ins' args' =>
     k == k' && i == i' && o == o' && ins == ins' && beqAll args args'
@@ -53,7 +61,7 @@ end
 mutual
 /-- Whether the variable occurs. -/
 def occurs (v : Variable) : FTerm → Bool
-  | .var w => v == w
+  | .var w => varEq v w
   | .atom .. => false
   | .app _ _ _ _ args => occursAll v args
 def occursAll (v : Variable) : List FTerm → Bool
@@ -121,7 +129,7 @@ end
 mutual
 /-- Replace one variable. -/
 def replace (v : Variable) (t : FTerm) : FTerm → FTerm
-  | .var w => if w == v then t else .var w
+  | .var w => if varEq w v then t else .var w
   | .atom i k => .atom i k
   | .app k i o ins args => .app k i o ins (replaceAll v t args)
 def replaceAll (v : Variable) (t : FTerm) : List FTerm → List FTerm
@@ -842,7 +850,7 @@ end Simulation
 /-- The image of a variable in a table of bindings. -/
 def lookupD : List (Variable × FTerm) → Variable → FTerm
   | [], v => .var v
-  | (w, t) :: rest, v => if v == w then t else lookupD rest v
+  | (w, t) :: rest, v => if varEq v w then t else lookupD rest v
 
 /-- One pass over the bindings, the latest first: every entry gets the image
 of its term under the entries of the later bindings. -/
@@ -898,6 +906,55 @@ theorem problemVars_lower (p : Problem d.sig) : problemVars (p.map lowerEq) = p.
   congr 1
   funext e
   simp [lowerEq, lower_vars]
+
+mutual
+/-- The variables of a term in front of an accumulator. -/
+def varsInto : FTerm → List Variable → List Variable
+  | .var v, acc => v :: acc
+  | .atom .., acc => acc
+  | .app _ _ _ _ args, acc => varsAllInto args acc
+def varsAllInto : List FTerm → List Variable → List Variable
+  | [], acc => acc
+  | t :: ts, acc => varsInto t (varsAllInto ts acc)
+end
+
+mutual
+theorem varsInto_eq : ∀ (t : FTerm) (acc : List Variable), varsInto t acc = t.vars ++ acc
+  | .var _, _ => rfl
+  | .atom .., _ => rfl
+  | .app _ _ _ _ args, acc => by simp only [varsInto, FTerm.vars, varsAllInto_eq args acc]
+theorem varsAllInto_eq : ∀ (ts : List FTerm) (acc : List Variable), varsAllInto ts acc = FTerm.varsAll ts ++ acc
+  | [], _ => rfl
+  | t :: ts, acc => by simp only [varsAllInto, FTerm.varsAll, varsInto_eq t, varsAllInto_eq ts, List.append_assoc]
+end
+
+/-- `List.eraseDups` comparing variables field by field. -/
+def dedupVars : List Variable → List Variable → List Variable
+  | [], seen => seen.reverse
+  | v :: vs, seen => if seen.any (varEq v) then dedupVars vs seen else dedupVars vs (v :: seen)
+
+theorem dedupVars_eq (l seen : List Variable) :
+    dedupVars l seen = List.eraseDupsBy.loop (· == ·) l seen := by
+  induction l generalizing seen with
+  | nil => rfl
+  | cons v vs ih =>
+    have : seen.any (varEq v) = seen.any (fun b => v == b) := by
+      congr 1; funext b; exact varEq_eq v b
+    cases h : seen.any (fun b => v == b) <;> simp [dedupVars, List.eraseDupsBy.loop, this, h, ih]
+
+/-- The variables of the lowered query without repeats, in order. -/
+def keysOf (eqs : List FEq) : List Variable :=
+  dedupVars (eqs.foldr (fun e acc => varsInto e.1 (varsInto e.2 acc)) []) []
+
+theorem keysOf_eq (eqs : List FEq) : keysOf eqs = (problemVars eqs).eraseDups := by
+  have vars : eqs.foldr (fun e acc => varsInto e.1 (varsInto e.2 acc)) [] = problemVars eqs := by
+    induction eqs with
+    | nil => rfl
+    | cons e es ih =>
+      rw [List.foldr_cons, ih, varsInto_eq, varsInto_eq]
+      simp [problemVars]
+  rw [keysOf, vars, dedupVars_eq]
+  rfl
 
 /-- The decline test at the head of `TotalUnifyWire.family`. -/
 def declines (p : Problem d.sig) : Bool :=
@@ -1033,7 +1090,7 @@ def solved (eqs : List FEq) (slow : Unit → Array (Array UInt64)) : Array (Arra
   let st := factor eqs
   if st.todo.isEmpty && st.kept.isEmpty then
     let table := resolveBinds st.binds
-    match (Buckets.dedup Variable.id (problemVars eqs)).mapM (row table) with
+    match (keysOf eqs).mapM (row table) with
     | some rows => (#[1] :: #[] :: rows).toArray
     | none => slow ()
   else if (st.todo ++ st.kept).any impossible &&
@@ -1074,10 +1131,10 @@ theorem solved_eq (p : Problem d.sig) (hd : declines p = false)
         intro v
         rw [lookupD_resolve, ← sim.image]
         simp [Substitution.compose, Substitution.apply, id]
-      have rows : (Buckets.dedup Variable.id (problemVars (p.map lowerEq))).mapM
+      have rows : (keysOf (p.map lowerEq)).mapM
           (row (resolveBinds (factor (p.map lowerEq)).binds)) =
           p.variables.eraseDups.mapM (binding (σ.compose (FreeFactoring.factor p).θ)) := by
-        rw [problemVars_lower, Buckets.dedup_eq]
+        rw [keysOf_eq, problemVars_lower]
         congr 1
         funext v
         exact row_binding _ _ same v
