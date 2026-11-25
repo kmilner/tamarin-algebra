@@ -409,6 +409,37 @@ void *tamarin_lean_name_unifiers(whole_word_slice names, whole_word_slice heads,
                      word_rows(proposal, proposal_count), nat != 0, low != 0));
 }
 
+extern lean_object *tamarin_propose_unifier_names(lean_object *, lean_object *, lean_object *,
+                                                  lean_object *, lean_object *);
+
+/* tamarin_lean_name_unifiers on a proposal that Lean makes itself from the reply of the unifier
+   (tamarin_propose_unifier_names, a proposer). The naming export tests that proposal as it tests
+   any other, so the tables are those of tamarin_lean_name_unifiers for that proposal. names, heads,
+   ranges, nat and low are as there. order ranks the caller's hint identifiers by the caller's order
+   of the hints, and reply is the reply of tamarin_lean_theory_unify with each row behind its
+   length. The result has two arms: the tables, and the proposal (no row when nothing was
+   proposed, which leaves the tables those without a proposal). */
+void *tamarin_lean_self_name_unifiers(whole_word_slice names, whole_word_slice heads,
+                                      whole_word_slice order, const whole_word_slice *ranges,
+                                      size_t range_count, whole_word_slice reply, uint8_t nat,
+                                      uint8_t low) {
+    lean_object *labels = atom_array(names.data, names.size);
+    lean_object *rows = atom_array(heads.data, heads.size);
+    lean_object *range = word_rows(ranges, range_count);
+    /* Both exports consume their arguments, and these three go to both. */
+    lean_inc(labels);
+    lean_inc(rows);
+    lean_inc(range);
+    lean_object *proposal = tamarin_propose_unifier_names(labels, rows,
+        atom_array(order.data, order.size), range, atom_array(reply.data, reply.size));
+    lean_inc(proposal);
+    lean_object *tables = tamarin_name_unifiers(labels, rows, range, proposal, nat != 0, low != 0);
+    lean_object *outer = lean_alloc_array(2, 2);
+    lean_array_set_core(outer, 0, tables);
+    lean_array_set_core(outer, 1, proposal);
+    return outer;
+}
+
 extern lean_object *tamarin_apply_names(lean_object *, uint8_t, lean_object *);
 
 /* The reply of tamarin_lean_theory_unify read through the tables of tamarin_lean_name_unifiers, in
