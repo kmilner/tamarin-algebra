@@ -181,7 +181,7 @@ Two things are trusted about it, both in [`native/lean_unification.c`](../native
 What an interrupted search computes is therefore irrelevant. The export's own reply `#[#[4]]` is
 produced only when the very first question is answered `true`.
 
-**Proposer exports** are the other 43 (`proposer` lines of the manifest): the pieces of the
+**Proposer exports** are the other 44 (`proposer` lines of the manifest): the pieces of the
 specialised variant solvers that still run in Lean, the folding variant generator
 `tamarin_general_variants`, the bounded narrowing search `tamarin_checked_variants` (the proposer
 for kind-level queries and for tables the certifier did not accept), and `tamarin_fold_variants`,
@@ -192,7 +192,9 @@ successor that is kept evicts the retained variants it subsumes other than its a
 layer is listed when it is complete ([`Tamarin/VariantFold.lean`](Tamarin/VariantFold.lean)).
 `tamarin_apply_names` is the specified reading of a reply through the tables of
 `tamarin_name_unifiers`, as a function the Rust tests compare the backend's reader with;
-production does not call it.
+production does not call it. `tamarin_propose_unifier_names` makes a proposal of names for
+`tamarin_name_unifiers` from the reply of the unifier, and the C bridge hands it straight to that
+export in the same call (see the names of the range below).
 A call stops with status 3 beyond a given number of narrowing sites, and the caller retries with a
 larger number. It takes a `poll` like the interruptible contract exports, so a call also stops
 when the caller cancels. They carry no contract. The Rust backend
@@ -463,7 +465,13 @@ from every variable the caller keeps below that bound. Rust can instead propose 
 every range variable; it proposes the names the Maude backend composes, which carry the
 name hints of query variables. The export takes a proposal when no two variables of an arm
 get one target at one sort, where the label of a query variable of that sort means that
-variable's row; otherwise the whole family gets the default names. Arms with a variable of
+variable's row; otherwise the whole family gets the default names. For a family with one arm
+the proposal can also come from Lean: `tamarin_propose_unifier_names`, a proposer, reads the arm
+and gives each range variable the names the Maude backend composes from the unifier of its own
+free unifier ([Proposer](TamarinRuntime/UnifierSelfNames.lean)), and
+`tamarin_lean_self_name_unifiers` in the C bridge passes that proposal to
+`tamarin_name_unifiers` unchanged. The tables are therefore those of the contract export for
+that proposal, and nothing is assumed about the proposer. Arms with a variable of
 the sort of natural numbers get no table when the caller's module lacks that sort
 ([Sort restriction](Tamarin/UnavailableSort.lean)).
 [Tables, reading and proof](Tamarin/UnifierNames.lean) · [Renaming preserves a complete family](Tamarin/CallerFreshening.lean) · [Packet tests](Tests/UnifierNames.lean)
