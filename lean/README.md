@@ -555,13 +555,11 @@ properties by checking three root lists in one graph. An empty residual certifie
 covers every solution. With a residual AC matrix, its variables index the columns and slot
 allocation reserves variables from all three lists.
 If the original equations do not directly justify the proposed bindings, the checker replays
-single bindings, exposes matching free heads and compares the result modulo C/AC. CI requires
-acceptance for the direct sorted-binding fragment and a chain whose second elimination specializes
-the first binding. The Rust backend calls this export only in variant joins, on the factoring
-of its free unifier; ordinary unification on `proved-only` does not factor in Rust, and `native`,
+single bindings, exposes matching free heads and compares the result modulo C/AC. The Rust
+backend calls this export only in variant joins, on the factoring of its free unifier; ordinary unification on `proved-only` does not factor in Rust, and `native`,
 like the Maude backend, keeps the Rust free unifier in front of the proved one without checking
 it.
-[Factoring laws](Tamarin/FactoredUnification.lean) · [Checker](TamarinRuntime/FactorCheck.lean) · [Guaranteed fragment](Tamarin/FactorAdmission.lean)
+[Factoring laws](Tamarin/FactoredUnification.lean) · [Checker](TamarinRuntime/FactorCheck.lean)
 
 For completed homogeneous answers, Lean tags each row with its column and renumbers witness slots
 in first-use order across all arms. Projection succeeds even for a complete clash (zero arms).
