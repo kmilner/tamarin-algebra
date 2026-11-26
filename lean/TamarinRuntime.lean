@@ -34,6 +34,10 @@ import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
 import TamarinRuntime.ReductionGraph
 import TamarinRuntime.OperandUnification
+-- No export names it, but build.rs links the TamarinRuntime modules that Lake reaches
+-- through this library's own imports, and ForcedOperandClasses (with ACForcedCoordinates) is
+-- otherwise reached only through Tamarin.ForcedOperandClasses.
+import TamarinRuntime.ForcedOperandClasses
 import TamarinRuntime.MaskedOperands
 import TamarinRuntime.OperandRefinement
 import TamarinRuntime.UnifierSelfNames
