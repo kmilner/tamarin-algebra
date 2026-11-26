@@ -44,6 +44,21 @@ def includable (upper : Vector (Option Nat) n) (tot : Vector Nat n) (e : Elem n)
 /-- Whether the remainder contains every uncovered coordinate. -/
 def reaches (rem unc : Vector Bool n) : Bool := (List.finRange n).all fun i => !unc[i] || rem[i]
 
+/-- `includable` by a loop over the coordinates. -/
+def includableFast (upper : Vector (Option Nat) n) (tot : Vector Nat n) (e : Elem n) : Bool :=
+  allFin n fun i => fits upper[i] (tot[i] + e.vec[i])
+
+@[csimp] theorem includable_eq_includableFast : @includable = @includableFast := by
+  funext n upper tot e
+  rw [includable, includableFast, allFin_eq]
+
+/-- `reaches` by a loop over the coordinates. -/
+def reachesFast (rem unc : Vector Bool n) : Bool := allFin n fun i => !unc[i] || rem[i]
+
+@[csimp] theorem reaches_eq_reachesFast : @reaches = @reachesFast := by
+  funext n rem unc
+  rw [reaches, reachesFast, allFin_eq]
+
 /-- Add a vector to the totals. -/
 def add (tot v : Vector Nat n) : Vector Nat n := Vector.ofFn fun i => tot[i] + v[i]
 

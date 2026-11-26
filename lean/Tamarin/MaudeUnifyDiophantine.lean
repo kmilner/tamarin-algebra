@@ -76,7 +76,7 @@ theorem tally_eq (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) :
     · simp only [h, Bool.false_eq_true, ite_false]
 
 /-- The first index that satisfies a test, by a loop without a list. -/
-def firstFin (k : Nat) (p : Fin k → Bool) : Option (Fin k) :=
+@[inline] def firstFin (k : Nat) (p : Fin k → Bool) : Option (Fin k) :=
   Fin.foldr k (fun r acc => if p r then some r else acc) none
 
 theorem firstFin_eq (k : Nat) (p : Fin k → Bool) : firstFin k p = (List.finRange k).find? p := by
@@ -86,6 +86,19 @@ theorem firstFin_eq (k : Nat) (p : Fin k → Bool) : firstFin k p = (List.finRan
   induction l with
   | nil => rfl
   | cons r l ih => rw [List.foldr_cons, ih, List.find?_cons]; split <;> simp_all
+
+/-- Whether every index satisfies a test, by a loop without a list. -/
+@[inline] def allFin (k : Nat) (p : Fin k → Bool) : Bool := Fin.foldl k (fun acc i => acc && p i) true
+
+theorem allFin_eq (k : Nat) (p : Fin k → Bool) : allFin k p = (List.finRange k).all p := by
+  unfold allFin
+  rw [Fin.foldl_eq_finRange_foldl]
+  have gen : ∀ (l : List (Fin k)) (acc : Bool), l.foldl (fun acc i => acc && p i) acc = (acc && l.all p) := by
+    intro l
+    induction l with
+    | nil => intro acc; simp
+    | cons i l ih => intro acc; rw [List.foldl_cons, ih, List.all_cons, Bool.and_assoc]
+  rw [gen, Bool.true_and]
 
 /-- `issue` with one pass over the coordinates of each equation. -/
 def issueFast (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
