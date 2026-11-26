@@ -4,7 +4,7 @@
 
 /* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
  * export is specified by theorems and may be used as the answer: unpack_conjunction,
- * name_unifiers and the eight theory_* exports over the theory of a Tamarin file. Every other
+ * name_unifiers and the nine theory_* exports over the theory of a Tamarin file. Every other
  * export, checked_variants, general_variants and fold_variants included, is a proposer with no
  * contract: its output may only go into a proposed family of variants that
  * tamarin_lean_theory_variant_check then has to accept. */
@@ -486,6 +486,29 @@ void *tamarin_lean_theory_unify(uint64_t flags, whole_word_slice free, uint64_t 
     return watched_rows(watch, tamarin_theory_unify(watch_closure(watch), flags,
                         atom_array(free.data, free.size), ac, word_rows(rows, count),
                         atom_array(equations.data, equations.size)));
+}
+
+extern lean_object *tamarin_theory_maude_unify(lean_object *, uint64_t, lean_object *, uint64_t,
+                                               lean_object *, uint64_t, lean_object *, lean_object *);
+
+/* The port of Maude's unification algorithm (lean/Tamarin/MaudeUnifyExport.lean) on the packet of
+   tamarin_lean_theory_unify, under the rank rows ranks: the ranks of the free, C and AC symbols by
+   id (rows 0, 1, 2), of the operator of the name constants of each sort by sort code (row 3), and
+   the variable symbol ranks (row 4) and sort indices (row 5) of the error sort at 0 and of each sort
+   at its code plus one; a missing word counts as 0. A query variable's identifier is the code of its
+   name and a name's identifier is the argument of its constant. fuel bounds the port's recursion.
+   {1} and then, for each unifier, an empty row and one binding row per query variable, all in one
+   order (Maude's slot order), the variables of the unifier numbered from the least identifier above
+   the query's in the order of the port's output slots; {3} when the port ran out of fuel or an
+   answer does not fit in words; {0} for a malformed packet. NULL when the call was interrupted: see
+   interrupt_watch. */
+void *tamarin_lean_theory_maude_unify(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                      const whole_word_slice *ranks, size_t rank_count,
+                                      uint64_t fuel, const whole_word_slice *rows, size_t count,
+                                      whole_word_slice equations, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_maude_unify(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(ranks, rank_count), fuel,
+                        word_rows(rows, count), atom_array(equations.data, equations.size)));
 }
 
 extern uint8_t tamarin_theory_unify_exists(lean_object *, uint64_t, lean_object *, uint64_t,
