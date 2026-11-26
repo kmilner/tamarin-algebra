@@ -393,6 +393,72 @@ def witnesses (subs : List (Dag s)) (sel : List (List Nat)) :
     let (st, ws, us) := witnesses subs sel rest (j + 1) st
     (st, w :: ws, used ++ us)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- Whether every element but the one at position `j` (counting from `k`)
+is zero at coordinate `i`. -/
+def othersZero (j i : Nat) : List (List Nat) → Nat → Bool
+  | [], _ => true
+  | e :: rest, k => (decide (k = j) || decide (e.getD i 0 = 0)) && othersZero j i rest (k + 1)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem othersZero_eq (j i : Nat) : ∀ (l : List (List Nat)) (k : Nat),
+    othersZero j i l k = (l.zipIdx k).all fun (e, j') => decide (j' = j) || decide (e.getD i 0 = 0)
+  | [], _ => rfl
+  | e :: rest, k => by
+    rw [othersZero, othersZero_eq j i rest (k + 1)]
+    rfl
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- Whether a dag is a variable. -/
+def isVarD : Dag s → Bool
+  | .var _ => true
+  | _ => false
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- The first variable subterm that element `e` (at position `j` of the
+selection) alone assigns, with multiplicity one, counting positions from `i`. -/
+def findReuse (e : List Nat) (sel : List (List Nat)) (j : Nat) : List (Dag s) → Nat → Option (Dag s × Nat)
+  | [], _ => none
+  | t :: ts, i =>
+    if (decide (e.getD i 0 = 1) && isVarD t && othersZero j i sel 0) then
+      some (t, i)
+    else findReuse e sel j ts (i + 1)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem findReuse_eq (e : List Nat) (sel : List (List Nat)) (j : Nat) : ∀ (subs : List (Dag s)) (i : Nat),
+    findReuse e sel j subs i = (subs.zipIdx i).find? fun (t, i) =>
+      decide (e.getD i 0 = 1) && (match t with | .var _ => true | _ => false) &&
+        (sel.zipIdx).all fun (e', j') => decide (j' = j) || decide (e'.getD i 0 = 0)
+  | [], _ => rfl
+  | t :: ts, i => by
+    rw [findReuse, findReuse_eq e sel j ts (i + 1), othersZero_eq, List.zipIdx_cons, List.find?_cons]
+    have key : ∀ (b : Bool) (x y : Option (Dag s × Nat)),
+        (if b = true then x else y) = (match b with | true => x | false => y) := by
+      intro b x y; cases b <;> rfl
+    exact key _ _ _
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- `witnesses` with the reused subterm found without building index lists. -/
+def witnessesFast (subs : List (Dag s)) (sel : List (List Nat)) :
+    List (List Nat) → Nat → St s → St s × List (Dag s) × List Nat
+  | [], _, st => (st, [], [])
+  | e :: rest, j, st =>
+    let reuse := findReuse e sel j subs 0
+    let (st, w, used) : St s × Dag s × List Nat := match reuse with
+      | some (t, i) => (st, t, [i])
+      | none => let (st, v) := st.fresh; (st, .var v, [])
+    let (st, ws, us) := witnessesFast subs sel rest (j + 1) st
+    (st, w :: ws, used ++ us)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+@[csimp] theorem witnesses_eq_witnessesFast : @witnesses = @witnessesFast := by
+  funext s subs sel todo
+  induction todo with
+  | nil => rfl
+  | cons e rest ih =>
+    funext j st
+    rw [witnesses, witnessesFast, findReuse_eq, ih]
+
 /-- Maude's normal form of a product given as dags with multiplicities.
 Variables are sorted once each and then repeated, which is the order that
 `normAC` gives their repetitions; other dags are normalized by `normAC`. -/
