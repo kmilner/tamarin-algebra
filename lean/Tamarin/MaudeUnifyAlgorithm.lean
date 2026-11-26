@@ -455,6 +455,34 @@ theorem findReuse_eq (e : List Nat) (sel : List (List Nat)) (j : Nat) : ∀ (sub
     exact key _ _ _
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- `findReuse` walking the element alongside the subterms. -/
+def findReuseW (sel : List (List Nat)) (j : Nat) : List (Dag s) → Nat → List Nat → Option (Dag s × Nat)
+  | [], _, _ => none
+  | t :: ts, i, es =>
+    if (decide (es.headD 0 = 1) && isVarD t && othersZero j i sel 0) then some (t, i)
+    else findReuseW sel j ts (i + 1) es.tail
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem findReuseW_eq (e : List Nat) (sel : List (List Nat)) (j : Nat) : ∀ (subs : List (Dag s)) (i : Nat),
+    findReuseW sel j subs i (e.drop i) = findReuse e sel j subs i
+  | [], _ => rfl
+  | t :: ts, i => by
+    rw [findReuseW, findReuse, ← List.drop_one, List.drop_drop, findReuseW_eq e sel j ts (i + 1)]
+    have : (e.drop i).headD 0 = e.getD i 0 := by
+      rw [List.headD_eq_head?_getD, List.head?_drop, List.getD_eq_getElem?_getD]
+    rw [this]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- `findReuse` by `findReuseW`. -/
+def findReuseFast (e : List Nat) (sel : List (List Nat)) (j : Nat) (subs : List (Dag s)) (i : Nat) :
+    Option (Dag s × Nat) := findReuseW sel j subs i (e.drop i)
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+@[csimp] theorem findReuse_eq_findReuseFast : @findReuse = @findReuseFast := by
+  funext s e sel j subs i
+  exact (findReuseW_eq e sel j subs i).symm
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 /-- `witnesses` with the reused subterm found without building index lists. -/
 def witnessesFast (subs : List (Dag s)) (sel : List (List Nat)) :
     List (List Nat) → Nat → St s → St s × List (Dag s) × List Nat
