@@ -90,17 +90,33 @@ def sortIndex : Option SortId → Nat
   | some .fresh => 4
   | some .nat => 5
 
+/-- The position of the first pair with the key, or the default. -/
+def lookupRank {α : Type} [DecidableEq α] (table : List (α × Nat)) (a : α) (dflt : Nat) : Nat :=
+  match table.find? (·.1 = a) with
+  | some (_, i) => i
+  | none => dflt
+
 /-- The ranks of a problem: symbols by first occurrence and arity, variable
-symbols by sort, original variables by number and new ones after them. -/
-def ranksOf (hs : List (Head s)) (vs : List Variable) : Ranks s where
-  atom a := hs.idxOf (.atom a)
-  atomArg _ := 0
-  free f := (s.arity f <<< 24) ||| hs.idxOf (.free f)
-  comm f := (2 <<< 24) ||| hs.idxOf (.comm f)
-  ac f := (2 <<< 24) ||| hs.idxOf (.ac f)
-  varSym o := 1000 + match o with | none => 9 | some x => sortIndex (some x)
-  name i := if h : i < vs.length then vs[i].id else 1000000000 + (i - vs.length)
-  sortIndex := sortIndex
+symbols by sort, original variables by number and new ones after them. The
+tables are built once per problem. -/
+def ranksOf (hs : List (Head s)) (vs : List Variable) : Ranks s :=
+  let numbered := hs.zipIdx
+  let atoms := numbered.filterMap fun (h, i) => match h with | .atom a => some (a, i) | _ => none
+  let frees := numbered.filterMap fun (h, i) => match h with
+    | .free f => some (f, (s.arity f <<< 24) ||| i) | _ => none
+  let comms := numbered.filterMap fun (h, i) => match h with
+    | .comm f => some (f, (2 <<< 24) ||| i) | _ => none
+  let acs := numbered.filterMap fun (h, i) => match h with
+    | .ac f => some (f, (2 <<< 24) ||| i) | _ => none
+  let names := (vs.map (·.id)).toArray
+  { atom := fun a => lookupRank atoms a hs.length
+    atomArg := fun _ => 0
+    free := fun f => lookupRank frees f ((s.arity f <<< 24) ||| hs.length)
+    comm := fun f => lookupRank comms f ((2 <<< 24) ||| hs.length)
+    ac := fun f => lookupRank acs f ((2 <<< 24) ||| hs.length)
+    varSym := fun o => 1000 + match o with | none => 9 | some x => sortIndex (some x)
+    name := fun i => names.getD i (1000000000 + (i - vs.length))
+    sortIndex := sortIndex }
 
 /-- The variables of a problem in order of first occurrence. -/
 def varsOf (p : Problem s) : List Variable := nub p.variables
