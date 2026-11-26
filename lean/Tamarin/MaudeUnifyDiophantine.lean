@@ -75,18 +75,35 @@ theorem tally_eq (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) :
       · simp
     · simp only [h, Bool.false_eq_true, ite_false]
 
+/-- The first index that satisfies a test, by a loop without a list. -/
+def firstFin (k : Nat) (p : Fin k → Bool) : Option (Fin k) :=
+  Fin.foldr k (fun r acc => if p r then some r else acc) none
+
+theorem firstFin_eq (k : Nat) (p : Fin k → Bool) : firstFin k p = (List.finRange k).find? p := by
+  unfold firstFin
+  rw [Fin.foldr_eq_finRange_foldr]
+  generalize List.finRange k = l
+  induction l with
+  | nil => rfl
+  | cons r l ih => rw [List.foldr_cons, ih, List.find?_cons]; split <;> simp_all
+
 /-- `issue` with one pass over the coordinates of each equation. -/
 def issueFast (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
-  (List.finRange m).find? fun r =>
-    let t := tally cols σ r (List.finRange n) (0, false)
+  firstFin m fun r =>
+    let t := Fin.foldl n (fun acc j => if !σ.frozen[j] && cols[j][r] != 0 then
+      (acc.1 + 1, acc.2 || decide (σ.residue[r] * cols[j][r] < 0)) else acc) (0, false)
     !(σ.residue[r] == 0 || t.2) || t.1 == 1
 
 @[csimp] theorem issue_eq_issueFast : @issue = @issueFast := by
   funext n m cols σ
   unfold issue issueFast hopeful movable
+  rw [firstFin_eq]
   congr 1
   funext r
-  rw [tally_eq]
+  rw [Fin.foldl_eq_finRange_foldl]
+  have := tally_eq cols σ r (List.finRange n) (0, false)
+  unfold tally at this
+  rw [this]
   simp
 
 /-- What the equation checks make of a state before it is expanded. -/
