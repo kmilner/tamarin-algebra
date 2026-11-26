@@ -48,17 +48,18 @@ import Lean
 Every public theorem of this module is a contract statement: the export audit
 pins its kernel statement in `ExportManifest.txt` and every definition the
 statement depends on in `SpecManifest.txt`. Each one mentions a contract
-export, one of the ten exports whose reply the Rust backend uses as the
+export, one of the eleven exports whose reply the Rust backend uses as the
 answer, or states a property of the specification itself:
 
 * `nameUnifiers`, `unpackConjunction`;
 * over the theory of a Tamarin file (`Tamarin.Theory`): `theoryUnify`,
-  `theoryUnifyExists`, `theoryMatch`, `theoryMatchExists`, `theoryCertify`,
-  `theoryPathReduce`, `theoryReduce`, `theoryVariantCheck`.
+  `theoryMaudeUnify`, `theoryUnifyExists`, `theoryMatch`, `theoryMatchExists`,
+  `theoryCertify`, `theoryPathReduce`, `theoryReduce`, `theoryVariantCheck`.
 
-The theory exports are the definitions `totalUnify`, `totalUnifyExists`,
-`totalMatch`, `totalMatchExists`, `certifyTable`, `pathReduce`,
-`sessionReduce` and `sessionVariantCheck` on the packet of the theory. Those
+The theory exports are the definitions `totalUnify`, `maudeUnify`,
+`totalUnifyExists`, `totalMatch`, `totalMatchExists`, `certifyTable`,
+`pathReduce`, `sessionReduce` and `sessionVariantCheck` on the packet of the
+theory. Those
 definitions are no exports; the private theorems about them below are lemmas
 of the theory statements and not contract.
 
@@ -80,6 +81,11 @@ which the library's theorems speak (`Interrupt.run_quiet`). -/
 private theorem totalUnify_quiet {poll : Unit → Bool} (quiet : poll () = false) :
     Executable.totalUnify poll = TotalUnifyWire.run := by
   funext ds ns es
+  exact Interrupt.run_quiet quiet _ _
+
+private theorem maudeUnify_quiet {poll : Unit → Bool} (quiet : poll () = false) :
+    Executable.maudeUnify poll = MaudeUnifyExport.run := by
+  funext ds w fuel ns es
   exact Interrupt.run_quiet quiet _ _
 
 private theorem totalUnifyExists_quiet {poll : Unit → Bool} (quiet : poll () = false) :
@@ -730,6 +736,70 @@ theorem theoryUnifyExists_ambient {poll : Unit → Bool} (quiet : poll () = fals
       ∃ σ, (SignatureExtension.query extra p).Solves σ :=
   exportedTotalUnifyExists_ambient quiet ((Theory.wire_query sig ns es).trans decoded) extra
 
+/-! ### Maude's unification
+
+`theoryMaudeUnify` takes the query of `theoryUnify` and, besides, rank words
+and fuel, which steer the port of Maude's unification algorithm and change
+nothing below: the statements hold for every value of them. Its reply is the
+give-up word `#[#[3]]`, or the status row `#[1]` followed, for each member of
+a complete family of unifiers in the sense of `theoryUnify_correct`, by one
+binding row for each variable of the query, in an order of those variables
+that all members share. -/
+
+/-- Arguments that are not those of a valid signature get the reply to a
+malformed packet. -/
+theorem theoryMaudeUnify_foreign {poll : Unit → Bool} (quiet : poll () = false) {flags free ac}
+    (foreign : Theory.Signature.ofWire flags free ac = none) (ranks fuel ns es) :
+    Executable.theoryMaudeUnify poll flags free ac ranks fuel ns es = #[#[0]] := by
+  rw [Executable.theoryMaudeUnify, maudeUnify_quiet quiet]
+  exact MaudeUnifyExport.run_malformed (Theory.wire_query_none foreign ns es) ranks fuel
+
+theorem theoryMaudeUnify_malformed {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es} (malformed : sig.query ns es = none) (ranks fuel) :
+    Executable.theoryMaudeUnify poll sig.flags sig.free sig.ac ranks fuel ns es = #[#[0]] := by
+  rw [Executable.theoryMaudeUnify, maudeUnify_quiet quiet]
+  exact MaudeUnifyExport.run_malformed ((Theory.wire_query sig ns es).trans malformed) ranks fuel
+
+/-- Whatever the ranks and the fuel, a decoded query gets the give-up word or
+a complete family of unifiers, with the notion of `theoryUnify_correct`, each
+member written as one row per variable of the query in the order `vs`. -/
+theorem theoryMaudeUnify_correct {poll : Unit → Bool} (quiet : poll () = false)
+    {sig : Theory.Signature} {ns es d p} (decoded : sig.query ns es = some ⟨d,p⟩) (ranks fuel) :
+    Executable.theoryMaudeUnify poll sig.flags sig.free sig.ac ranks fuel ns es = #[#[3]] ∨
+      ∃ answers vs rows, (Outcome.complete answers).CorrectIn p [] ∧ vs.Nodup ∧
+        (∀ v, v ∈ vs ↔ p.Occurs v) ∧
+        (Executable.theoryMaudeUnify poll sig.flags sig.free sig.ac ranks fuel ns es).toList =
+          #[1] :: rows ∧
+        TotalUnifyWire.Packet.Payload d vs rows answers := by
+  rw [Executable.theoryMaudeUnify, maudeUnify_quiet quiet]
+  exact MaudeUnifyExport.run_valid ((Theory.wire_query sig ns es).trans decoded) ranks fuel
+
+/-- The interrupted reply `#[#[4]]` is given exactly when the caller's `poll`
+says stop. It carries no answer. -/
+theorem theoryMaudeUnify_interrupted (poll : Unit → Bool) (flags free ac ranks fuel ns es) :
+    Executable.theoryMaudeUnify poll flags free ac ranks fuel ns es = #[#[4]] ↔ poll () = true := by
+  constructor
+  · intro reply
+    cases quiet : poll () with
+    | true => rfl
+    | false =>
+      exfalso
+      rw [Executable.theoryMaudeUnify, maudeUnify_quiet quiet] at reply
+      cases decoded : TotalUnifyWire.input (Theory.wireDeclarations flags free ac) ns es with
+      | none =>
+        rw [MaudeUnifyExport.run_malformed decoded] at reply
+        cases reply
+      | some packet =>
+        obtain ⟨d,p⟩ := packet
+        rcases MaudeUnifyExport.run_valid decoded ranks fuel with gave | ⟨_,_,rows,_,_,_,shape,_⟩
+        · rw [gave] at reply
+          cases reply
+        · rw [reply] at shape
+          cases shape
+  · intro stop
+    rw [Executable.theoryMaudeUnify, Executable.maudeUnify]
+    exact Interrupt.run_stopped stop _ _
+
 theorem theoryMatch_foreign {flags free ac} (foreign : Theory.Signature.ofWire flags free ac = none)
     (ns es ids) : Executable.theoryMatch flags free ac ns es ids = #[#[0]] :=
   exportedTotalMatch_correct.malformed _ _ _ ids (Theory.wire_query_none foreign ns es)
@@ -1077,6 +1147,7 @@ run_cmd do
     (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
     (``Tamarin.Executable.nameUnifiers, `tamarin_name_unifiers),
     (``Tamarin.Executable.theoryUnify, `tamarin_theory_unify),
+    (``Tamarin.Executable.theoryMaudeUnify, `tamarin_theory_maude_unify),
     (``Tamarin.Executable.theoryUnifyExists, `tamarin_theory_unify_exists),
     (``Tamarin.Executable.theoryMatch, `tamarin_theory_match),
     (``Tamarin.Executable.theoryMatchExists, `tamarin_theory_match_exists),

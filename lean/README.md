@@ -117,17 +117,18 @@ The exports fall into two classes, listed in [`ExportManifest.txt`](ExportManife
 
 **Contract exports** are the ten whose reply the Rust backend uses as the answer. Each is
 mentioned by theorems of the proof root [`TamarinCI.lean`](TamarinCI.lean), and those theorems
-are the whole of what is promised to a caller. Eight of them take the theory of a Tamarin file
+are the whole of what is promised to a caller. Nine of them take the theory of a Tamarin file
 (`Tamarin.Theory`, below) instead of declaration words: the caller sends the builtin flags, the
 arities of its other free symbols, the number of its user AC symbols and, for a table, its user
 rules, and the export builds the declarations and the builtin rules itself. A reduction or
 variant-check call takes its certificate as `theoryCertify … = true` on the same table arguments.
-Each of the eight replies `#[#[0]]`, 0 or `false` to arguments that are not those of a valid
+Each of the nine replies `#[#[0]]`, 0 or `false` to arguments that are not those of a valid
 signature (`_foreign`) and to a query or table that does not decode (`_malformed`).
 
 | Export | What a reply means | Where it may decline |
 | --- | --- | --- |
 | `tamarin_theory_unify` | The reply decodes to a complete, sound, domain-restricted family of unifiers of the decoded query, also in every extension of the caller's signature (`theoryUnify_correct`, `_ambient`). | `#[#[0]]` on a malformed packet, or when one answer of the family adds at least `2^64 - bound` distinct variables to the query, `bound` being the least identifier above the query's variables (`TotalUnifyWire.Packet.Overflows`): the unifier names the variables it adds by consecutive identifiers from that bound (`UnifierDensity.verified_dense`). Never on a query without solutions (`_unsatisfiable`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
+| `tamarin_theory_maude_unify` | The query of `tamarin_theory_unify`, with rank words and fuel for the port of Maude's unification algorithm (`Tamarin.MaudeUnifyExport`). For every value of those: the status row `#[1]` and, for each member of a complete, sound, domain-restricted family of unifiers of the decoded query (the notion of `theoryUnify_correct`), one binding row per query variable, the rows of every member in one order of the query's variables (`theoryMaudeUnify_correct`). With Maude's ranks the family, its order, the order of the rows and the numbering of the added variables are Maude's; this is checked on the corpus, not proved. | `#[#[3]]` when the port runs out of fuel or an answer does not fit in words: not limited by a theorem. `#[#[0]]` on a malformed packet (`_foreign`, `_malformed`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_theory_unify_exists` | 1 exactly when the decoded query has a unifier and 2 exactly when it has none, also in every signature extension (`theoryUnifyExists_correct`, `_ambient`). No family is listed where the residuals of free factoring and of the alignments of commutative roots are sums of variables at one AC head, all of the sort of that head: a positive solution of the linear system decides. Other queries are decided by listing. | Malformed packets (reply 0). 4 exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_name_unifiers` | Tables that name the variables a family of unifiers adds to its query. The caller reads the reply of `tamarin_theory_unify` through them and in no other way; the reading is specified (`UnifierNames.apply`). A reply that decodes to a family and can be read through the tables reads as that family, or as its members without a variable of the sort of natural numbers, up to an injective renaming of the range of each member, and no name of the range is the name of a query variable of its sort (`exportedNameUnifiers_correct`). With `tamarin_theory_unify`'s own reply the reading is a complete family of unifiers (`theoryNameUnifiers_total`), and for a module without natural numbers it decides every solution without such a variable (`theoryNameUnifiers_natFree`). Without a proposal every name has the hint 0 and an index of no query variable, above every index of the query unless the caller set `low`. The export sees the labels of the query variables and what the caller says the range variables are, never the reply, and the statement assumes nothing about what it is told. | **No limit**: `#[#[0]]` may be the reply to any call. It is the reply when two query variables of one sort have one label, and when no index is left above the query and `low` is not set. A proposal that fails the test of the tables is replaced by the default names. |
 | `tamarin_unpack_conjunction` | The rows are the conjunction the packed command denotes, or the clash header (`exportedUnpackConjunction_correct`). | Malformed packets only. |
@@ -137,7 +138,7 @@ signature (`_foreign`) and to a query or table that does not decode (`_malformed
 | `tamarin_theory_path_reduce` | Status 1: an irreducible reduct that keeps the sorts of the input, on any table. Not known to be unique. | 2 only if the table is not range restricted or an irreducible reduct lost a sort, 3 only while a rewrite path has at least `n` steps (`theoryPathReduce_correct`). `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 | `tamarin_theory_variant_check` | Status 1 on a canonical presentation: the proposed family is closed, hence a complete set of variants with exactly the proposed substitutions (`theoryVariantCheck_correct`, `_certified`). A rejection names the clause of closedness that fails (`_decides`). | Status 3 only if a term the check has to normalize (`VariantCertificate.Demand`: a term of the query, its instance by a member, or a value of a most general narrowing successor of a member) has a rewrite path at least as long as the depth, or the work limit is nonzero and below the positions of the narrowing layers (`VariantCertificate.Overcharged`); see `_decides`, `_complete` and `variantDemand_bounded`. `#[#[4]]` exactly when the caller's `poll` says stop (`_interrupted`). |
 
-The eight theory exports are, by definition, the functions `totalUnify`, `totalUnifyExists`,
+The nine theory exports are, by definition, the functions `totalUnify`, `maudeUnify`, `totalUnifyExists`,
 `totalMatch`, `totalMatchExists`, `certifyTable`, `pathReduce`, `sessionReduce` and
 `sessionVariantCheck` of `TamarinRuntime.lean` on the packet of the theory. Those functions take
 declaration words and are no exports; what `TamarinCI.lean` proves of them directly is a set of
@@ -145,9 +146,10 @@ private lemmas of the theory statements, not contract.
 
 No contract statement names a search, a classifier or a reference procedure. A decline is limited
 either by a condition on the decoded packet and the rewrite relation, or by a concrete packet, or
-by the caller's `poll`. The one reply that is not limited everywhere is `false` of `theory_certify`
+by the caller's `poll`. Apart from the decline of the naming export, two replies are not limited everywhere. One is `false` of `theory_certify`
 outside its class and the builtin-only tables: termination, confluence and the finite variant property
-are undecidable. There coverage is guarded by the corpus and the benchmarks.
+are undecidable. The other is the give-up word `#[#[3]]` of `theory_maude_unify`, whose caller then
+asks `theory_unify` instead. There coverage is guarded by the corpus and the benchmarks.
 
 The class of `theoryCertify_subterm` is stated on the decoded table alone
 ([`Tamarin/SubtermTable.lean`](Tamarin/SubtermTable.lean)):

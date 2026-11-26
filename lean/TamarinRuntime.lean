@@ -11,6 +11,7 @@ import Tamarin.TotalUnifyFast
 import Tamarin.TheoryWireFast
 import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
+import Tamarin.MaudeUnifyExport
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
@@ -192,6 +193,10 @@ where the searches get specialized for the declarations of a packet. -/
     (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
   @TotalUnifyWire.runExists i decls nodes roots
 
+@[noinline] def maudeUnifyFor (i : Interrupt) (decls : Array UInt64) (ranks : Array (Array UInt64))
+    (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  @MaudeUnifyExport.run i decls ranks fuel nodes roots
+
 @[noinline] def pathReduceFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
   @PathReductionWire.run i ds ns rules root fuel
@@ -208,6 +213,10 @@ def totalUnify (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Arr
 def totalUnifyExists (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : UInt8 :=
   Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots
+
+def maudeUnify (poll : Unit → Bool) (decls : Array UInt64) (ranks : Array (Array UInt64)) (fuel : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => maudeUnifyFor i decls ranks fuel nodes roots
 
 /-- Tables that name the variables a family of unifiers adds to its query:
 see `Tamarin.UnifierNames`. -/
@@ -313,6 +322,14 @@ rows `extra` numbered from 0, and `root`, `roots` and `family` index them. -/
 def theoryUnify (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
     (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
   totalUnify poll (Theory.wireDeclarations flags free ac) nodes roots
+
+/-- The port of Maude's unification algorithm on the query of `theoryUnify`,
+under the caller's ranks and fuel: see `Tamarin.MaudeUnifyExport`. -/
+@[export tamarin_theory_maude_unify]
+def theoryMaudeUnify (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  maudeUnify poll (Theory.wireDeclarations flags free ac) ranks fuel nodes roots
 
 @[export tamarin_theory_unify_exists]
 def theoryUnifyExists (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
