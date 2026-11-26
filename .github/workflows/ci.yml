@@ -77,6 +77,7 @@ jobs:
           lake env lean --run Tests/ACSortedBagSearch.lean
           lake env lean Tests/ACTwoRowFeasibility.lean
           lake env lean Tests/ACLowRank.lean
+          lake env lean Tests/ACSeparation.lean
           lake env lean --run Tests/ACCertificates.lean
           lake env lean --run Tests/MixedSizeSystem.lean
           lake env lean --run Tests/VariantOverlap.lean
@@ -120,6 +121,7 @@ jobs:
           lake env lean Tests/CanonicalTree.lean
           lake env lean Tests/RecursiveACMatch.lean
           lake env lean --run Tests/MatchingStress.lean
+          lake env lean --run Tests/MultisetDifferenceTR.lean
           lake env lean --run Tests/CommonCancellation.lean
           lake env lean --run Tests/RigidAllocation.lean
           lake env lean --run Tests/Commutative.lean
