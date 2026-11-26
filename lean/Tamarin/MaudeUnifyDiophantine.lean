@@ -48,6 +48,47 @@ coordinate left to move. -/
 def issue (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
   (List.finRange m).find? fun r => !hopeful cols σ r || (movable cols σ r).length == 1
 
+/-- One pass over the coordinates of equation `r`: how many can still move it,
+and whether one of them moves it towards zero. -/
+def tally (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) (l : List (Fin n)) (acc : Nat × Bool) :
+    Nat × Bool :=
+  l.foldl (fun acc j => if !σ.frozen[j] && cols[j][r] != 0 then
+    (acc.1 + 1, acc.2 || decide (σ.residue[r] * cols[j][r] < 0)) else acc) acc
+
+theorem tally_eq (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) :
+    ∀ (l : List (Fin n)) (acc : Nat × Bool), tally cols σ r l acc =
+      (acc.1 + (l.filter fun j => !σ.frozen[j] && cols[j][r] != 0).length,
+        acc.2 || (l.filter fun j => !σ.frozen[j] && cols[j][r] != 0).any
+          fun j => decide (σ.residue[r] * cols[j][r] < 0))
+  | [], acc => by simp [tally]
+  | j :: l, acc => by
+    unfold tally
+    rw [List.foldl_cons]
+    have ih := tally_eq cols σ r l
+    unfold tally at ih
+    rw [ih]
+    rw [List.filter_cons]
+    by_cases h : (!σ.frozen[j] && cols[j][r] != 0) = true
+    · simp only [h, ite_true, List.length_cons, List.any_cons, Bool.or_assoc, Prod.mk.injEq]
+      constructor
+      · omega
+      · simp
+    · simp only [h, Bool.false_eq_true, ite_false]
+
+/-- `issue` with one pass over the coordinates of each equation. -/
+def issueFast (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
+  (List.finRange m).find? fun r =>
+    let t := tally cols σ r (List.finRange n) (0, false)
+    !(σ.residue[r] == 0 || t.2) || t.1 == 1
+
+@[csimp] theorem issue_eq_issueFast : @issue = @issueFast := by
+  funext n m cols σ
+  unfold issue issueFast hopeful movable
+  congr 1
+  funext r
+  rw [tally_eq]
+  simp
+
 /-- What the equation checks make of a state before it is expanded. -/
 inductive Verdict (n m : Nat) where
   | dead
