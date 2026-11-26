@@ -133,3 +133,4 @@ import Tamarin.ReduceViaSteps
 import Tamarin.TableNarrowing
 import Tamarin.CompleteNarrowing
 import Tamarin.MaudeUnifyDag
+import Tamarin.MaudeUnifyDiophantine
