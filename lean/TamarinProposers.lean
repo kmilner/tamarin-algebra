@@ -604,29 +604,11 @@ theorem acPairUnifierExclusion_normal {s : Signature} (rules : List (Equation s)
   simpa only [Substitution.apply_identity] using pairAt rules apps f a b Substitution.identity
     (by simpa using ha) (by simpa using hb) (by simpa using na) (by simpa using nb) bucket
 
-theorem exportedJoinSelection_correct : Rewriting.VariantJoin.Select.Correct Executable.selectJoinedVariants :=
-  Rewriting.VariantJoin.Select.correct
-
-theorem exportedJoinSelection_semantic : Rewriting.VariantJoin.Select.Semantic Executable.selectJoinedVariants :=
-  Rewriting.VariantJoin.Select.exact_call exportedJoinSelection_correct
-
 theorem exportedDHExponentImages_correct : Rewriting.DHExponent.Packet.Correct (Executable.dhExponentImages ()) :=
   Rewriting.DHExponent.Packet.of_accepts (by decide +kernel)
 
-/-- Each shared-exponent program refines the caller's simultaneous variant query. -/
-theorem exportedDHExponentImages_complete : Rewriting.DHExponent.Caller.Semantic (Executable.dhExponentImages ()) :=
-  Rewriting.DHExponent.Caller.certified exportedDHExponentImages_correct
-
 theorem exportedDHTowerImages_correct : Rewriting.DHTower.Packet.Correct Executable.dhTowerImages :=
   Rewriting.DHTower.Packet.correct
-
-theorem exportedDHTowerImages_semantic : Rewriting.DHTower.Packet.Semantic Executable.dhTowerImages :=
-  Rewriting.DHTower.Packet.semantic exportedDHTowerImages_correct
-
-/-- Every returned row decodes to the certified base. Reopening those rows
-in the caller's scope gives complete, reconstructible variants of the tuple. -/
-theorem exportedDHTowerImages_complete : Rewriting.DHTower.Caller.Semantic Executable.dhTowerImages :=
-  Rewriting.DHTower.Caller.certified exportedDHTowerImages_correct
 
 theorem exportedDHPeerImages_correct : Rewriting.DHPeer.Programs.Correct Executable.dhPeerImages :=
   Rewriting.DHPeer.Programs.candidate_correct
@@ -645,12 +627,6 @@ theorem exportedDHPeerImages_factorSemantic : Rewriting.DHPeer.Programs.FactorSe
 theorem exportedSignedGraph_correct : SignedGraph.Correct Executable.signedGraphVariants ∧
     SignedGraph.Total Executable.signedGraphVariants :=
   ⟨SignedGraph.run_correct, SignedGraph.run_total⟩
-
-theorem exportedReductionGraph_correct : ReductionGraph.Correct Executable.reductionGraph :=
-  ReductionGraph.correct
-
-theorem exportedReductionGraph_semantic : ReductionGraph.Semantic Executable.reductionGraph :=
-  ReductionGraph.completed exportedReductionGraph_correct
 
 theorem exportedACSubgroups_correct : ACSubgroups.Correct Executable.acSubgroups := ACSubgroups.correct
 
@@ -682,26 +658,6 @@ theorem exportedSortedACMatch_correct : SortedMatch.Correct Executable.sortedACM
 theorem exportedSortedMatcher_semantic : SortedMatchRefinement.Correct Executable.sortedACMatch :=
   SortedMatchRefinement.correct exportedSortedACMatch_correct exportedFlatMatcher_correct
 
-/-- Pin variable cancellation to the same equality/difference exports as flat
-ground unification. A candidate may reorder the excess word occurrences. -/
-theorem exportedCancellation_semantic {sig : Signature} (f : sig.ACSym)
-    (σ : Substitution sig) (decode : UInt64 → Variable) (big small : Array UInt64)
-    (rest : List UInt64) (left right : List (FlatMatching.Leaf sig))
-    (hb : big.toList ≠ []) (hs : small.toList ≠ [])
-    (packet : (rest = [] ∧ Executable.flatACEqual big small = 2) ∨
-      Executable.flatACResidual small big = (2 :: rest).toArray) :
-    let var : UInt64 → FlatMatching.Leaf sig := fun i => .inl (decode i)
-    EquivB (σ.apply (FlatMatching.pattern f (big.toList.map var ++ left)))
-      (σ.apply (FlatMatching.pattern f (small.toList.map var ++ right))) ↔
-      ((rest.map var ++ left).flatMap (FlatMatching.parts f σ)).Perm
-        (right.flatMap (FlatMatching.parts f σ)) := by
-  apply FlatCancellation.cancel_variables
-  · rcases packet with ⟨rfl, h⟩ | h
-    · exact (exportedBackend_correct.equal_words big small hb hs).mp h
-    · exact exportedBackend_correct.residual_difference small big rest h
-  · simp [hb]
-  · simp [hs]
-
 theorem exportedCancelCommon_correct : CommonCancellation.Correct Executable.cancelCommon :=
   CancelCommonCandidateProofs.correct
 
@@ -726,9 +682,6 @@ theorem exportedCancelCommon_semantic {sig : Signature} (decode : UInt64 → Ter
       ∀ σ, ACResidual.Holds f σ (lhs.toList.map decode) (rhs.toList.map decode) ↔
         ACResidual.Holds f σ (left.map decode) (right.map decode) :=
   ACResidual.run_correct exportedCancelCommon_correct decode f lhs rhs
-
-theorem exportedSeededCancellation_correct : OpenMatch.SeededCancellationCorrect Executable.cancelCommon :=
-  OpenMatch.seeded_correct exportedCancelCommon_correct
 
 theorem exportedOpenMatchCancellation_correct : OpenMatchCancellation.Correct Executable.cancelCommon :=
   OpenMatchCancellation.correct exportedCancelCommon_correct
@@ -826,18 +779,6 @@ theorem exportedACSubproductSuccessors :
     Rewriting.ACSubproductReduction.Successors Executable.acSubgroups :=
   Rewriting.ACSubproductReduction.successors_iff exportedACSubgroups_correct
 
-/-- A binary root match against the active AC equations has one observable
-normal value across both alignments and all matching rule instances. -/
-theorem exportedBinaryACReduction_semantic :
-    Rewriting.ACRootReduction.Semantic Executable.openMatchSelect Executable.flatACMatch
-        Executable.commOrientations Executable.cancelCommon :=
-  Rewriting.ACRootReduction.semantic exportedRecursiveACMatch_correct
-
-theorem exportedBinaryACReduction_empty :
-    Rewriting.ACRootReduction.EmptySemantic Executable.openMatchSelect Executable.flatACMatch
-        Executable.commOrientations Executable.cancelCommon :=
-  Rewriting.ACRootReduction.emptySemantic exportedRecursiveACMatch_correct
-
 theorem exportedCommOrientations_bound : Commutative.BranchBound Executable.commOrientations :=
   CommutativeCandidateProofs.bound
 
@@ -885,12 +826,6 @@ theorem callerAllocated_complete {sig : Signature} {ι : Type} (r : Request sig)
 
 theorem exportedCheckFactors_correct : FactorCheck.Correct Executable.checkFactors :=
   FactorCheck.run_correct
-
-theorem exportedCheckFactors_chain : FactorAdmission.ChainRequired Executable.checkFactors :=
-  FactorAdmission.run_chain
-
-theorem exportedCheckFactors_required : FactorAdmission.Required Executable.checkFactors :=
-  FactorAdmission.run_required
 
 /-- A checked factor followed by any complete residual solver covers every
 solution of the original equations, provided residual witnesses avoid the
@@ -940,10 +875,6 @@ run certifies the answers to the original query, including caller materializatio
 theorem exportedFactoredAC_correct :
     FactoredAC.Correct Executable.checkFactors Homogeneous.solve :=
   FactoredAC.correct exportedCheckFactors_correct Homogeneous.solve_correct
-
-theorem exportedFactoredGraph_correct :
-    FactoredAC.GraphCorrect Executable.checkFactors (Whole.runRefining MixedSizeGraph.refutesDecoded) :=
-  FactoredAC.graph_correct exportedCheckFactors_correct MixedSizeWhole.correct
 
 theorem exportedCheckedGraphHomogeneous_correct :
     GraphUnification.Checked Executable.checkFactors GraphUnification.run :=
@@ -1017,11 +948,6 @@ theorem exportedXorOdd_correct (count : UInt64) :
     Executable.xorOdd count = true ↔ count.toNat % 2 = 1 := by
   simp [Executable.xorOdd, RuntimeCandidate.xorOdd, ← UInt64.toNat_inj, UInt64.toNat_mod]
 
-/-- The same scalar kernel also decides parity for arbitrary normalized
-messages under a validated AC presentation with unit and cancellation. -/
-theorem exportedACParityReduction : Rewriting.BinaryXor.Reduction Executable.xorOdd :=
-  Rewriting.BinaryXor.reduction exportedXorOdd_correct
-
 open Rewriting in
 theorem binaryACParityClassification {sig : Signature} (T : BinaryXor.Table sig) {a b out : Term sig}
     (ha : BinaryXor.Good T a) (hb : BinaryXor.Good T b) (nf : NormalForm T.R (.ac T.f a b) out) :
@@ -1049,88 +975,8 @@ theorem exportedXorOdd_normalForms {sig : Signature} [DecidableEq (Term sig)]
     have := mt h.mpr mem
     omega
 
-theorem exportedXorBranches_correct : Rewriting.FreshXor.BranchCorrect Executable.xorBranches :=
-  Rewriting.FreshXor.candidate_correct
-
 theorem exportedXorMatchings_correct : XorMatchings.Correct Executable.xorMatchings :=
   XorMatchings.correct
-
-theorem exportedBinaryCancellationRows_correct :
-    Rewriting.BinaryXor.RowsCorrect (Executable.binaryCancellationRows ()) :=
-  Rewriting.BinaryXor.candidate_rows
-
-theorem exportedMixedCancellationRows_correct :
-    Rewriting.MixedCancellation.RowsCorrect (Executable.mixedCancellationRows ()) :=
-  Rewriting.MixedCancellation.candidate_rows
-
-open Rewriting Rewriting.MixedCancellation in
-theorem exportedMixedCancellationVariants_live {sig : Signature} (q : Query sig)
-    (caller : Term sig) (layout : EquivB caller q.term)
-    (rules : List (Equation sig)) (presentation : RulePresentation.Same q.table.rules rules)
-    (arms : List (Variant sig))
-    (all : ∀ row ∈ Executable.mixedCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
-    (only : ∀ a ∈ arms, ∃ row ∈ Executable.mixedCancellationRows (), PacketArm q row a) :
-    CompleteVariants (ruleRoot rules) [caller] arms ∧ ∀ a ∈ arms, a.Reconstructible (ruleRoot rules) [caller] :=
-  (presentation.variants [caller] arms).mp
-    (CompleteVariants.presented (packetFamily_complete q _ exportedMixedCancellationRows_correct arms all only) layout)
-
-open Rewriting Rewriting.MixedCancellation Rewriting.VariantJoin in
-theorem joinedCancellationVariants_packed {sig : Signature} {A : Type} {keys : List Variable}
-    (T : BinaryXor.Table sig) (op : A → Term sig) (admit : ∀ a, Observation T (op a))
-    (rows : List (Row sig (Key keys) A)) (exactRows : Exact T.R Subtype.val op rows)
-    (typed : ∀ r ∈ rows, r.Sorted) (normal : ∀ r ∈ rows, r.IsNormal T.R)
-    (slots : List (Sum A (Term sig))) (used : ∀ a, .inl a ∈ slots)
-    (scope : ∀ v, Observed (slots.map (packedInput op)) v → v ∈ keys)
-    (n : Term sig → Term sig) (stable : ∀ t, .inr t ∈ slots → StableVariants.Representative T.R t (n t)) :
-    CompleteVariants T.R (slots.map (packedInput op)) (packRows rows typed slots n) ∧
-      ∀ a ∈ packRows rows typed slots n, a.Reconstructible T.R (slots.map (packedInput op)) :=
-  MixedCancellation.packed T op admit rows exactRows typed normal slots used scope n stable
-
-open Rewriting Rewriting.BinaryXor in
-theorem exportedBinaryCancellationVariants_complete {sig : Signature} (q : Query sig) (arms : List (Variant sig))
-    (all : ∀ row ∈ Executable.binaryCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
-    (only : ∀ a ∈ arms, ∃ row ∈ Executable.binaryCancellationRows (), PacketArm q row a) :
-    CompleteVariants q.table.R [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible q.table.R [q.term] :=
-  packetFamily_complete q _ exportedBinaryCancellationRows_correct arms all only
-
-open Rewriting Rewriting.BinaryXor in
-theorem exportedBinaryCancellationVariants_live {sig : Signature} (q : Query sig)
-    (rules : List (Equation sig)) (presentation : RulePresentation.Same q.table.rules rules)
-    (arms : List (Variant sig))
-    (all : ∀ row ∈ Executable.binaryCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
-    (only : ∀ a ∈ arms, ∃ row ∈ Executable.binaryCancellationRows (), PacketArm q row a) :
-    CompleteVariants (ruleRoot rules) [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible (ruleRoot rules) [q.term] :=
-  (presentation.variants [q.term] arms).mp (exportedBinaryCancellationVariants_complete q arms all only)
-
-open Rewriting Rewriting.BinaryXor in
-theorem binaryXorVariants_complete {sig : Signature} (q : Query sig) (arms : List (Variant sig))
-    (all : ∀ sh, ∃ a ∈ arms, Decodes q sh a) (only : ∀ a ∈ arms, ∃ sh, Decodes q sh a) :
-    CompleteVariants q.table.R [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible q.table.R [q.term] :=
-  complete q arms all only
-
-open Rewriting Rewriting.BinaryXor Rewriting.VariantJoin in
-theorem binaryXorLeaf_exact {sig : Signature} (q : Query sig) (arms : List (Variant sig))
-    (all : ∀ sh, ∃ a ∈ arms, Decodes q sh a) (only : ∀ a ∈ arms, ∃ sh, Decodes q sh a)
-    {I : Type} (ids : I → Variable) (scope : ∀ v, q.term.Occurs v → ∃ i, ids i = v)
-    (rows : List (Row sig I Unit))
-    (opens : ∀ a ∈ arms, ∃ out ∈ rows, DecodesLeaf q.table.R q.term ids a out)
-    (comesFrom : ∀ out ∈ rows, ∃ a ∈ arms, DecodesLeaf q.table.R q.term ids a out) :
-    Exact q.table.R ids (fun _ => q.term) rows ∧ ∀ out ∈ rows,
-      (∀ i, HasSort (out.input i) (ids i).sort) ∧ out.IsNormal q.table.R :=
-  q.leaf arms all only ids scope rows opens comesFrom
-
-open Rewriting Rewriting.BinaryXor Rewriting.VariantJoin in
-theorem joinedBinaryXorVariants_packed {sig : Signature} {A : Type} {keys : List Variable}
-    (T : Table sig) (op : A → Term sig) (admit : ∀ a, ∃ l r, op a = .ac T.f l r ∧
-      ∀ ρ : Substitution sig, Normalized T.R ρ → Good T (ρ.apply l) ∧ Good T (ρ.apply r))
-    (rows : List (Row sig (Key keys) A)) (exactRows : Exact T.R Subtype.val op rows)
-    (typed : ∀ r ∈ rows, r.Sorted) (normal : ∀ r ∈ rows, r.IsNormal T.R)
-    (slots : List (Sum A (Term sig))) (used : ∀ a, .inl a ∈ slots)
-    (scope : ∀ v, Observed (slots.map (packedInput op)) v → v ∈ keys)
-    (n : Term sig → Term sig) (stable : ∀ t, .inr t ∈ slots → StableVariants.Representative T.R t (n t)) :
-    CompleteVariants T.R (slots.map (packedInput op)) (packRows rows typed slots n) ∧
-      ∀ a ∈ packRows rows typed slots n, a.Reconstructible T.R (slots.map (packedInput op)) :=
-  BinaryXor.packed T op admit rows exactRows typed normal slots used scope n stable
 
 open Rewriting Rewriting.FreshXor.Flat in
 theorem exportedFlatXorVariants_complete {sig : Signature} {width : UInt64} (q : Query sig width.toNat)
@@ -1139,26 +985,6 @@ theorem exportedFlatXorVariants_complete {sig : Signature} {width : UInt64} (q :
     (only : ∀ a ∈ arms, ∃ row ∈ rows, Decodes q row a) :
     CompleteVariants q.table.R [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible q.table.R [q.term] :=
   exported_complete q exportedXorMatchings_correct ran arms all only
-
-open Rewriting Rewriting.FreshXor.Flat in
-theorem decodedFlatXorVariant_scope {sig : Signature} {n} {q : Query sig n} {p : Fin n → Fin n}
-    (w : Naming q p) (avoid : List Variable) (fresh : w.FreshFor avoid) :
-    w.arm.Safe [q.term] avoid ∧ ∀ v, w.subst.apply (w.subst.image v) = w.subst.image v :=
-  w.scope avoid fresh
-
-theorem exportedXorVariants_semantic {sig : Signature} (q : Rewriting.FreshXor.Query sig)
-    (slots : List Rewriting.FreshXor.Slot) (sum : .sum ∈ slots) (avoid : List Variable)
-    (fresh : q.witness ∉ avoid) :
-    q.Admissible slots avoid (q.decode slots (Executable.xorBranches (decide (q.x = q.y)))) :=
-  q.correct _ exportedXorBranches_correct slots sum avoid fresh
-
-theorem exportedXorVariants_reconstructible {sig : Signature} (q : Rewriting.FreshXor.Query sig)
-    (slots : List Rewriting.FreshXor.Slot) (answer)
-    (hm : answer ∈ q.decode slots (Executable.xorBranches (decide (q.x = q.y)))) :
-    answer.Reconstructible q.table.R (slots.map q.input) := by
-  apply q.reconstruct slots _ _ answer hm
-  rw [exportedXorBranches_correct]
-  by_cases e : q.x = q.y <;> simp [e]
 
 open Rewriting Rewriting.VariantJoin in
 /-- Project joined XOR rows back onto the original tuple. Shared input variables
@@ -1194,28 +1020,12 @@ theorem joinedFlatXorVariants_packed {sig : Signature} {A : Type} {keys : List V
   exact (exactRows.prunedByRank vars subset measure removed).packedRepresentatives vars
     typed normal slots used scope n stable fun ρ hn a _ _ => (admit a).unique ρ hn
 
-theorem exportedXorReduction_semantic {sig : Signature} (T : Rewriting.FreshXor.Table sig)
-    {a b : Term sig} (ha : HasSort a .fresh) (hb : HasSort b .fresh)
-    (na : Rewriting.Normal T.R a) (nb : Rewriting.Normal T.R b)
-    (same : Bool) (he : same = true ↔ a = b) :
-    Rewriting.NormalForm T.R (.ac T.f a b)
-      (if Executable.xorBranches same &&& 1 == 0 then T.zero else .ac T.f a b) :=
-  Rewriting.FreshXor.selected_normalForm T ha hb na nb exportedXorBranches_correct same he
-
 theorem exportedACFactorExclusion_correct :
     Rewriting.ACFactorExclusion.Correct Executable.excludeACFactors :=
   Rewriting.ACFactorExclusion.correct
 
 theorem exportedRootExclusion_correct : Rewriting.RootExclusion.Correct Executable.excludeRoot :=
   Rewriting.RootExclusion.correct
-
-theorem exportedUniformReduction_correct :
-    Rewriting.UniformReduction.Correct Executable.reduceRuleSlot Executable.excludeRoot :=
-  Rewriting.UniformReduction.correct exportedRuleReduction_correct exportedRootExclusion_correct
-
-theorem exportedPowerNormalization_correct :
-    Rewriting.PowerNormalization.Correct Executable.reduceRuleSlot Executable.excludeRoot :=
-  Rewriting.PowerNormalization.correct exportedRuleReduction_correct exportedRootExclusion_correct
 
 /-- The very same exported exclusion decision certifies a normal product
 after all sorted normal instantiations, including repeated or equal factors. -/
