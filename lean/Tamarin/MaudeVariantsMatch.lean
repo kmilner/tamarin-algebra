@@ -62,6 +62,43 @@ def factors (f : Nat) (b : D y) : List (D y) :=
   | .ac g bs => if g == f then bs else [b]
   | _ => [b]
 
+/-- The top symbol of a dag as a number, 0 for a variable. -/
+def shallowKey : D y → Nat
+  | .var _ => 0
+  | .atom a => 5 * a + 1
+  | .free f _ => 5 * f + 2
+  | .comm f _ _ => 5 * f + 3
+  | .ac f _ => 5 * f + 4
+
+/-- Whether every key of `ks` occurs in `ls` at least as often. -/
+def keysWithin (ks ls : List Nat) : Bool :=
+  ks.all fun k => ks.count k ≤ ls.count k
+
+/-- A necessary condition for the arguments `ps` of an AC pattern to match
+the arguments `ts` of a subject of the same symbol: each pattern argument
+takes at least one subject argument, and a pattern argument that is not a
+variable takes one with its top symbol. -/
+def acFits (ps ts : List (D y)) : Bool :=
+  ps.length ≤ ts.length &&
+    keysWithin ((ps.map shallowKey).filter (· != 0)) (ts.map shallowKey)
+
+mutual
+/-- A necessary condition for `t` to be an instance of `p`, checked without
+backtracking or assignments. -/
+def quick : D y → D y → Bool
+  | .var _, _ => true
+  | .atom a, .atom b => a == b
+  | .free f ps, .free g ts => f == g && quickList ps ts
+  | .comm f a b, .comm g c d => f == g && ((quick a c && quick b d) || (quick a d && quick b c))
+  | .ac f ps, .ac g ts => f == g && acFits ps ts
+  | _, _ => false
+
+def quickList : List (D y) → List (D y) → Bool
+  | [], [] => true
+  | p :: ps, t :: ts => quick p t && quickList ps ts
+  | _, _ => false
+end
+
 section
 variable [Interrupt]
 
@@ -89,7 +126,9 @@ def mt {α : Type} (c : MC) : Nat → D y → D y → Sb y → (Sb y → Option 
         else none
       | _ => none
     | .ac f ps => match t with
-      | .ac g ts => if f == g then mac c n f ps ts σ false (fun σ rest => if rest.isEmpty then k σ else none) else none
+      | .ac g ts =>
+        if f == g && acFits ps ts then mac c n f ps ts σ false (fun σ rest => if rest.isEmpty then k σ else none)
+        else none
       | _ => none
 
 /-- Match the patterns `ps` against the subjects `ts`, pairwise. -/
@@ -178,8 +217,8 @@ def mtop (c : MC) (nv : Nat) (lhs t : D y) : Option (Sb y × List (D y)) :=
   let σ0 : Sb y := Array.replicate nv none
   match lhs, t with
   | .ac f ps, .ac g ts =>
-    if f == g then mac c matchFuel f ps ts σ0 true (fun σ rest => some (σ, rest)) else none
-  | _, _ => mt c matchFuel lhs t σ0 (fun σ => some (σ, []))
+    if f == g && acFits ps ts then mac c matchFuel f ps ts σ0 true (fun σ rest => some (σ, rest)) else none
+  | _, _ => if quick lhs t then mt c matchFuel lhs t σ0 (fun σ => some (σ, [])) else none
 
 /-- Whether the patterns (with `nv` slots) match their subjects
 simultaneously, without extension. -/
@@ -187,5 +226,52 @@ def mtPairs (c : MC) (nv : Nat) (ps ts : List (D y)) : Bool :=
   (mtList c matchFuel ps ts (Array.replicate nv none) (fun σ => some σ)).isSome
 
 end
+
+/-! ### Subsumption of tuples
+
+The unifier filter and the folder ask whether one tuple of dags is an
+instance of another, many times over for each tuple. A `Tuple` keeps what
+decides most of those questions without the matcher: the top symbol of each
+component, its least sort, and which components of a pattern are variables
+that occur nowhere else in it, which match any subject of a fitting sort. -/
+
+/-- The number of occurrences of each slot below `n` in a dag, added to `acc`. -/
+def countVars (n : Nat) (acc : Array Nat) : D y → Array Nat
+  | .var i => if i < n then acc.modify i (· + 1) else acc
+  | .atom _ => acc
+  | .free _ args => args.attach.foldl (fun acc ⟨d, _⟩ => countVars n acc d) acc
+  | .comm _ a b => countVars n (countVars n acc a) b
+  | .ac _ args => args.attach.foldl (fun acc ⟨d, _⟩ => countVars n acc d) acc
+
+/-- A tuple of dags over the slots `0 … sorts.size - 1`, prepared for
+subsumption. -/
+structure Tuple (y : Syms) where
+  items : Array (D y)
+  sorts : Array SortId
+  keys : Array Nat
+  /-- The least sort of each component. -/
+  ms : Array MS
+  /-- As a pattern: the components that need the matcher. -/
+  rel : List Nat
+  /-- As a pattern: the components that are a variable occurring nowhere
+  else, with the variable's sort. -/
+  lin : List (Nat × MS)
+
+def Tuple.make (items : Array (D y)) (sorts : Array SortId) : Tuple y :=
+  let occ := items.foldl (countVars sorts.size) (Array.replicate sorts.size 0)
+  let (rel, lin) := items.zipIdx.foldr (fun (d, i) (rel, lin) => match d with
+    | .var v => if occ.getD v 0 == 1 then (rel, (i, MS.ofSort (sorts.getD v .msg)) :: lin) else (i :: rel, lin)
+    | _ => (i :: rel, lin)) ([], [])
+  { items, sorts, keys := items.map shallowKey, ms := items.map (msort y (sorts.getD · .msg)), rel, lin }
+
+/-- Whether `b` is an instance of the pattern `a`, one matcher for every
+component at once, modulo AC and C and respecting sorts. -/
+def Tuple.subsumes [Interrupt] (a b : Tuple y) : Bool :=
+  a.items.size == b.items.size &&
+  (a.keys.zip b.keys).all (fun (k, l) => k == 0 || k == l) &&
+  a.lin.all (fun (i, s) => (b.ms.getD i .kind).le s) &&
+  a.rel.all (fun i => quick (a.items.getD i (.var 0)) (b.items.getD i (.var 0))) &&
+  mtPairs { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) } a.sorts.size
+    (a.rel.map (a.items.getD · (.var 0))) (a.rel.map (b.items.getD · (.var 0)))
 
 end Tamarin.MaudeVariants

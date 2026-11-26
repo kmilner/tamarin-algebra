@@ -35,16 +35,18 @@ structure Retained (y : Syms) where
   idx : Nat
   parent : Option Nat
   v : Variant y
+  /-- The term and the bindings, as a tuple. -/
+  tup : Tuple y
+
+/-- The tuple of the folder: the term, then the bindings. -/
+def Variant.tuple (v : Variant y) : Tuple y := Tuple.make (#[v.term] ++ v.subst) v.sorts
 
 section
 variable [Interrupt]
 
 /-- `VariantFolder::subsumes`: `b` is an instance of `a`, term and bindings
 matched at once. -/
-def subsumesV (a b : Variant y) : Bool :=
-  a.subst.size == b.subst.size &&
-    mtPairs { psort := a.sortFn, ssort := b.sortFn } a.sorts.size
-      (a.term :: a.subst.toList) (b.term :: b.subst.toList)
+def subsumesV (a b : Tuple y) : Bool := a.subsumes b
 
 /-- The indices of the ancestors of a variant with parent `parent`. -/
 def ancestors (folder : Array (Retained y)) : Nat → Option Nat → List Nat
@@ -56,24 +58,26 @@ def ancestors (folder : Array (Retained y)) : Nat → Option Nat → List Nat
 when a retained variant subsumes it. -/
 def insertVariant (folder : Array (Retained y)) (v : Variant y) (idx : Nat) (parent : Option Nat) :
     Option (Array (Retained y)) :=
-  if folder.any fun r => subsumesV r.v v then none else
+  let tup := v.tuple
+  if folder.any fun r => subsumesV r.tup tup then none else
   let anc := ancestors folder (folder.size + 1) parent
   let (_, kept) := folder.foldl (fun (evicted, kept) r =>
     Interrupt.guard (evicted, kept) fun _ =>
     if anc.contains r.idx then (evicted, kept.push r) else
     let parentGone := match r.parent with | some q => evicted.contains q | none => false
-    if parentGone || subsumesV v r.v then (r.idx :: evicted, kept) else (evicted, kept.push r))
+    if parentGone || subsumesV tup r.tup then (r.idx :: evicted, kept) else (evicted, kept.push r))
     (([] : List Nat), (#[] : Array (Retained y)))
-  some (kept.push { idx, parent, v })
+  some (kept.push { idx, parent, v, tup })
 
 /-- The state of the search between layers. -/
-structure St (y : Syms) where
+structure SearchSt (y : Syms) where
   folder : Array (Retained y)
   frontier : Array Nat
   next : Nat
+  cache : UCache y
 
 /-- Offer the children of the frontier member `i` to the folder. -/
-def offerKids (i : Nat) (kids : List (Variant y)) (st : St y) : St y :=
+def offerKids (i : Nat) (kids : List (Variant y)) (st : SearchSt y) : SearchSt y :=
   kids.foldl (fun st kv =>
     let idx := st.next
     let st := { st with next := idx + 1 }
@@ -83,17 +87,18 @@ def offerKids (i : Nat) (kids : List (Variant y)) (st : St y) : St y :=
 
 /-- Expand a layer: each member of `frontier` that is still retained is
 narrowed, in order. `none` when a narrowing step gave up. -/
-def expandLayer (th : Theory y) (fuel : Nat) (frontier : List Nat) (st : St y) : Option (St y) :=
+def expandLayer (th : Theory y) (fuel : Nat) (frontier : List Nat) (st : SearchSt y) : Option (SearchSt y) :=
   frontier.foldlM (fun st i =>
     Interrupt.guard none fun _ =>
     match st.folder.find? (·.idx == i) with
     | none => some st
-    | some r => (narrow th fuel r.v).map fun kids => offerKids i kids.toList st) st
+    | some r => (narrow th fuel st.cache r.v).map fun (kids, cache) =>
+      offerKids i kids.toList { st with cache }) st
 
 /-- The layers from `st` on, at most `layers` of them: the variants listed
 after each, appended to `out`. `none` when a step gave up or the layers ran
 out. -/
-def layersFrom (th : Theory y) (fuel : Nat) : Nat → Nat → St y → Array (Variant y) → Option (Array (Variant y))
+def layersFrom (th : Theory y) (fuel : Nat) : Nat → Nat → SearchSt y → Array (Variant y) → Option (Array (Variant y))
   | 0, _, _, _ => none
   | n + 1, last, st, out =>
     if st.frontier.isEmpty then some out else
@@ -128,7 +133,8 @@ a unification or a reduction ran out of `fuel`, or there were more than
 def variants [Interrupt] (th : Theory y) (fuel layers : Nat) (qsorts : Array SortId) (qnames : Array Nat)
     (query : D y) : Option (Array (Variant y) × Array Nat) := do
   let (r, order) ← root th fuel qsorts qnames query
-  let st : St y := { folder := #[{ idx := 0, parent := none, v := r }], frontier := #[0], next := 1 }
+  let st : SearchSt y :=
+    { folder := #[{ idx := 0, parent := none, v := r, tup := r.tuple }], frontier := #[0], next := 1, cache := {} }
   let out ← layersFrom th fuel layers 0 st #[r]
   return (out, order)
 

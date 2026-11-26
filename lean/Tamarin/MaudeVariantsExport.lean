@@ -164,10 +164,10 @@ variable [Interrupt]
 def answer (lay : Layout) (w : Array (Array UInt64)) (fuel : Nat) (query : D lay.syms)
     (eqs : List (D lay.syms × D lay.syms)) : Array (Array UInt64) :=
   let rt := rankTable lay w
-  let eqns := eqs.toArray.map fun (l, r) =>
+  let eqns := eqs.toArray.zipIdx.map fun ((l, r), i) =>
     match numbered lay [l, r] with
-    | ([l', r'], sorts, names) => mkEqn rt sorts names l' r'
-    | _ => mkEqn rt #[] #[] l r
+    | ([l', r'], sorts, names) => mkEqn rt i sorts names l' r'
+    | _ => mkEqn rt i #[] #[] l r
   let th := Theory.make rt eqns
   match numbered lay [query] with
   | ([q], qsorts, qnames) =>
