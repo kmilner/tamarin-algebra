@@ -5,7 +5,8 @@
 /* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
  * export is specified by theorems and may be used as the answer: unpack_conjunction,
  * name_unifiers and the nine theory_* exports over the theory of a Tamarin file. Every other
- * export, checked_variants, general_variants and fold_variants included, is a proposer with no
+ * export, checked_variants, general_variants, fold_variants and maude_variants included, is a
+ * proposer with no
  * contract: its output may only go into a proposed family of variants that
  * tamarin_lean_theory_variant_check then has to accept. */
 
@@ -638,6 +639,27 @@ void *tamarin_lean_fold_variants(whole_word_slice decls, const whole_word_slice 
                         atom_array(decls.data, decls.size), word_rows(rows, count),
                         atom_array(rules.data, rules.size), atom_array(roots.data, roots.size),
                         fuel, work));
+}
+
+extern lean_object *tamarin_maude_variants(lean_object *, uint64_t, lean_object *, uint64_t,
+                                          lean_object *, uint64_t, lean_object *, lean_object *);
+
+/* A proposer: what Maude 3.5.1 lists for `get variants` on the module of the theory
+   (lean/Tamarin/MaudeVariantsExport.lean). The theory words of tamarin_lean_theory_maude_unify,
+   its rank rows and a row 6 with the ranks of list, cons and nil; fuel bounds every recursion of
+   the search and its number of layers. The rows are those of tamarin_lean_theory_maude_unify, and
+   a row {5, children...} stands for the arguments of a fact; the roots are the query, then the
+   left and right side of each equation of the module in module order. {1} and then, for each
+   variant, an empty row and one binding row per query variable in Maude's numbering, its term in
+   postfix with the variant's variable k as {0, k, sort}; {3} when the search gave up; {0} for a
+   malformed request. NULL when the call was interrupted: see interrupt_watch. */
+void *tamarin_lean_maude_variants(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                  const whole_word_slice *ranks, size_t rank_count, uint64_t fuel,
+                                  const whole_word_slice *rows, size_t count, whole_word_slice roots,
+                                  interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_maude_variants(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(ranks, rank_count), fuel,
+                        word_rows(rows, count), atom_array(roots.data, roots.size)));
 }
 
 extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);

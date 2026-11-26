@@ -12,6 +12,7 @@ import Tamarin.TheoryWireFast
 import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
 import Tamarin.MaudeUnifyExport
+import Tamarin.MaudeVariantsExport
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
@@ -285,6 +286,21 @@ def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots
 def foldVariants (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
     (rules roots : Array UInt64) (fuel work : UInt64) : Array (Array UInt64) :=
   Interrupt.run poll #[#[4]] fun i => foldVariantsFor i ds ns rules roots fuel work
+
+@[noinline] def maudeVariantsFor (i : Interrupt) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  @MaudeVariantsExport.run i flags free ac ranks fuel nodes roots
+
+/-- What Maude 3.5.1 lists for `get variants` on the module of the theory, in
+Maude's order and numbering, under the caller's ranks and fuel: see
+`Tamarin.MaudeVariantsExport`. A proposer: the caller uses the family only
+once `tamarin_theory_variant_check` has accepted it. -/
+@[export tamarin_maude_variants]
+def maudeVariants (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => maudeVariantsFor i flags free ac ranks fuel nodes roots
 
 @[export tamarin_variant_overlap_agrees]
 def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=
