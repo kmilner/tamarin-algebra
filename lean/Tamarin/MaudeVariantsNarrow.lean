@@ -302,18 +302,19 @@ def hashD : D y → UInt64
   | .ac f args => args.attach.foldl (fun h ⟨d, _⟩ => mixHash h (hashD d)) (mixHash 13 (hash f))
 
 /-- A canonical narrowing problem: the equation, the subterm over the slots
-`ne + i`, and the name rank and sort of each of those slots. -/
+`i` (`ne + i` in the problem), the name rank and sort of each of those
+slots, and a hash of the rest. -/
 structure CKey (y : Syms) where
   eq : Nat
   node : D y
   ranks : Array Nat
   sorts : Array SortId
+  hash : UInt64
   deriving BEq
 
 instance : Hashable SortId := ⟨fun s => hash (codeOfSort s)⟩
 
-instance : Hashable (CKey y) :=
-  ⟨fun k => mixHash (mixHash (mixHash (hash k.eq) (hashD k.node)) (hash k.ranks)) (hash k.sorts)⟩
+instance : Hashable (CKey y) := ⟨fun k => mixHash (hash k.eq) k.hash⟩
 
 /-- An answer of a canonical problem: the normalised images of its original
 slots, the sorts of its variables, the slot each of them stands for, whether
@@ -402,30 +403,58 @@ def Tuple.embed (em : Embedding) (ct : Tuple y) : Tuple y :=
     vars := ct.vars.map fun (j, v) => (posOf j, v),
     rest := ct.rest.map posOf }
 
-/-- The answers of canonical problems met so far in a search. -/
-abbrev UCache (y : Syms) := Std.HashMap (CKey y) (Array (CAnswer y))
+/-- A dag with its slots renumbered by first occurrence, and their sorts:
+reducibility depends on nothing else. -/
+structure RKey (y : Syms) where
+  node : D y
+  sorts : Array SortId
+  deriving BEq
+
+instance : Hashable (RKey y) := ⟨fun k => mixHash (hashD k.node) (hash k.sorts)⟩
+
+/-- What a search has computed that recurs: the answers of the canonical
+problems, and the reducibility of bindings. -/
+structure UCache (y : Syms) where
+  answers : Std.HashMap (CKey y) (Array (CAnswer y)) := {}
+  reducibles : Std.HashMap (RKey y) Bool := {}
+
+/-- `reducible`, through the memo of the search. -/
+def reducibleMemo [Interrupt] (th : Theory y) (vs : Nat → SortId) (t : D y)
+    (memo : Std.HashMap (RKey y) Bool) : Bool × Std.HashMap (RKey y) Bool :=
+  match t with
+  | .var _ | .atom _ => (false, memo)
+  | _ =>
+    let order := dfsVars #[] t
+    let slotOf : Std.HashMap Nat Nat := order.zipIdx.foldl (fun m (v, j) => m.insert v j) {}
+    let key : RKey y := { node := rename (slotOf.getD · 0) t, sorts := order.map vs }
+    match memo.get? key with
+    | some r => (r, memo)
+    | none => let r := reducible th vs t; (r, memo.insert key r)
 
 /-- The answers of the canonical problem of `e` at the subterm `node'` (over
 the slots `ne + i`, with name ranks `ranks` and sorts `csorts`). `none` when
 the unifier gave up. -/
 def canonical (th : Theory y) (fuel : Nat) (e : Eqn y) (node' : D y) (ranks : Array Nat)
-    (csorts : Array SortId) : Option (Array (CAnswer y)) :=
+    (csorts : Array SortId) (memo : Std.HashMap (RKey y) Bool) :
+    Option (Array (CAnswer y) × Std.HashMap (RKey y) Bool) :=
   let ne := e.sorts.size
   let m := csorts.size
   let r1 : Ranks (Sig y) := th.rt.ranks (narrowName e.names ranks ne m)
   match unifyFree r1 fuel (e.sorts.toList ++ csorts.toList) [(e.lhs, node')] with
   | .gaveUp => none
-  | .fail => some #[]
+  | .fail => some (#[], memo)
   | .ok answers =>
-    some <| answers.toArray.map fun (a, free) =>
+    some <| answers.foldl (fun (out, memo) (a, free) =>
       let outSorts := a.sorts.toArray
       let soN := fun j => outSorts[j]?
       let vsN := fun j => outSorts.getD j .msg
       let imgs := a.images.toArray.map (norm th.rt.vranks soN)
       let mine := imgs.extract ne (ne + m)
-      let dropped := mine.any (reducible th vsN)
-      { imgs, sorts := outSorts, origin := free, dropped,
-        tup := if dropped then Tuple.make #[] #[] else Tuple.make mine outSorts }
+      let (dropped, memo) := mine.foldl (fun (found, memo) d =>
+        if found then (found, memo) else reducibleMemo th vsN d memo) (false, memo)
+      (out.push { imgs, sorts := outSorts, origin := free, dropped,
+                  tup := if dropped then Tuple.make #[] #[] else Tuple.make mine outSorts }, memo))
+      ((#[] : Array (CAnswer y)), memo)
 
 /-- The images of the equation's variables and of the variant's (in the order
 of `Frame.tv`) under the unifier of the variant's problem that a canonical
@@ -476,37 +505,60 @@ structure Step (y : Syms) where
   filter : Array (Unifier y)
   cache : UCache y
 
-/-- The unifiers of the equation `e` at the subterm `node` of the variant,
-those that bind a variable of the term to a reducible term dropped, offered
-in order to the filter. `none` when the unifier gave up. -/
-def offerAt (th : Theory y) (fuel : Nat) (fr : Frame y) (path : List Nat) (node : D y) (e : Eqn y)
-    (st : Step y) : Option (Step y) :=
-  let ne := e.sorts.size
+/-- A position of the variant prepared for its narrowing problems: the path,
+the subterm's variables in the order of their slots (`cs`), their name ranks
+and sorts, the subterm over the slots `i`, a hash of all that, and where the
+bindings go in the tuple of the term. -/
+structure Site (y : Syms) where
+  path : List Nat
+  cs : Array Nat
+  ranks : Array Nat
+  csorts : Array SortId
+  node : D y
+  hash : UInt64
+  em : Embedding
+
+def Site.of (fr : Frame y) (path : List Nat) (node : D y) : Site y :=
   let vs := dfsVars #[] node
   let cs := vs.qsort fun a b => fr.tvIdx.getD a 0 < fr.tvIdx.getD b 0
   let byName := vs.qsort (· < ·)
   let ranks := cs.map fun k => byName.idxOf k
   let csorts := cs.map fr.v.sortFn
-  let slot : Array Nat := cs.zipIdx.foldl (fun acc (k, i) => acc.setIfInBounds k (ne + i))
+  let slot : Array Nat := cs.zipIdx.foldl (fun acc (k, i) => acc.setIfInBounds k i)
     (Array.replicate fr.v.sorts.size 0)
-  let key : CKey y := { eq := e.idx, node := rename (slot.getD · 0) node, ranks, sorts := csorts }
-  let found := match st.cache.get? key with
+  let node := rename (slot.getD · 0) node
+  { path, cs, ranks, csorts, node, hash := mixHash (mixHash (hashD node) (Hashable.hash ranks)) (Hashable.hash csorts),
+    em := Embedding.of fr cs }
+
+/-- The unifiers of the equation `e` at a position of the variant, those
+that bind a variable of the term to a reducible term dropped, offered in
+order to the filter. `none` when the unifier gave up. -/
+def offerAt (th : Theory y) (fuel : Nat) (site : Site y) (e : Eqn y) (st : Step y) : Option (Step y) :=
+  let ne := e.sorts.size
+  let key : CKey y := { eq := e.idx, node := site.node, ranks := site.ranks, sorts := site.csorts,
+                        hash := site.hash }
+  let found := match st.cache.answers.get? key with
     | some answers => some (answers, st.cache)
-    | none => (canonical th fuel e key.node ranks csorts).map fun answers => (answers, st.cache.insert key answers)
+    | none =>
+      (canonical th fuel e (rename (· + ne) site.node) site.ranks site.csorts st.cache.reducibles).map
+        fun (answers, reducibles) => (answers, { answers := st.cache.answers.insert key answers, reducibles })
   found.map fun (answers, cache) =>
-    let em := Embedding.of fr cs
     let filter := answers.foldl (fun filter a =>
       Interrupt.guard filter fun _ =>
       if a.dropped then filter
-      else offer filter { ans := a, cs, ne, path, rhs := e.rhs, tup := Tuple.embed em a.tup }) st.filter
+      else offer filter { ans := a, cs := site.cs, ne, path := site.path, rhs := e.rhs,
+                          tup := Tuple.embed site.em a.tup }) st.filter
     { cache, filter }
 
 /-- The filter after every position and equation. -/
 def collect (th : Theory y) (fuel : Nat) (fr : Frame y) : List (List Nat × D y) → Step y → Option (Step y)
   | [], st => some st
   | (path, node) :: rest, st =>
-    let step := (th.at (topKey node)).foldl (fun acc e => acc.bind fun st =>
-      Interrupt.guard none fun _ => offerAt th fuel fr path.reverse node e st) (some st)
+    let eqs := th.at (topKey node)
+    if eqs.isEmpty then collect th fuel fr rest st else
+    let site := Site.of fr path.reverse node
+    let step := eqs.foldl (fun acc e => acc.bind fun st =>
+      Interrupt.guard none fun _ => offerAt th fuel site e st) (some st)
     step.bind (collect th fuel fr rest)
 
 /-- The variant a surviving unifier gives, or `some none` when its
