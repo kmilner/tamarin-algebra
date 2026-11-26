@@ -393,14 +393,21 @@ def witnesses (subs : List (Dag s)) (sel : List (List Nat)) :
     let (st, ws, us) := witnesses subs sel rest (j + 1) st
     (st, w :: ws, used ++ us)
 
+/-- Maude's normal form of a product given as dags with multiplicities.
+Variables are sorted once each and then repeated, which is the order that
+`normAC` gives their repetitions; other dags are normalized by `normAC`. -/
+def normPicks (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag s × Nat)) : List (Dag s) :=
+  if picks.all (fun p => match p.1 with | .var _ => true | _ => false) then
+    (picks.mergeSort fun a b => Dag.cmp r sortOf a.1 b.1 != .gt).flatMap fun p => List.replicate p.2 p.1
+  else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
+
 /-- What the selected elements assign to subterm `i`, and whether it is a
 product of the symbol. -/
 def assign (st : St s) (f : s.ACSym) (sel : List (List Nat)) (ws : List (Dag s)) (i : Nat) : Dag s × Bool :=
-  let picks := (sel.zip ws).filter fun (e, _) => 0 < e.getD i 0
+  let picks := ((sel.zip ws).filter fun (e, _) => 0 < e.getD i 0).map fun (e, w) => (w, e.getD i 0)
   match picks with
-  | [(e, w)] => if e.getD i 0 = 1 then (w, false)
-                else (.ac f (Dag.normAC r st.sortOf f (List.replicate (e.getD i 0) w)), true)
-  | _ => (.ac f (Dag.normAC r st.sortOf f (picks.flatMap fun (e, w) => List.replicate (e.getD i 0) w)), true)
+  | [(w, 1)] => (w, false)
+  | _ => (.ac f (normPicks r st.sortOf f picks), true)
 
 /-- `buildSolution` after the witnesses are allocated: each subterm that is
 not a reused witness is unified with what the selection assigns to it; an

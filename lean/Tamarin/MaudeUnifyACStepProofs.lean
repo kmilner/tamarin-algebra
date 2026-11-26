@@ -138,6 +138,22 @@ theorem flatMap_filter_drop {α β : Type} (q : α → Bool) (g : α → List β
       simp only [List.flatMap_cons, hg p (by simpa using hn), List.nil_append]
       exact flatMap_filter_drop q g hg ps
 
+theorem normPicks_perm (so : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag s × Nat))
+    (h : ∀ p ∈ picks, ∃ v, p.1 = .var v) :
+    (normPicks r so f picks).Perm (picks.flatMap fun p => List.replicate p.2 p.1) := by
+  unfold normPicks
+  rw [ite_eq_left (List.all_eq_true.mpr fun p hp => by obtain ⟨v, e⟩ := h p hp; rw [e])]
+  exact (List.mergeSort_perm _ _).flatMap_right _
+
+theorem eval_normPicks (so : Nat → Option SortId) (f : s.ACSym) (ρ : Nat → Term s) (picks : List (Dag s × Nat)) :
+    EquivB (Dag.eval ρ (.ac f (normPicks r so f picks)))
+      (Dag.eval ρ (.ac f (picks.flatMap fun p => List.replicate p.2 p.1))) := by
+  unfold normPicks
+  split
+  · rw [Dag.eval_ac, Dag.eval_ac]
+    exact Dag.product_perm f (((List.mergeSort_perm _ _).flatMap_right _).map _)
+  · exact Dag.eval_normAC r so ρ f _
+
 theorem eval_assign (st : St s) (f : s.ACSym) (ρ : Nat → Term s) (sel : List (List Nat))
     (ws : List (Dag s)) (i : Nat) :
     EquivB (Dag.eval ρ (assign r st f sel ws i).1) (assignVal f ρ sel ws i) := by
@@ -148,19 +164,20 @@ theorem eval_assign (st : St s) (f : s.ACSym) (ρ : Nat → Term s) (sel : List 
   rw [← filt]
   unfold assign
   dsimp only
+  generalize (sel.zip ws).filter (fun x : List Nat × Dag s => decide (0 < x.fst.getD i 0)) = P
+  have flat : ((P.map fun (x : List Nat × Dag s) => (x.2, x.1.getD i 0)).flatMap
+      fun p => List.replicate p.2 p.1).map (Dag.eval ρ) =
+      P.flatMap fun p => List.replicate (p.1.getD i 0) (Dag.eval ρ p.2) := by
+    simp [List.map_flatMap, List.flatMap_map, List.map_replicate]
   split
-  · next e w hpick =>
-    rw [hpick]
-    split
-    · next one => simp only [one, List.flatMap_cons, List.flatMap_nil, List.append_nil, List.replicate_one]
-                  exact .refl _
-    · refine .trans (Dag.eval_normAC r st.sortOf ρ f _) ?_
-      rw [Dag.eval_ac]
-      simp only [List.map_replicate, List.flatMap_cons, List.flatMap_nil, List.append_nil]
-      exact .refl _
-  · refine .trans (Dag.eval_normAC r st.sortOf ρ f _) ?_
-    rw [Dag.eval_ac, List.map_flatMap]
-    simp only [List.map_replicate]
+  · next w hpick =>
+    obtain ⟨⟨e, w'⟩, hP, he⟩ := List.map_eq_singleton_iff.mp hpick
+    obtain ⟨rfl, h1⟩ := Prod.mk.inj he
+    subst hP
+    simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil, h1, List.replicate_one]
+    exact .refl _
+  · refine .trans (eval_normPicks r st.sortOf f ρ _) ?_
+    rw [Dag.eval_ac, flat]
     exact .refl _
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
@@ -551,27 +568,48 @@ theorem assign_fit (st : St s) (f : s.ACSym) (sel : List (List Nat)) (ws : List 
     List.mem_filter.mpr ⟨hq0, by simpa using pos0⟩
   unfold assign
   dsimp only
+  generalize (sel.zip ws).filter (fun x : List Nat × Dag s => decide (0 < x.fst.getD i 0)) = P at inPicks q0In ⊢
+  have picksOk : ∀ p ∈ P.map (fun (x : List Nat × Dag s) => (x.2, x.1.getD i 0)),
+      ((∃ v, p.1 = .var v) ∧ p.1.Below N) ∧ 1 ≤ p.2 := by
+    intro p hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact ⟨hws q.2 (inPicks q hq).1, (inPicks q hq).2⟩
   split
-  · next e w hpick =>
-    have ⟨hw, pos⟩ := inPicks (e, w) (by rw [hpick]; exact List.mem_cons_self)
-    split
-    · obtain ⟨⟨v, rfl⟩, hb⟩ := hws w hw
-      exact ⟨by simp [Dag.Wf], hb⟩
-    · next ne =>
-      refine ac_fit r _ f _ (fun d hd => ?_) (by rw [List.length_replicate]; dsimp only at pos; omega)
-      rw [(List.mem_replicate.mp hd).2]
-      exact hws w hw
+  · next w hpick =>
+    have := picksOk (w, 1) (by rw [hpick]; exact List.mem_cons_self)
+    obtain ⟨⟨v, e⟩, hb⟩ := this.1
+    simp only at e hb
+    subst e
+    exact ⟨by simp [Dag.Wf], hb⟩
   · next notOne =>
-    generalize hP : (sel.zip ws).filter (fun x => decide (0 < x.fst.getD i 0)) = P at notOne inPicks q0In
-    have two : 2 ≤ P.length := by
-      match P, q0In, notOne with
-      | [x], hx, no => obtain ⟨e, w⟩ := x; exact absurd rfl (no e w)
-      | _ :: _ :: _, _, _ => simp
-    refine ac_fit r _ f _ (fun d hd => ?_) ?_
-    · obtain ⟨q, hq, hd⟩ := List.mem_flatMap.mp hd
+    generalize hQ : P.map (fun (x : List Nat × Dag s) => (x.2, x.1.getD i 0)) = Q at notOne picksOk ⊢
+    have ne : Q ≠ [] := by
+      intro h; rw [h] at hQ; rw [List.map_eq_nil_iff] at hQ; rw [hQ] at q0In; cases q0In
+    have perm := normPicks_perm r st.sortOf f Q (fun p hp => (picksOk p hp).1.1)
+    have two : 2 ≤ (Q.flatMap fun p => List.replicate p.2 p.1).length := by
+      match Q, ne, notOne, picksOk with
+      | [(w, m)], _, no, ok =>
+        have := (ok (w, m) List.mem_cons_self).2
+        have : m ≠ 1 := fun h => no w (by rw [h])
+        simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil, List.length_replicate]
+        omega
+      | x :: y :: rest, _, _, ok =>
+        have hx := (ok x List.mem_cons_self).2
+        have hy := (ok y (List.mem_cons_of_mem _ List.mem_cons_self)).2
+        simp only [List.flatMap_cons, List.length_append, List.length_replicate]
+        omega
+    refine ⟨?_, fun j hj => ?_⟩
+    · simp only [Dag.Wf]
+      refine ⟨by rw [perm.length_eq]; exact two, fun d hd => ?_⟩
+      obtain ⟨p, hp, hd⟩ := List.mem_flatMap.mp (perm.subset hd)
       rw [(List.mem_replicate.mp hd).2]
-      exact hws q.2 (inPicks q hq).1
-    · exact Nat.le_trans two (length_flatMap_replicate_ge _ _ P fun q hq => (inPicks q hq).2)
+      obtain ⟨v, e⟩ := (picksOk p hp).1.1
+      rw [e]; simp [Dag.Wf]
+    · rw [Dag.vars_ac] at hj
+      obtain ⟨d, hd, hj⟩ := List.mem_flatMap.mp hj
+      obtain ⟨p, hp, hd⟩ := List.mem_flatMap.mp (perm.subset hd)
+      rw [(List.mem_replicate.mp hd).2] at hj
+      exact (picksOk p hp).1.2 j hj
 
 /-! ### `buildFrom` -/
 
