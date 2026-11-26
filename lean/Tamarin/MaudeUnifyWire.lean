@@ -165,10 +165,10 @@ theorem eval_side (r : Ranks s) (vs : List Variable) (ρ : Nat → Term s) (t : 
     EquivB (Dag.eval ρ (Dag.ofTerm r (fun i => (sortsOf vs)[i]?) vs.idxOf t)) (t.subst σ) :=
   (Dag.eval_ofTerm r _ vs.idxOf ρ t).trans (Term.subst_equiv _ _ t agree)
 
-/-- The port on a problem: `none` when it gave up. -/
-def portSolve [Interrupt] (k : Nat) (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=
-  let vs := varsOf p
-  let r := ranksOf (headsOf p) vs
+/-- The port on a problem with the ranks `r` and the variables of the problem
+in the slots of their positions in `vs`: `none` when it gave up. -/
+def portSolveWith [Interrupt] (r : Ranks s) (vs : List Variable) (k : Nat) (p : Problem s)
+    (hv : ∀ v, p.Occurs v → v ∈ vs) (avoid : List Variable) : Option (List (Substitution s)) :=
   let base := VariablePermutation.freshBound (avoid ++ vs)
   match h : unify r k (sortsOf vs) (dagsOf r vs p) with
   | .ok answers => some (Interrupt.map (fun ⟨ans, ha⟩ =>
@@ -179,12 +179,15 @@ def portSolve [Interrupt] (k : Nat) (p : Problem s) (avoid : List Variable) : Op
         obtain ⟨rfl, rfl⟩ := Prod.mk.inj e
         have hi : vs.idxOf w < (sortsOf vs).length := by
           rw [sortsOf, List.length_map]; exact List.idxOf_lt_length_of_mem hw
-        have := (unify_sound r k (sortsOf vs) (dagsOf r vs p)
-          (fit_dagsOf r vs p fun v o => (varsOf_occurs p v).mpr o) h ha).2.1
+        have := (unify_sound r k (sortsOf vs) (dagsOf r vs p) (fit_dagsOf r vs p hv) h ha).2.1
           (fun j => .var (outVar base ans j)) (fun j => .var _) (vs.idxOf w) hi
         simpa [sortsOf, List.getElem_idxOf, answerImage] using this)) answers.attach)
   | .fail => some []
   | .gaveUp => none
+
+/-- The port on a problem: `none` when it gave up. -/
+def portSolve [Interrupt] (k : Nat) (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=
+  portSolveWith (ranksOf (headsOf p) (varsOf p)) (varsOf p) k p (fun v o => (varsOf_occurs p v).mpr o) avoid
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 /-- The substitution of an answer. -/
@@ -193,44 +196,42 @@ theorem portSolve_image (vs : List Variable) (base : Nat) (ans : Answer s) (hs) 
       if v ∈ vs then answerImage vs base ans v else .var v :=
   Substitution.lookupBinding_tabulate vs _ v
 
-/-- The port's answers form a complete set of unifiers, leave variables
-outside the problem alone and introduce only variables outside `avoid`. -/
-theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : List (Substitution s)}
-    (h : portSolve k p avoid = some l) :
+/-- With any ranks and any list `vs` of exactly the variables of the problem,
+the port's answers form a complete set of unifiers, leave variables outside
+the problem alone and introduce only variables outside `avoid`. -/
+theorem portSolveWith_spec (r : Ranks s) (vs : List Variable) (k : Nat) (p : Problem s)
+    (occ : ∀ v, p.Occurs v → v ∈ vs) (back : ∀ v ∈ vs, p.Occurs v) (avoid : List Variable)
+    {l : List (Substitution s)} (h : portSolveWith r vs k p occ avoid = some l) :
     CompleteSet p l ∧ ∀ σ ∈ l, DomainRestricted p σ ∧ FreshFor p avoid σ := by
-  unfold portSolve at h
+  unfold portSolveWith at h
   simp only at h
-  have occ : ∀ v, p.Occurs v → v ∈ varsOf p := fun v o => (varsOf_occurs p v).mpr o
-  have fit := fit_dagsOf (ranksOf (headsOf p) (varsOf p)) (varsOf p) p occ
-  have idx : ∀ v, p.Occurs v → (varsOf p).idxOf v < (sortsOf (varsOf p)).length := fun v o => by
+  have fit := fit_dagsOf r vs p occ
+  have idx : ∀ v, p.Occurs v → vs.idxOf v < (sortsOf vs).length := fun v o => by
     rw [sortsOf, List.length_map]; exact List.idxOf_lt_length_of_mem (occ v o)
   -- the dag equations of a solution
   have dagSol : ∀ (ρ : Nat → Term s) (σ : Variable → Term s),
-      (∀ v, p.Occurs v → EquivB (ρ ((varsOf p).idxOf v)) (σ v)) →
+      (∀ v, p.Occurs v → EquivB (ρ (vs.idxOf v)) (σ v)) →
       ∀ e ∈ p, EquivB (e.lhs.subst σ) (e.rhs.subst σ) →
-        EquivB (Dag.eval ρ (Dag.ofTerm (ranksOf (headsOf p) (varsOf p)) (fun i => (sortsOf (varsOf p))[i]?)
-          (varsOf p).idxOf e.lhs))
-          (Dag.eval ρ (Dag.ofTerm (ranksOf (headsOf p) (varsOf p)) (fun i => (sortsOf (varsOf p))[i]?)
-          (varsOf p).idxOf e.rhs)) := by
+        EquivB (Dag.eval ρ (Dag.ofTerm r (fun i => (sortsOf vs)[i]?) vs.idxOf e.lhs))
+          (Dag.eval ρ (Dag.ofTerm r (fun i => (sortsOf vs)[i]?) vs.idxOf e.rhs)) := by
     intro ρ σ ag e he eq
     exact ((eval_side _ _ ρ e.lhs σ fun v o => ag v ⟨e, he, .inl o⟩).trans eq).trans
       (eval_side _ _ ρ e.rhs σ fun v o => ag v ⟨e, he, .inr o⟩).symm
   -- the slot values of a substitution
-  let slotsOf : Substitution s → Nat → Term s := fun ρ i => ρ.image ((varsOf p).getD i ⟨0, .msg⟩)
-  have slots_at : ∀ ρ v, v ∈ varsOf p → slotsOf ρ ((varsOf p).idxOf v) = ρ.image v := by
+  let slotsOf : Substitution s → Nat → Term s := fun ρ i => ρ.image (vs.getD i ⟨0, .msg⟩)
+  have slots_at : ∀ ρ v, v ∈ vs → slotsOf ρ (vs.idxOf v) = ρ.image v := by
     intro ρ v hv
     simp only [slotsOf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (List.idxOf_lt_length_of_mem hv),
       List.getElem_idxOf, Option.getD_some]
-  have slots_sorted : ∀ ρ : Substitution s, ∀ i (hi : i < (sortsOf (varsOf p)).length),
-      HasSort (slotsOf ρ i) (sortsOf (varsOf p))[i] := by
+  have slots_sorted : ∀ ρ : Substitution s, ∀ i (hi : i < (sortsOf vs).length),
+      HasSort (slotsOf ρ i) (sortsOf vs)[i] := by
     intro ρ i hi
-    have hi' : i < (varsOf p).length := by simpa [sortsOf] using hi
+    have hi' : i < vs.length := by simpa [sortsOf] using hi
     simp only [slotsOf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi', Option.getD_some, sortsOf,
       List.getElem_map]
     exact ρ.sorted _
   have slots_solve : ∀ ρ : Substitution s, p.Solves ρ →
-      ∀ q ∈ dagsOf (ranksOf (headsOf p) (varsOf p)) (varsOf p) p,
-        EquivB (Dag.eval (slotsOf ρ) q.1) (Dag.eval (slotsOf ρ) q.2) := by
+      ∀ q ∈ dagsOf r vs p, EquivB (Dag.eval (slotsOf ρ) q.1) (Dag.eval (slotsOf ρ) q.2) := by
     intro ρ sol q hq
     simp only [dagsOf, List.mem_map] at hq
     obtain ⟨e, he, rfl⟩ := hq
@@ -239,23 +240,23 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
   · next answers hu =>
     simp only [Option.some.injEq] at h
     subst h
-    have base_gt : ∀ w ∈ avoid, w.id < VariablePermutation.freshBound (avoid ++ varsOf p) := fun w hw =>
+    have base_gt : ∀ w ∈ avoid, w.id < VariablePermutation.freshBound (avoid ++ vs) := fun w hw =>
       VariablePermutation.lt_freshBound _ w (List.mem_append_left _ hw)
     refine ⟨⟨?_, ?_⟩, ?_⟩
     · -- soundness
       intro σ hσ e he
       obtain ⟨⟨ans, ha⟩, _, rfl⟩ := List.mem_map.mp hσ
       obtain ⟨sound, _, _, _⟩ := unify_sound _ k _ _ fit hu ha
-      obtain ⟨ρ, eqs, agree⟩ := sound fun j => .var (outVar (VariablePermutation.freshBound (avoid ++ varsOf p)) ans j)
+      obtain ⟨ρ, eqs, agree⟩ := sound fun j => .var (outVar (VariablePermutation.freshBound (avoid ++ vs)) ans j)
       have ag : ∀ σ' : Variable → Term s, (∀ v, p.Occurs v →
-          σ' v = answerImage (varsOf p) (VariablePermutation.freshBound (avoid ++ varsOf p)) ans v) →
-          ∀ v, p.Occurs v → EquivB (ρ ((varsOf p).idxOf v)) (σ' v) := by
+          σ' v = answerImage vs (VariablePermutation.freshBound (avoid ++ vs)) ans v) →
+          ∀ v, p.Occurs v → EquivB (ρ (vs.idxOf v)) (σ' v) := by
         intro σ' hσ' v o
         rw [hσ' v o]
         exact agree _ (idx v o)
-      have im : ∀ v, p.Occurs v → Substitution.lookupBinding ((varsOf p).map fun v =>
-          (v, answerImage (varsOf p) (VariablePermutation.freshBound (avoid ++ varsOf p)) ans v)) v =
-          answerImage (varsOf p) (VariablePermutation.freshBound (avoid ++ varsOf p)) ans v := by
+      have im : ∀ v, p.Occurs v → Substitution.lookupBinding (vs.map fun v =>
+          (v, answerImage vs (VariablePermutation.freshBound (avoid ++ vs)) ans v)) v =
+          answerImage vs (VariablePermutation.freshBound (avoid ++ vs)) ans v := by
         intro v o
         rw [Substitution.lookupBinding_tabulate, ite_eq_left (occ v o)]
       have qe := eqs _ (List.mem_map.mpr ⟨e, he, rfl⟩)
@@ -264,12 +265,11 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
         (eval_side _ _ ρ e.rhs _ fun v o => ag _ (fun w ow => im w ow) v ⟨e, he, .inr o⟩)
     · -- coverage
       intro ρs sol
-      have c := unify_complete (ranksOf (headsOf p) (varsOf p)) k _ _ fit (slotsOf ρs) (slots_solve ρs sol)
-        (slots_sorted ρs)
+      have c := unify_complete r k _ _ fit (slotsOf ρs) (slots_solve ρs sol) (slots_sorted ρs)
       rw [hu] at c
       obtain ⟨ans, ha, δ, hδ, inst⟩ := c
       obtain ⟨_, _, _, vars, wf⟩ := unify_sound _ k _ _ fit hu ha
-      let base := VariablePermutation.freshBound (avoid ++ varsOf p)
+      let base := VariablePermutation.freshBound (avoid ++ vs)
       let outs := (List.range ans.sorts.length).map (outVar base ans)
       let δ' := Substitution.fromBindings (outs.map fun w => (w, δ (w.id - base))) (by
         intro v t hm
@@ -283,8 +283,8 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
       refine (inst _ (idx v o)).trans ?_
       unfold answerImage Substitution.apply
       rw [Dag.eval_subst _ _ _ (wf _ (idx v o))]
-      have e2 : Dag.eval (fun i => Term.subst δ'.image (Term.var (outVar base ans i))) (ans.image ((varsOf p).idxOf v)) =
-          Dag.eval δ (ans.image ((varsOf p).idxOf v)) := by
+      have e2 : Dag.eval (fun i => Term.subst δ'.image (Term.var (outVar base ans i))) (ans.image (vs.idxOf v)) =
+          Dag.eval δ (ans.image (vs.idxOf v)) := by
         apply Dag.eval_congr
         intro j hj
         have hj' := vars _ (idx v o) j hj
@@ -298,7 +298,7 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
       obtain ⟨⟨ans, ha⟩, _, rfl⟩ := List.mem_map.mp hσ
       obtain ⟨_, _, _, vars, wf⟩ := unify_sound _ k _ _ fit hu ha
       refine ⟨fun v no => ?_, fun v o w ow _ => ?_⟩
-      · rw [portSolve_image, ite_eq_right fun hv => no ((varsOf_occurs p v).mp hv)]
+      · rw [portSolve_image, ite_eq_right fun hv => no (back v hv)]
       · rw [portSolve_image, ite_eq_left (occ v o)] at ow
         obtain ⟨j, _, oj⟩ := Dag.eval_occurs _ _ (wf _ (idx v o)) ow
         simp only [Term.Occurs] at oj
@@ -311,11 +311,17 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
     simp only [Option.some.injEq] at h
     subst h
     refine ⟨(complete_empty_iff p).mpr fun ⟨ρs, sol⟩ => ?_, fun σ hσ => by cases hσ⟩
-    have c := unify_complete (ranksOf (headsOf p) (varsOf p)) k _ _ fit (slotsOf ρs) (slots_solve ρs sol)
-      (slots_sorted ρs)
+    have c := unify_complete r k _ _ fit (slotsOf ρs) (slots_solve ρs sol) (slots_sorted ρs)
     rw [hu] at c
     exact c
   · cases h
+
+/-- The port's answers form a complete set of unifiers, leave variables
+outside the problem alone and introduce only variables outside `avoid`. -/
+theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : List (Substitution s)}
+    (h : portSolve k p avoid = some l) :
+    CompleteSet p l ∧ ∀ σ ∈ l, DomainRestricted p σ ∧ FreshFor p avoid σ :=
+  portSolveWith_spec _ _ k p _ (fun v hv => (varsOf_occurs p v).mp hv) avoid h
 
 /-- The fuel of the port. -/
 def fuel : Nat := 100000
