@@ -143,7 +143,9 @@ theorem normPicks_perm (so : Nat → Option SortId) (f : s.ACSym) (picks : List 
     (normPicks r so f picks).Perm (picks.flatMap fun p => List.replicate p.2 p.1) := by
   unfold normPicks
   rw [ite_eq_left (List.all_eq_true.mpr fun p hp => by obtain ⟨v, e⟩ := h p hp; rw [e])]
-  exact (List.mergeSort_perm _ _).flatMap_right _
+  refine ((List.mergeSort_perm _ _).flatMap_right _).trans ?_
+  rw [List.flatMap_map]
+  exact .refl _
 
 theorem eval_normPicks (so : Nat → Option SortId) (f : s.ACSym) (ρ : Nat → Term s) (picks : List (Dag s × Nat)) :
     EquivB (Dag.eval ρ (.ac f (normPicks r so f picks)))
@@ -151,7 +153,9 @@ theorem eval_normPicks (so : Nat → Option SortId) (f : s.ACSym) (ρ : Nat → 
   unfold normPicks
   split
   · rw [Dag.eval_ac, Dag.eval_ac]
-    exact Dag.product_perm f (((List.mergeSort_perm _ _).flatMap_right _).map _)
+    refine Dag.product_perm f ((((List.mergeSort_perm _ _).flatMap_right _).trans ?_).map _)
+    rw [List.flatMap_map]
+    exact .refl _
   · exact Dag.eval_normAC r so ρ f _
 
 theorem eval_assign (st : St s) (f : s.ACSym) (ρ : Nat → Term s) (sel : List (List Nat))

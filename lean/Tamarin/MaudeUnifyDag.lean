@@ -439,6 +439,45 @@ def normAC (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (args : 
     List (Dag s) :=
   (flat f args).mergeSort fun a b => cmp r sortOf a b != .gt
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem size_pos (d : Dag s) : 0 < size d := by
+  cases d <;> simp only [size] <;> omega
+
+/-- A dag with its top rank and, for a variable, the rank of its name, so
+that sorting compares numbers first. -/
+def keyed (r : Ranks s) (sortOf : Nat → Option SortId) (d : Dag s) : Dag s × Nat × Nat :=
+  (d, top r sortOf d, match d with | .var i => r.name i | _ => 0)
+
+/-- The term order on keyed dags. -/
+def cmpKeyed (r : Ranks s) (sortOf : Nat → Option SortId) (a b : Dag s × Nat × Nat) : Ordering :=
+  if a.2.1 ≠ b.2.1 then compare a.2.1 b.2.1 else
+  match a.1, b.1 with
+  | .var _, .var _ => compare a.2.2 b.2.2
+  | x, y => cmpBody r (cmpN r sortOf (size x - 1)) x y
+
+theorem cmpKeyed_keyed (r : Ranks s) (sortOf : Nat → Option SortId) (a b : Dag s) :
+    cmpKeyed r sortOf (keyed r sortOf a) (keyed r sortOf b) = cmp r sortOf a b := by
+  unfold cmp
+  obtain ⟨n, hn⟩ : ∃ n, size a = n + 1 := ⟨size a - 1, by have := size_pos a; omega⟩
+  rw [hn, cmpN_succ]
+  unfold cmpKeyed keyed
+  simp only
+  split
+  · rfl
+  · cases a <;> cases b <;> simp_all [cmpBody]
+
+/-- `normAC` sorting keyed dags. -/
+def normACKeyed (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (args : List (Dag s)) :
+    List (Dag s) :=
+  (((flat f args).map (keyed r sortOf)).mergeSort fun a b => cmpKeyed r sortOf a b != .gt).map (·.1)
+
+@[csimp] theorem normAC_eq_normACKeyed : @normAC = @normACKeyed := by
+  funext s i1 i2 i3 i4 r sortOf f args
+  unfold normAC normACKeyed
+  rw [← List.map_mergeSort (fun a _ b _ => by rw [cmpKeyed_keyed]), List.map_map]
+  have : (Prod.fst ∘ keyed r sortOf) = id := by funext d; rfl
+  rw [this, List.map_id]
+
 /-- A C node with its arguments in the term order. -/
 def mkComm (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.CSym) (a b : Dag s) : Dag s :=
   if cmp r sortOf b a == .lt then .comm f b a else .comm f a b

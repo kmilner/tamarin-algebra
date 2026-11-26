@@ -398,7 +398,8 @@ Variables are sorted once each and then repeated, which is the order that
 `normAC` gives their repetitions; other dags are normalized by `normAC`. -/
 def normPicks (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag s × Nat)) : List (Dag s) :=
   if picks.all (fun p => match p.1 with | .var _ => true | _ => false) then
-    (picks.mergeSort fun a b => Dag.cmp r sortOf a.1 b.1 != .gt).flatMap fun p => List.replicate p.2 p.1
+    ((picks.map fun p => (Dag.keyed r sortOf p.1, p.2)).mergeSort
+      fun a b => Dag.cmpKeyed r sortOf a.1 b.1 != .gt).flatMap fun p => List.replicate p.2 p.1.1
   else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
 
 /-- What the selected elements assign to subterm `i`, and whether it is a
