@@ -1,6 +1,7 @@
 import Tamarin.CompleteNarrowing
 import Tamarin.NeededExtensions
 import Tamarin.CertifiedReductionWire
+import Tamarin.MaudeUnifyWire
 
 /-! Root narrowing of a term through the term with its variables numbered in
 order of occurrence. The numbered term does not depend on the names of the
@@ -114,7 +115,7 @@ variable [Interrupt]
 /-- The root branches of a term that stands alone: those of a subproduct for
 an AC product, those of the whole term otherwise. -/
 def rootsAt (bound : ReferenceReduction.Bound rules) (t : Term s) : List (Branch s) :=
-  let u := MixedUnification.verified (s := s)
+  let u := MaudeUnify.verified (s := s)
   match t with
   | .ac f _ _ => KindACNarrowing.rootsIn u (ACEquationExtensions.needed_bound bound) f [] t
   | t => roots u bound [] t
@@ -141,7 +142,7 @@ theorem rootsAt_plain (bound : ReferenceReduction.Bound rules) (t : Term s)
   unfold rootsAt
   split
   · next f a b => exact absurd rfl (other f a b)
-  · obtain ⟨b,hb,fit⟩ := roots_cover (MixedUnification.verified (s := s)) bound [] t ρ fire
+  · obtain ⟨b,hb,fit⟩ := roots_cover (MaudeUnify.verified (s := s)) bound [] t ρ fire
     exact ⟨b,hb,alone fit⟩
 
 theorem rootsAt_product (bound : ReferenceReduction.Bound rules)
@@ -149,7 +150,7 @@ theorem rootsAt_product (bound : ReferenceReduction.Bound rules)
     (ρ : Substitution s) {v : Term s}
     (step : Occurrence (ruleRoot rules) f (ρ.apply (.ac f a b)) v) :
     ∃ d ∈ rootsAt bound (.ac f a b), FitsOn (Term.ac f a b).Occurs ρ v d.subst d.value := by
-  obtain ⟨d,hd,fit⟩ := KindACNarrowing.rootsIn_cover (MixedUnification.verified (s := s)) bound
+  obtain ⟨d,hd,fit⟩ := KindACNarrowing.rootsIn_cover (MaudeUnify.verified (s := s)) bound
     (ACEquationExtensions.needed_bound bound) (fun _ _ => ACEquationExtensions.atRoot_needed rules)
     vars f [] (.ac f a b) ρ step
   exact ⟨d,hd,alone fit⟩
