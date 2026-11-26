@@ -130,6 +130,8 @@ structure Prob where
   eqs : Array REq := #[]
   qvars : Array (SortId × Nat × String) := #[]
   query : R := .v 0
+  /-- Comma-separated deviations from Maude, for sensitivity runs (empty: Maude). -/
+  mode : String := ""
   deriving Inhabited
 
 abbrev S (p : Prob) : Signature := Sig p.free p.comm p.ac p.atoms
@@ -139,6 +141,16 @@ instance (p : Prob) : Inhabited (D p) := ⟨.var 0⟩
 
 section
 variable (p : Prob)
+
+def hasMode (m : String) : Bool := (p.mode.splitOn ",").contains m
+
+/-- Counters of the rules that fired, for the report. -/
+def statNames : Array String := #["unifyCalls", "unifiers", "droppedReducibleBinding",
+  "filterNewSubsumed", "filterEvicted", "survivingUnifiers", "droppedReducibleSubst", "newVariants",
+  "folderNewSubsumed", "folderEvictedDirect", "folderEvictedDescendant", "printed", "layers",
+  "maxUnifiersPerCall", "frontierSkipped", "rewritesInReduce", "narrowingSteps"]
+
+def bump (st : Array Nat) (i : Nat) (n : Nat := 1) : Array Nat := st.modify i (· + n)
 
 def ranks (name : Nat → Nat) : Ranks (S p) where
   atom a := p.rt.getD a 0
@@ -156,6 +168,15 @@ partial def norm (r : Ranks (S p)) (so : Nat → Option SortId) : D p → D p
   | .free f args => .free f (args.map (norm r so))
   | .comm f a b => Dag.mkComm r so f (norm r so a) (norm r so b)
   | .ac f args => .ac f (Dag.normAC r so f (args.map (norm r so)))
+  | d => d
+
+/-- `Term::normalize(false)`, which the interpreter applies to the query before
+it indexes the query's variables (`Interpreter::makeDag`): AC and C arguments
+sorted by the term order, nested AC products NOT flattened (`ACU_Term::normalize`). -/
+partial def normShallow (r : Ranks (S p)) (so : Nat → Option SortId) : D p → D p
+  | .free f args => .free f (args.map (normShallow r so))
+  | .comm f a b => Dag.mkComm r so f (normShallow r so a) (normShallow r so b)
+  | .ac f args => .ac f ((args.map (normShallow r so)).mergeSort fun x y => Dag.cmp r so x y != .gt)
   | d => d
 
 partial def ofR (slot : Nat → Nat) : R → D p
@@ -434,7 +455,16 @@ def subsumesV (a b : Variant p) : Bool :=
 
 /-- Breadth-first positions: path (argument indices, AC ones into the runs)
 and subterm (`PositionState::exploreNextPosition`). -/
+partial def dfsPositions (path : List Nat) (t : D p) : Array (List Nat × D p) :=
+  let kids : List (List Nat × D p) := match t with
+    | .free _ args => args.zipIdx.map fun (a, j) => (path ++ [j], a)
+    | .comm _ a b => [(path ++ [0], a), (path ++ [1], b)]
+    | .ac _ args => (runsOf p args).zipIdx.map fun ((a, _), j) => (path ++ [j], a)
+    | _ => []
+  kids.foldl (fun acc (q, d) => acc ++ dfsPositions q d) #[(path, t)]
+
 partial def positions (t : D p) : Array (List Nat × D p) := Id.run do
+  if hasMode p "dfs" then return dfsPositions p [] t
   let mut q : Array (List Nat × D p) := #[([], t)]
   let mut i := 0
   while i < q.size do
@@ -475,11 +505,14 @@ inductive Err where
 
 /-- One step of variant narrowing of `v` (`VariantNarrowingSearchState`):
 the new variants in Maude's order. -/
-def narrow (eqs : Array (Eqn p)) (fuel : Nat) (v : Variant p) (family : Nat) :
-    Except String (Array (Variant p) × Nat) := do
+def narrow (eqs : Array (Eqn p)) (fuel : Nat) (v : Variant p) (family : Nat) (st0 : Array Nat) :
+    Except String (Array (Variant p) × Nat × Array Nat) := do
+  let mut st := st0
   let tvTerm := dfsVars p #[] v.term
-  let nInt := tvTerm.size
   let tv := v.subst.foldl (dfsVars p) tvTerm
+  let nInt := if hasMode p "allinteresting" then tv.size else tvTerm.size
+  let tgtFirst := hasMode p "tgtfirst"
+  let eqs := if hasMode p "reveqs" then eqs.reverse else eqs
   let tvIdx : Array Nat := tv.zipIdx.foldl (fun a (k, j) => a.setIfInBounds k j) (Array.replicate v.sorts.size 0)
   let mut filter : Array (Unifier p) := #[]
   for (path, node) in positions p v.term do
@@ -489,46 +522,74 @@ def narrow (eqs : Array (Eqn p)) (fuel : Nat) (v : Variant p) (family : Nat) :
       if e.top != key then continue
       let ne := e.sorts.size
       let nOrig := ne + tv.size
-      let sorts : List SortId := e.sorts.toList ++ tv.toList.map (Variant.sortFn p v)
+      -- slots: the equation's variables first, then the variant's (Maude), or the other way round
+      let eqSlot := fun j => if tgtFirst then tv.size + j else j
+      let tSlot := fun i => if tgtFirst then i else ne + i
+      let tvSorts := tv.toList.map (Variant.sortFn p v)
+      let sorts : List SortId := if tgtFirst then tvSorts ++ e.sorts.toList else e.sorts.toList ++ tvSorts
       let sortsA := sorts.toArray
-      let nameOf := fun j => if j < ne then e.names.getD j 0
-        else if j < nOrig then 1000000 + tv.getD (j - ne) 0 else 1000000000 + j
+      let eqHigh := hasMode p "eqnamehigh"
+      let nameOf := fun j =>
+        if j < nOrig then
+          (if (tgtFirst && j ≥ tv.size) || (!tgtFirst && j < ne) then
+            (let k := if tgtFirst then j - tv.size else j; (if eqHigh then 10000000 else 0) + e.names.getD k 0)
+          else 1000000 + tv.getD (if tgtFirst then j else j - ne) 0)
+        else 1000000000 + j
       let r1 := ranks p nameOf
       let so1 := fun j => sortsA[j]?
-      let lhs := norm p r1 so1 e.lhs
-      let tgt := norm p r1 so1 (inst p (fun k => .var (ne + tvIdx.getD k 0)) node)
-      match @MaudeUnify.unify (S p) _ _ _ _ r1 Interrupt.never fuel sorts [(lhs, tgt)] with
+      let lhs := norm p r1 so1 (inst p (fun j => .var (eqSlot j)) e.lhs)
+      let tgt := norm p r1 so1 (inst p (fun k => .var (tSlot (tvIdx.getD k 0))) node)
+      let prob := if hasMode p "swap" then [(tgt, lhs)] else [(lhs, tgt)]
+      st := bump st 0
+      match @MaudeUnify.unify (S p) _ _ _ _ r1 Interrupt.never fuel sorts prob with
       | .gaveUp => throw s!"port gave up at equation {e.idx}"
       | .fail => pure ()
       | .ok answers =>
+        st := bump st 1 answers.length
+        st := st.modify 13 (max · answers.length)
         for a in answers do
           let outSorts := a.sorts.toArray
           let soN := fun j => outSorts[j]?
           let vsN := fun j => outSorts.getD j .msg
           let imgs := a.images.toArray.map (norm p (vranks p) soN)
-          let u : Unifier p := { eImgs := imgs.extract 0 ne, tImgs := imgs.extract ne nOrig,
+          let u : Unifier p := { eImgs := (Array.range ne).map fun j => imgs.getD (eqSlot j) (.var 0),
+                                 tImgs := (Array.range tv.size).map fun i => imgs.getD (tSlot i) (.var 0),
                                  sorts := outSorts, path, rhs := e.rhs }
           -- reducibility of the bindings of the variables of the term
-          if (u.tImgs.extract 0 nInt).any (reducible p eqs vsN) then continue
+          if !hasMode p "noreducecheck" && (u.tImgs.extract 0 nInt).any (reducible p eqs vsN) then
+            st := bump st 2
+            continue
+          if hasMode p "nofilter" then
+            filter := filter.push u
+            continue
           -- subsumption on the variables of the term (UnifierFilter)
           let subsumes := fun (a b : Unifier p) =>
             mtPairs p { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) } a.sorts.size
               ((a.tImgs.extract 0 nInt).toList.zip (b.tImgs.extract 0 nInt).toList)
-          if filter.any (subsumes · u) then continue
-          filter := (filter.filter fun old => !subsumes u old).push u
+          if filter.any (subsumes · u) then
+            st := bump st 3
+            continue
+          let kept := filter.filter fun old => !subsumes u old
+          st := bump st 4 (filter.size - kept.size)
+          filter := kept.push u
   let mut out : Array (Variant p) := #[]
   let mut rewrites := 0
+  st := bump st 5 filter.size
   for u in filter do
     let vsN := fun j => u.sorts.getD j .msg
     let soN := fun j => u.sorts[j]?
     let θ := fun k => u.tImgs.getD (tvIdx.getD k 0) (.var 0)
     let newSubst := v.subst.map fun d => norm p (vranks p) soN (inst p θ d)
-    if newSubst.any (reducible p eqs vsN) then continue
+    if !hasMode p "nosubstcheck" && newSubst.any (reducible p eqs vsN) then
+      st := bump st 6
+      continue
     let repl := inst p (fun j => u.eImgs.getD j (.var 0)) u.rhs
     let (t, c) := nfc p eqs vsN (rebuild p θ v.term u.path repl)
     rewrites := rewrites + 1 + c
+    st := bump st 15 c
+    st := bump st 16
     out := out.push { subst := newSubst, term := t, sorts := u.sorts, family }
-  return (out, rewrites)
+  return (out, rewrites, st)
 
 structure Retained where
   idx : Nat
@@ -536,9 +597,10 @@ structure Retained where
   v : Variant p
 
 /-- `VariantFolder::insertVariant`. -/
-def insertVariant (folder : Array (Retained p)) (v : Variant p) (idx : Nat) (parent : Option Nat) :
-    Option (Array (Retained p)) := Id.run do
-  if folder.any fun r => subsumesV p r.v v then return none
+def insertVariant (folder : Array (Retained p)) (v : Variant p) (idx : Nat) (parent : Option Nat)
+    (st0 : Array Nat) : Option (Array (Retained p)) × Array Nat := Id.run do
+  let mut st := st0
+  if folder.any fun r => subsumesV p r.v v then return (none, bump st 8)
   let mut ancestors : Array Nat := #[]
   let mut cur := parent
   let mut guard := folder.size + 1
@@ -554,10 +616,17 @@ def insertVariant (folder : Array (Retained p)) (v : Variant p) (idx : Nat) (par
   for r in folder do
     if ancestors.contains r.idx then kept := kept.push r; continue
     let parentGone := match r.parent with | some q => evicted.contains q | none => false
-    if parentGone || subsumesV p v r.v then
+    if hasMode p "noevict" then
+      kept := kept.push r
+      continue
+    if parentGone && !hasMode p "nodesc" then
       evicted := evicted.push r.idx
+      st := bump st 10
+    else if subsumesV p v r.v then
+      evicted := evicted.push r.idx
+      st := bump st 9
     else kept := kept.push r
-  return some (kept.push { idx, parent, v })
+  return (some (kept.push { idx, parent, v }), st)
 
 /-! ### Printing -/
 
@@ -574,14 +643,16 @@ def Variant.vname (v : Variant p) (k : Nat) : String :=
   s!"{if v.family == 0 then "#" else "%"}{k + 1}:{sortName (Variant.sortFn p v k)}"
 
 /-- The whole search: the lines of Maude's reply. -/
-def search (fuel : Nat) : Except String (Array String) := do
+def search (fuel : Nat) : Except String (Array String × Array Nat) := do
+  let mut st : Array Nat := Array.replicate (statNames).size 0
   let eqs := p.eqs.zipIdx.map fun (e, i) => mkEqn p i e
   -- the query: variables by first occurrence in the normalised query
   let qn := p.qvars.size
   let rq := ranks p fun i => (p.qvars.getD i (.msg, 0, "")).2.1
   let soq := fun i => (p.qvars[i]?).map (·.1)
   let q0 := norm p rq soq (ofR p id p.query)
-  let order := dfsVars p #[] q0
+  -- the query's variables by first occurrence in the query normalised without flattening
+  let order := dfsVars p #[] (normShallow p rq soq (ofR p id p.query))
   let slotOf : Array Nat := order.zipIdx.foldl (fun a (v, j) => a.setIfInBounds v j) (Array.replicate qn 0)
   let sorts := order.map fun i => (p.qvars.getD i (.msg, 0, "")).1
   let qnames := order.map fun i => (p.qvars.getD i (.msg, 0, "")).2.2
@@ -606,18 +677,24 @@ def search (fuel : Nat) : Except String (Array String) := do
       -- expand the layer
       let family := if useFirst then 0 else 1
       let mut newFrontier : Array Nat := #[]
+      st := bump st 12
       for i in frontier do
         match folder.find? (·.idx == i) with
-        | none => pure ()
+        | none => st := bump st 14
         | some r =>
-          let (kids, c) ← narrow p eqs fuel r.v family
+          let (kids, c, st1) ← narrow p eqs fuel r.v family st
+          st := st1
           rewrites := rewrites + c
           for kv in kids do
             let idx := current
             current := current + 1
-            match insertVariant p folder kv idx (some i) with
-            | some f => folder := f; newFrontier := newFrontier.push idx
-            | none => pure ()
+            st := bump st 7
+            match insertVariant p folder kv idx (some i) st with
+            | (some f, st2) =>
+              folder := f
+              st := st2
+              newFrontier := newFrontier.push idx
+            | (none, st2) => st := st2
       frontier := newFrontier
       useFirst := !useFirst
       next := pick folder
@@ -627,6 +704,7 @@ def search (fuel : Nat) : Except String (Array String) := do
     | some r =>
       last := some r.idx
       count := count + 1
+      st := bump st 11
       let v := r.v
       lines := lines.push ""
       lines := lines.push s!"Variant {count}"
@@ -637,7 +715,7 @@ def search (fuel : Nat) : Except String (Array String) := do
   lines := lines.push ""
   lines := lines.push (if count == 0 then "No variants." else "No more variants.")
   lines := lines.push s!"rewrites: {rewrites}"
-  return lines
+  return (lines, st)
 
 end
 
@@ -680,41 +758,45 @@ def decls (rest : List String) : List (List Nat) :=
 def solveOne (p : Prob) (fuel : Nat) : IO Unit := do
   IO.println s!"BEGIN {p.id}"
   let t0 ← IO.monoNanosNow
+  let mut stats := ""
   match search p fuel with
-  | .ok lines => for l in lines do IO.println l
+  | .ok (lines, st) =>
+    for l in lines do IO.println l
+    stats := " ".intercalate ((statNames.zip st).toList.map fun (n, x) => s!"{n}={x}")
   | .error e => IO.println s!"ERROR {e}"
   let t1 ← IO.monoNanosNow
   IO.println s!"END {p.id} {(t1 - t0) / 1000}"
+  IO.println s!"STATS {p.id} {stats}"
 
-partial def loop (h : IO.FS.Stream) (p : Prob) (fuel : Nat) : IO Unit := do
+partial def loop (h : IO.FS.Stream) (p : Prob) (fuel : Nat) (mode : String) : IO Unit := do
   let line ← h.getLine
   if line.isEmpty then return
   let line : String := String.ofList (line.toList.filter (· != '\n'))
   let ws := (line.splitOn " ").filter (· ≠ "")
   match ws with
-  | "PROBLEM" :: id :: _ => loop h { id := id } fuel
+  | "PROBLEM" :: id :: _ => loop h { id := id, mode } fuel mode
   | "FREE" :: rest =>
     let ds := (decls rest).map fun xs => ({ inputs := (xs.drop 1).toArray.map sortOfCode, output := sortOfCode xs.head! } : FD)
-    loop h { p with free := ds.toArray } fuel
+    loop h { p with free := ds.toArray } fuel mode
   | "FREEMS" :: rest =>
     let ds := (decls rest).map fun xs => ((xs.drop 1).toArray.map MS.ofCode, MS.ofCode xs.head!)
-    loop h { p with freeMS := ds.toArray } fuel
-  | "COMM" :: rest => loop h { p with comm := (nums rest).map sortOfCode } fuel
-  | "AC" :: rest => loop h { p with ac := (nums rest).map sortOfCode } fuel
-  | "ATOMS" :: rest => loop h { p with atoms := (nums rest).map sortOfCode } fuel
-  | "RF" :: rest => loop h { p with rf := nums rest } fuel
-  | "RC" :: rest => loop h { p with rc := nums rest } fuel
-  | "RA" :: rest => loop h { p with ra := nums rest } fuel
-  | "RT" :: rest => loop h { p with rt := nums rest } fuel
-  | "RG" :: rest => loop h { p with rg := nums rest } fuel
-  | "RV" :: rest => loop h { p with rv := nums rest } fuel
-  | "RS" :: rest => loop h { p with rs := nums rest } fuel
-  | "FNAMES" :: rest => loop h { p with fnames := rest.toArray } fuel
-  | "CNAMES" :: rest => loop h { p with cnames := rest.toArray } fuel
-  | "ANAMES" :: rest => loop h { p with anames := rest.toArray } fuel
+    loop h { p with freeMS := ds.toArray } fuel mode
+  | "COMM" :: rest => loop h { p with comm := (nums rest).map sortOfCode } fuel mode
+  | "AC" :: rest => loop h { p with ac := (nums rest).map sortOfCode } fuel mode
+  | "ATOMS" :: rest => loop h { p with atoms := (nums rest).map sortOfCode } fuel mode
+  | "RF" :: rest => loop h { p with rf := nums rest } fuel mode
+  | "RC" :: rest => loop h { p with rc := nums rest } fuel mode
+  | "RA" :: rest => loop h { p with ra := nums rest } fuel mode
+  | "RT" :: rest => loop h { p with rt := nums rest } fuel mode
+  | "RG" :: rest => loop h { p with rg := nums rest } fuel mode
+  | "RV" :: rest => loop h { p with rv := nums rest } fuel mode
+  | "RS" :: rest => loop h { p with rs := nums rest } fuel mode
+  | "FNAMES" :: rest => loop h { p with fnames := rest.toArray } fuel mode
+  | "CNAMES" :: rest => loop h { p with cnames := rest.toArray } fuel mode
+  | "ANAMES" :: rest => loop h { p with anames := rest.toArray } fuel mode
   | "TNAMES" :: rest =>
     let xs := rest.toArray
-    loop h { p with tnames := (Array.range (xs.size / 2)).map fun i => (xs[2*i]!, xs[2*i+1]!.toNat!) } fuel
+    loop h { p with tnames := (Array.range (xs.size / 2)).map fun i => (xs[2*i]!, xs[2*i+1]!.toNat!) } fuel mode
   | "EQ" :: _ =>
     -- EQ sorts... | names... | lhs = rhs
     match (String.ofList (line.toList.drop 3)).splitOn " | " with
@@ -724,23 +806,24 @@ partial def loop (h : IO.FS.Stream) (p : Prob) (fuel : Nat) : IO Unit := do
         let e : REq := { sorts := (nums ((ss.splitOn " ").filter (· ≠ ""))).map sortOfCode,
                          names := nums ((ns.splitOn " ").filter (· ≠ "")),
                          lhs := parseTerm l, rhs := parseTerm rr }
-        loop h { p with eqs := p.eqs.push e } fuel
+        loop h { p with eqs := p.eqs.push e } fuel mode
       | _ => panic! "bad EQ body"
     | _ => panic! "bad EQ"
   | "QVARS" :: rest =>
     let xs := rest.toArray
     let vs := (Array.range (xs.size / 3)).map fun i =>
       (sortOfCode xs[3*i]!.toNat!, xs[3*i+1]!.toNat!, xs[3*i+2]!)
-    loop h { p with qvars := vs } fuel
-  | "QUERY" :: _ => loop h { p with query := parseTerm (String.ofList (line.toList.drop 6)) } fuel
+    loop h { p with qvars := vs } fuel mode
+  | "QUERY" :: _ => loop h { p with query := parseTerm (String.ofList (line.toList.drop 6)) } fuel mode
   | "END" :: _ =>
     solveOne p fuel
     (← IO.getStdout).flush
-    loop h {} fuel
-  | _ => loop h p fuel
+    loop h { mode } fuel mode
+  | _ => loop h p fuel mode
 
 def main (args : List String) : IO Unit := do
   let fuel := (args.getD 0 "1000000").toNat!
-  loop (← IO.getStdin) {} fuel
+  let mode := args.getD 1 ""
+  loop (← IO.getStdin) { mode } fuel mode
 
 end Tamarin.MaudeVariantsPrototype
