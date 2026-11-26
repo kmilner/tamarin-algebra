@@ -4,7 +4,6 @@ import Tamarin.Algebra
 import Tamarin.Substitution
 import Tamarin.Unification
 import Tamarin.Models
-import Tamarin.SpecChecks
 import Tamarin.Executable
 import Tamarin.GroundConjunction
 import Tamarin.LinearACMatch
