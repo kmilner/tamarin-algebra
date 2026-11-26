@@ -288,7 +288,8 @@ end Dag
 /-- Operator and variable ranks of Maude's term order (`Symbol::compare`,
 `VariableDagNode::compareArguments`). `name i` is the code of the name of the
 variable in slot `i`; `varSym` is the rank of the variable symbol of a sort,
-`none` being the error sort of fresh variables. -/
+`none` being the error sort of fresh variables. `sortIndex` is the index of a
+sort in its connected component, which orients variable bindings. -/
 structure Ranks (s : Signature) where
   atom : s.Atom → Nat
   atomArg : s.Atom → Nat
@@ -297,6 +298,7 @@ structure Ranks (s : Signature) where
   ac : s.ACSym → Nat
   varSym : Option SortId → Nat
   name : Nat → Nat
+  sortIndex : Option SortId → Nat
 
 namespace Dag
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]

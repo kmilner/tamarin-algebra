@@ -135,3 +135,4 @@ import Tamarin.CompleteNarrowing
 import Tamarin.MaudeUnifyDag
 import Tamarin.MaudeUnifyDiophantine
 import Tamarin.MaudeUnifySelection
+import Tamarin.MaudeUnifyFactor
