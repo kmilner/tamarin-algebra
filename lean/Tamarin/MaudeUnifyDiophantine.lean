@@ -101,6 +101,28 @@ theorem allFin_eq (k : Nat) (p : Fin k → Bool) : allFin k p = (List.finRange k
     | cons i l ih => intro acc; rw [List.foldl_cons, ih, List.all_cons, Bool.and_assoc]
   rw [gen, Bool.true_and]
 
+/-- `scalar` as one loop. -/
+def scalarFast (a b : Vector Int m) : Int := Fin.foldl m (fun acc r => acc + a[r] * b[r]) 0
+
+@[csimp] theorem scalar_eq_scalarFast : @scalar = @scalarFast := rfl
+
+/-- `le` as one loop. -/
+def leFast (g p : Vector Nat n) : Bool := allFin n fun i => decide (g[i] ≤ p[i])
+
+theorem le_eq_leFast : @le = @leFast := by
+  funext n g p
+  rw [le, leFast, allFin_eq]
+  apply Bool.eq_iff_iff.mpr
+  rw [decide_eq_true_iff, List.all_eq_true]
+  exact ⟨fun h i _ => decide_eq_true (h i), fun h i => of_decide_eq_true (h i (List.mem_finRange i))⟩
+
+/-- `minimal` through `leFast`. -/
+def minimalFast (found : List (Vector Nat n)) (p : Vector Nat n) : Bool := found.all fun g => !leFast g p
+
+@[csimp] theorem minimal_eq_minimalFast : @minimal = @minimalFast := by
+  funext n found p
+  rw [minimal, minimalFast, le_eq_leFast]
+
 /-- `issue` with one pass over the coordinates of each equation. -/
 def issueFast (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
   firstFin m fun r =>
