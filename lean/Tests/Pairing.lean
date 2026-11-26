@@ -1,4 +1,5 @@
 import TamarinProposers
+import Tamarin.Reflexive
 
 namespace Tamarin.Pairing.Tests
 open Tamarin.Pairing
