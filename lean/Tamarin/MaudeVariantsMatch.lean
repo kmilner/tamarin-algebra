@@ -248,34 +248,41 @@ subsumption. -/
 structure Tuple (y : Syms) where
   items : Array (D y)
   sorts : Array SortId
-  keys : Array Nat
   /-- The least sort of each component. -/
   ms : Array MS
-  /-- As a pattern: the components that are a variable occurring nowhere
-  else, with the variable's sort. -/
-  lin : List (Nat × MS)
+  /-- Whether every component has a sort below `Msg`. -/
+  msgOk : Bool
+  /-- As a pattern: the components that are not variables, with their keys. -/
+  keyed : List (Nat × Nat)
+  /-- As a pattern: the components that are a variable of sort `Msg`
+  occurring nowhere else. -/
+  linMsg : List Nat
+  /-- As a pattern: the components that are a variable of another sort
+  occurring nowhere else, with the sort. -/
+  linSorted : List (Nat × MS)
   /-- As a pattern: the components that are a variable occurring elsewhere
   too, with the variable. -/
   vars : List (Nat × Nat)
   /-- As a pattern: the other components, which need the matcher. -/
   rest : List Nat
+  /-- As a subject: the key of each component. -/
+  keys : Array Nat
 
 def Tuple.make (items : Array (D y)) (sorts : Array SortId) : Tuple y :=
   let occ := items.foldl (countVars sorts.size) (Array.replicate sorts.size 0)
-  let (lin, vars, rest) := items.zipIdx.foldr (fun (d, i) (lin, vars, rest) => match d with
+  let ms := items.map (msort y (sorts.getD · .msg))
+  let (linMsg, linSorted, vars, rest) := items.zipIdx.foldr (fun (d, i) (linMsg, linSorted, vars, rest) =>
+    match d with
     | .var v =>
-      if occ.getD v 0 == 1 then ((i, MS.ofSort (sorts.getD v .msg)) :: lin, vars, rest)
-      else (lin, (i, v) :: vars, rest)
-    | _ => (lin, vars, i :: rest)) ([], [], [])
-  { items, sorts, keys := items.map shallowKey, ms := items.map (msort y (sorts.getD · .msg)), lin, vars, rest }
-
-/-- Whether the keys of a pattern's components agree with a subject's from
-index `i` on: a variable fits every key. -/
-def keysFitFrom (a b : Array Nat) : Nat → Nat → Bool
-  | 0, _ => true
-  | n + 1, i => let k := a.getD i 0; (k == 0 || k == b.getD i 0) && keysFitFrom a b n (i + 1)
-
-def keysFit (a b : Array Nat) : Bool := a.size == b.size && keysFitFrom a b a.size 0
+      if occ.getD v 0 == 1 then
+        match sorts.getD v .msg with
+        | .msg => (i :: linMsg, linSorted, vars, rest)
+        | srt => (linMsg, (i, MS.ofSort srt) :: linSorted, vars, rest)
+      else (linMsg, linSorted, (i, v) :: vars, rest)
+    | _ => (linMsg, linSorted, vars, i :: rest)) ([], [], [], [])
+  let keys := items.map shallowKey
+  { items, sorts, ms, msgOk := ms.all (·.le .msg), linMsg, linSorted, vars, rest, keys,
+    keyed := rest.map fun i => (i, keys.getD i 0) }
 
 /-- Assign each variable component of the pattern its subject component:
 `none` when one variable meets two different subjects or a subject of a sort
@@ -288,20 +295,33 @@ def assignVars (c : MC) (b : Tuple y) : List (Nat × Nat) → Sb y → Option (S
     | some u => if Dag.beq u t then assignVars c b more σ else none
     | none => if fits c v t then assignVars c b more (σ.set! v (some t)) else none
 
+/-- `assignVars` without the assignment, for a pattern whose other components
+are all variables occurring once: each variable's subjects are equal and of
+a sort the variable admits. `seen` holds the variables met so far with their
+subject. -/
+def varsAgree (a b : Tuple y) : List (Nat × Nat) → List (Nat × Nat) → Bool
+  | [], _ => true
+  | (i, v) :: more, seen =>
+    match seen.find? (·.1 == v) with
+    | some (_, j) => Dag.beq (b.items.getD j (.var 0)) (b.items.getD i (.var 0)) && varsAgree a b more seen
+    | none =>
+      (b.ms.getD i .kind).le (MS.ofSort (a.sorts.getD v .msg)) && varsAgree a b more ((v, i) :: seen)
+
 /-- Whether `b` is an instance of the pattern `a`, one matcher for every
 component at once, modulo AC and C and respecting sorts. The variable
 components are assigned first, then the matcher takes the others. -/
 def Tuple.subsumes [Interrupt] (a b : Tuple y) : Bool :=
-  keysFit a.keys b.keys &&
-  a.lin.all (fun (i, s) => (b.ms.getD i .kind).le s) &&
+  a.items.size == b.items.size &&
+  a.keyed.all (fun (i, k) => k == b.keys.getD i 0) &&
+  (b.msgOk || a.linMsg.all fun i => (b.ms.getD i .kind).le .msg) &&
+  a.linSorted.all (fun (i, s) => (b.ms.getD i .kind).le s) &&
+  if a.rest.isEmpty then varsAgree a b a.vars [] else
   a.rest.all (fun i => quick (a.items.getD i (.var 0)) (b.items.getD i (.var 0))) &&
-  (a.vars.isEmpty && a.rest.isEmpty ||
-    let c : MC := { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) }
-    match assignVars c b a.vars (Array.replicate a.sorts.size none) with
-    | none => false
-    | some σ =>
-      a.rest.isEmpty ||
-        (mtList c matchFuel (a.rest.map (a.items.getD · (.var 0))) (a.rest.map (b.items.getD · (.var 0))) σ
-          (fun σ => some σ)).isSome)
+  let c : MC := { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) }
+  match assignVars c b a.vars (Array.replicate a.sorts.size none) with
+  | none => false
+  | some σ =>
+    (mtList c matchFuel (a.rest.map (a.items.getD · (.var 0))) (a.rest.map (b.items.getD · (.var 0))) σ
+      (fun σ => some σ)).isSome
 
 end Tamarin.MaudeVariants

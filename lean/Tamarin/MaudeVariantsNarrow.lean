@@ -215,18 +215,6 @@ def rebuild (θ : Nat → D y) (t : D y) (path : List Nat) (repl : D y) : D y :=
 
 /-! ### The narrowing step -/
 
-/-- A unifier of an equation's left side with a subterm: the images of the
-equation's variables and of the variant's (in the order of `Frame.tv`), the
-sorts of its variables, and where and with which right side it applies. -/
-structure Unifier (y : Syms) where
-  eImgs : Array (D y)
-  tImgs : Array (D y)
-  sorts : Array SortId
-  path : List Nat
-  rhs : D y
-  /-- The bindings of the variables of the term, as a tuple. -/
-  tup : Tuple y
-
 /-- A variant prepared for narrowing: its variables by first occurrence, those
 of the term first (`tv`), the place of each variable in that order (`tvIdx`),
 and the number of variables of the term (`nInt`), the interesting ones. -/
@@ -241,17 +229,6 @@ def Frame.of (v : Variant y) : Frame y :=
   let tv := v.subst.foldl dfsVars tvTerm
   { v, tv, nInt := tvTerm.size,
     tvIdx := tv.zipIdx.foldl (fun a (k, j) => a.setIfInBounds k j) (Array.replicate v.sorts.size 0) }
-
-/-- `subsumes a b`: the interesting bindings of `b` are an instance of those
-of `a` (`UnifierFilter`). -/
-def Unifier.subsumes [Interrupt] (a b : Unifier y) : Bool := a.tup.subsumes b.tup
-
-/-- Offer a unifier to the filter: dropped if a retained one subsumes it,
-otherwise it evicts those it subsumes and is appended. -/
-def offer [Interrupt] (filter : Array (Unifier y)) (u : Unifier y) : Array (Unifier y) :=
-  if filter.any (·.subsumes u) then filter
-  else if filter.any u.subsumes then (filter.filter fun old => !u.subsumes old).push u
-  else filter.push u
 
 section
 variable [Interrupt]
@@ -339,13 +316,91 @@ instance : Hashable (CKey y) :=
   ⟨fun k => mixHash (mixHash (mixHash (hash k.eq) (hashD k.node)) (hash k.ranks)) (hash k.sorts)⟩
 
 /-- An answer of a canonical problem: the normalised images of its original
-slots, the sorts of its variables, the slot each of them stands for, and
-whether it binds a variable of the subterm to a reducible term. -/
+slots, the sorts of its variables, the slot each of them stands for, whether
+it binds a variable of the subterm to a reducible term, and the bindings of
+the subterm's variables as a tuple. -/
 structure CAnswer (y : Syms) where
   imgs : Array (D y)
   sorts : Array SortId
   origin : Array Nat
   dropped : Bool
+  tup : Tuple y
+
+/-- A unifier of a narrowing step: a canonical answer with the variables of
+the variant's subterm (`cs`, in the order of their slots), the number of the
+equation's slots, where and with which right side it applies, and the
+bindings of the variables of the term as a tuple (`UnifierFilter`). -/
+structure Unifier (y : Syms) where
+  ans : CAnswer y
+  cs : Array Nat
+  ne : Nat
+  path : List Nat
+  rhs : D y
+  tup : Tuple y
+
+/-- `subsumes a b`: the interesting bindings of `b` are an instance of those
+of `a` (`UnifierFilter`). -/
+def Unifier.subsumes [Interrupt] (a b : Unifier y) : Bool := a.tup.subsumes b.tup
+
+/-- Offer a unifier to the filter: dropped if a retained one subsumes it,
+otherwise it evicts those it subsumes and is appended. -/
+def offer [Interrupt] (filter : Array (Unifier y)) (u : Unifier y) : Array (Unifier y) :=
+  if filter.any (·.subsumes u) then filter
+  else if filter.any u.subsumes then (filter.filter fun old => !u.subsumes old).push u
+  else filter.push u
+
+/-- Where the bindings of a canonical answer for the subterm with variables
+`cs` go in the tuple of the variant's term: for each interesting position the
+canonical index of its variable, if the subterm has it; for each canonical
+index its position; the positions of the other variables, by their sort; the
+sorts of all positions. Computed once for each position and equation. -/
+structure Embedding where
+  slots : Array (Option Nat)
+  posOf : Array Nat
+  linMsg : List Nat
+  linSorted : List (Nat × MS)
+  outOk : Bool
+  sorts : Array SortId
+
+def Embedding.of (fr : Frame y) (cs : Array Nat) : Embedding :=
+  let canonIdx : Array (Option Nat) := cs.zipIdx.foldl (fun acc (k, j) => acc.setIfInBounds k (some j))
+    (Array.replicate fr.v.sorts.size none)
+  let tvInt := fr.tv.extract 0 fr.nInt
+  let slots := tvInt.map (canonIdx.getD · none)
+  let sorts := tvInt.map fr.v.sortFn
+  let (linMsg, linSorted, outOk) := (slots.zip sorts).zipIdx.foldr (fun ((j, srt), p) (lm, ls, ok) =>
+    match j with
+    | some _ => (lm, ls, ok)
+    | none => match srt with
+      | .msg => (p :: lm, ls, ok)
+      | _ => (lm, (p, MS.ofSort srt) :: ls, ok && (MS.ofSort srt).le .msg)) ([], [], true)
+  { slots, sorts, linMsg, linSorted, outOk, posOf := cs.map fun k => fr.tvIdx.getD k 0 }
+
+/-- The tuple of the bindings of the variables of the variant's term under
+a unifier of the canonical answer with tuple `ct`: a binding of a variable of
+the subterm is its canonical image, one of another variable a variable of
+its own. The variables keep the answer's numbers, and the variable of
+position `p` is `n + p` for the `n` variables of the answer: a tuple is only
+ever compared with another, and numbering does not change subsumption. -/
+def Tuple.embed (em : Embedding) (ct : Tuple y) : Tuple y :=
+  let n := ct.sorts.size
+  let posOf := fun (j : Nat) => em.posOf.getD j 0
+  { items := em.slots.zipIdx.map fun (j, p) => match j with
+      | some j => ct.items.getD j (.var 0)
+      | none => .var (n + p),
+    ms := (em.slots.zip em.sorts).map fun (j, srt) => match j with
+      | some j => ct.ms.getD j .kind
+      | none => MS.ofSort srt,
+    keys := em.slots.map fun j => match j with
+      | some j => ct.keys.getD j 0
+      | none => 0,
+    sorts := ct.sorts ++ em.sorts,
+    msgOk := ct.msgOk && em.outOk,
+    keyed := ct.keyed.map fun (j, k) => (posOf j, k),
+    linMsg := ct.linMsg.map posOf ++ em.linMsg,
+    linSorted := ct.linSorted.map (fun (j, s) => (posOf j, s)) ++ em.linSorted,
+    vars := ct.vars.map fun (j, v) => (posOf j, v),
+    rest := ct.rest.map posOf }
 
 /-- The answers of canonical problems met so far in a search. -/
 abbrev UCache (y : Syms) := Std.HashMap (CKey y) (Array (CAnswer y))
@@ -367,15 +422,19 @@ def canonical (th : Theory y) (fuel : Nat) (e : Eqn y) (node' : D y) (ranks : Ar
       let soN := fun j => outSorts[j]?
       let vsN := fun j => outSorts.getD j .msg
       let imgs := a.images.toArray.map (norm th.rt.vranks soN)
-      { imgs, sorts := outSorts, origin := free,
-        dropped := (imgs.extract ne (ne + m)).any (reducible th vsN) }
+      let mine := imgs.extract ne (ne + m)
+      let dropped := mine.any (reducible th vsN)
+      { imgs, sorts := outSorts, origin := free, dropped,
+        tup := if dropped then Tuple.make #[] #[] else Tuple.make mine outSorts }
 
-/-- The unifier of the variant's problem that a canonical answer stands for.
-The variant's variables `cs` (in the order of their slots) are those of the
-subterm; the other variables of the variant are free, each its own variable
-of the answer, numbered with the others in the order of the slots. -/
-def lift (fr : Frame y) (ne : Nat) (cs : Array Nat) (path : List Nat) (rhs : D y) (a : CAnswer y) :
-    Unifier y :=
+/-- The images of the equation's variables and of the variant's (in the order
+of `Frame.tv`) under the unifier of the variant's problem that a canonical
+answer stands for, and the sorts of its variables. The variant's variables
+`cs` (in the order of their slots) are those of the subterm; the other
+variables of the variant are free, each its own variable of the answer,
+numbered with the others in the order of the slots. -/
+def lift (fr : Frame y) (ne : Nat) (cs : Array Nat) (a : CAnswer y) :
+    Array (D y) × Array (D y) × Array SortId :=
   let m := cs.size
   let nOrig := ne + m
   let shiftInt := fr.tv.size - m
@@ -409,8 +468,7 @@ def lift (fr : Frame y) (ne : Nat) (cs : Array Nat) (path : List Nat) (rhs : D y
   let (tImgs, _) := fr.tv.foldl (fun (acc, q) k =>
     if inSub.getD k false then (acc.push (rn (a.imgs.getD (ne + canonIdx.getD k 0) (.var 0))), q)
     else (acc.push (.var (oNum.getD q 0)), q + 1)) (#[], 0)
-  let eImgs := (a.imgs.extract 0 ne).map rn
-  { eImgs, tImgs, sorts, path, rhs, tup := Tuple.make (tImgs.extract 0 fr.nInt) sorts }
+  ((a.imgs.extract 0 ne).map rn, tImgs, sorts)
 
 /-- The state of one narrowing step: the filter, and the canonical answers
 of the search. -/
@@ -436,9 +494,12 @@ def offerAt (th : Theory y) (fuel : Nat) (fr : Frame y) (path : List Nat) (node 
     | some answers => some (answers, st.cache)
     | none => (canonical th fuel e key.node ranks csorts).map fun answers => (answers, st.cache.insert key answers)
   found.map fun (answers, cache) =>
-    { cache, filter := answers.foldl (fun filter a =>
-        Interrupt.guard filter fun _ =>
-        if a.dropped then filter else offer filter (lift fr ne cs path e.rhs a)) st.filter }
+    let em := Embedding.of fr cs
+    let filter := answers.foldl (fun filter a =>
+      Interrupt.guard filter fun _ =>
+      if a.dropped then filter
+      else offer filter { ans := a, cs, ne, path, rhs := e.rhs, tup := Tuple.embed em a.tup }) st.filter
+    { cache, filter }
 
 /-- The filter after every position and equation. -/
 def collect (th : Theory y) (fuel : Nat) (fr : Frame y) : List (List Nat × D y) → Step y → Option (Step y)
@@ -452,14 +513,15 @@ def collect (th : Theory y) (fuel : Nat) (fr : Frame y) : List (List Nat × D y)
 substitution is reducible; `none` when the reduction ran out of fuel. -/
 def child (th : Theory y) (fuel : Nat) (fr : Frame y) (u : Unifier y) : Option (Option (Variant y)) :=
   Interrupt.guard none fun _ =>
-  let vsN := fun j => u.sorts.getD j .msg
-  let soN := fun j => u.sorts[j]?
-  let θ := fun k => u.tImgs.getD (fr.tvIdx.getD k 0) (.var 0)
+  let (eImgs, tImgs, sorts) := lift fr u.ne u.cs u.ans
+  let vsN := fun j => sorts.getD j .msg
+  let soN := fun j => sorts[j]?
+  let θ := fun k => tImgs.getD (fr.tvIdx.getD k 0) (.var 0)
   let newSubst := fr.v.subst.map fun d => norm th.rt.vranks soN (subst θ d)
   if newSubst.any (reducible th vsN) then some none else
-  let repl := subst (fun j => u.eImgs.getD j (.var 0)) u.rhs
+  let repl := subst (fun j => eImgs.getD j (.var 0)) u.rhs
   (nf th vsN fuel (rebuild θ fr.v.term u.path repl)).map fun t =>
-    some { subst := newSubst, term := t, sorts := u.sorts }
+    some { subst := newSubst, term := t, sorts }
 
 /-- One narrowing step of `v`: the new variants in Maude's order, and the
 canonical answers of the search so far. `none` when the unifier or a
