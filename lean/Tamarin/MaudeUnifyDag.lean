@@ -466,17 +466,46 @@ theorem cmpKeyed_keyed (r : Ranks s) (sortOf : Nat → Option SortId) (a b : Dag
   · rfl
   · cases a <;> cases b <;> simp_all [cmpBody]
 
+/-- `mergeSort` with the cases of two and three elements written out. -/
+@[specialize] def sortSmall {α : Type} (le : α → α → Bool) : List α → List α
+  | [a, b] => if le a b then [a, b] else [b, a]
+  | [a, b, c] =>
+    if le a b then (if le a c then a :: (if le b c then [b, c] else [c, b]) else [c, a, b])
+    else (if le b c then b :: (if le a c then [a, c] else [c, a]) else [c, b, a])
+  | l => l.mergeSort le
+
+theorem sortSmall_eq {α : Type} (le : α → α → Bool) (l : List α) : sortSmall le l = l.mergeSort le := by
+  match l with
+  | [] => simp [sortSmall]
+  | [a] => simp [sortSmall]
+  | [a, b] => simp [sortSmall]
+  | [a, b, c] =>
+    simp [sortSmall, List.mergeSort, List.MergeSort.Internal.splitInTwo]
+    split <;> split <;> (try split) <;> simp_all
+  | a :: b :: c :: d :: rest => simp [sortSmall]
+
 /-- `normAC` sorting keyed dags. -/
 def normACKeyed (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (args : List (Dag s)) :
     List (Dag s) :=
   (((flat f args).map (keyed r sortOf)).mergeSort fun a b => cmpKeyed r sortOf a b != .gt).map (·.1)
 
-@[csimp] theorem normAC_eq_normACKeyed : @normAC = @normACKeyed := by
+theorem normAC_eq_normACKeyed : @normAC = @normACKeyed := by
   funext s i1 i2 i3 i4 r sortOf f args
   unfold normAC normACKeyed
   rw [← List.map_mergeSort (fun a _ b _ => by rw [cmpKeyed_keyed]), List.map_map]
   have : (Prod.fst ∘ keyed r sortOf) = id := by funext d; rfl
   rw [this, List.map_id]
+
+/-- `normACKeyed` sorting short lists directly. -/
+def normACSmall (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (args : List (Dag s)) :
+    List (Dag s) :=
+  (sortSmall (fun a b => cmpKeyed r sortOf a b != .gt) ((flat f args).map (keyed r sortOf))).map (·.1)
+
+@[csimp] theorem normAC_eq_normACSmall : @normAC = @normACSmall := by
+  rw [normAC_eq_normACKeyed]
+  funext s i1 i2 i3 i4 r sortOf f args
+  unfold normACKeyed normACSmall
+  rw [sortSmall_eq]
 
 /-- A C node with its arguments in the term order. -/
 def mkComm (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.CSym) (a b : Dag s) : Dag s :=

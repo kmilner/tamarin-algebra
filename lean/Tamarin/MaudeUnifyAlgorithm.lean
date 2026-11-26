@@ -535,12 +535,28 @@ def normPicksFast (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (
         fun a b => Dag.cmpKeyed r sortOf a.1 b.1 != .gt)
     else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
 
-@[csimp] theorem normPicks_eq_normPicksFast : @normPicks = @normPicksFast := by
+theorem normPicks_eq_normPicksFast : @normPicks = @normPicksFast := by
   funext s i1 i2 i3 i4 r sortOf f picks
   match picks with
   | [] => simp [normPicks, normPicksFast, expandKeyed]
   | [(w, m)] => cases w <;> simp [normPicks, normPicksFast, isVarD, Dag.keyed]
   | p :: q :: rest => simp only [normPicks, normPicksFast]; rw [expandKeyed_eq]
+
+/-- `normPicksFast` sorting short lists directly. -/
+def normPicksSmall (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag s × Nat)) : List (Dag s) :=
+  match picks with
+  | [(w, m)] => if isVarD w then List.replicate m w else Dag.normAC r sortOf f (List.replicate m w)
+  | _ =>
+    if picks.all (fun p => match p.1 with | .var _ => true | _ => false) then
+      expandKeyed (Dag.sortSmall (fun a b => Dag.cmpKeyed r sortOf a.1 b.1 != .gt)
+        (picks.map fun p => (Dag.keyed r sortOf p.1, p.2)))
+    else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
+
+@[csimp] theorem normPicks_eq_normPicksSmall : @normPicks = @normPicksSmall := by
+  rw [normPicks_eq_normPicksFast]
+  funext s i1 i2 i3 i4 r sortOf f picks
+  unfold normPicksFast normPicksSmall
+  rw [Dag.sortSmall_eq]
 
 /-- What the selected elements assign to subterm `i`, and whether it is a
 product of the symbol. -/
