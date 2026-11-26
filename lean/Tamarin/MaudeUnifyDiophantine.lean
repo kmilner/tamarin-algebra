@@ -239,6 +239,24 @@ def first (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) : Lis
     ⟨Vector.ofFn fun j => if j = i then 1 else 0, cols[i],
       Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1)⟩
 
+/-- `first` building each unit vector by one update. -/
+def firstFast (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) : List (State n m) :=
+  (List.finRange n).reverse.map fun (i : Fin n) =>
+    ⟨(Vector.replicate n 0).set i.val 1 i.isLt, cols[i],
+      Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1)⟩
+
+@[csimp] theorem first_eq_firstFast : @first = @firstFast := by
+  funext n m cols upper
+  unfold first firstFast
+  congr 1
+  funext i
+  congr 1
+  refine Vector.ext fun j hj => ?_
+  simp only [Vector.getElem_ofFn, Vector.getElem_set, Vector.getElem_replicate]
+  by_cases h : i.val = j
+  · subst h; simp
+  · simp [h, Fin.ext_iff, Ne.symm h]
+
 /-- The basis in the order Maude finds it, or `none` when the step budget ran out. -/
 def basis [Interrupt] (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) (fuel : Nat) :
     Option (List (Vector Nat n)) :=

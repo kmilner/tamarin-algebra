@@ -59,6 +59,18 @@ end
 def colsOf (n : Nat) (rows : List (List Int)) : Vector (Vector Int rows.length) n :=
   Vector.ofFn fun i => Vector.ofFn fun j => (rows.getD j []).getD i 0
 
+/-- `colsOf` reading the rows from arrays. -/
+def colsOfFast (n : Nat) (rows : List (List Int)) : Vector (Vector Int rows.length) n :=
+  let rowsA := rows.toArray.map List.toArray
+  Vector.ofFn fun i => Vector.ofFn fun j => (rowsA.getD j #[]).getD i 0
+
+@[csimp] theorem colsOf_eq_colsOfFast : @colsOf = @colsOfFast := by
+  funext n rows
+  refine Vector.ext fun i hi => Vector.ext fun j hj => ?_
+  simp only [colsOf, colsOfFast, Vector.getElem_ofFn]
+  have hj' : j < rows.length := hj
+  simp [List.getD_eq_getElem?_getD, Array.getD_eq_getD_getElem?, hj']
+
 /-! ### Counting factors -/
 
 /-- Occurrences of a class in a list of classes. -/
