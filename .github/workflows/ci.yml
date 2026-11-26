@@ -47,6 +47,7 @@ jobs:
           lake env lean Tests/BoundedVariants.lean
           lake env lean Tests/ConstantDefinitions.lean
           lake env lean Tests/TotalUnifyPacket.lean
+          lake env lean Tests/MaudeUnifyExport.lean
           lake env lean Tests/UnifierNames.lean
           lake env lean Tests/TotalMatchPacket.lean
           lake env lean Tests/BagMatching.lean

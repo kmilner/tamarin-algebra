@@ -173,6 +173,7 @@ PATH_REDUCE = "@PathReductionWire.run i ds ns rules root fuel"
 SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
 SESSION_CHECK = "@SessionVariantCheckWire.run i ds ns rules extra roots family fuel work"
 NAME_RUN = "UnifierNames.run names heads ranges proposal nat low"
+MAUDE_RUN = "@MaudeUnifyExport.run i decls ranks fuel nodes roots"
 EXPORT_MUTATIONS = [
     ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem theoryCertify_sound"),
     ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
@@ -206,6 +207,14 @@ EXPORT_MUTATIONS = [
      "theorem totalUnify_quiet"),  # theoryUnify_correct
     ("total_ignores_its_caller", "Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots",
      "totalUnifyFor Interrupt.never decls nodes roots", "theorem exportedTotalUnify_interrupted"),  # theoryUnify_interrupted
+    ("maude_discards_arms", MAUDE_RUN, "#[#[1]]", "theorem maudeUnify_quiet"),  # theoryMaudeUnify_correct
+    ("maude_ignores_equation_tail", MAUDE_RUN,
+     "@MaudeUnifyExport.run i decls ranks fuel nodes (roots.extract 0 2)",
+     "theorem maudeUnify_quiet"),  # theoryMaudeUnify_correct
+    ("maude_ignores_its_caller",
+     "Interrupt.run poll #[#[4]] fun i => maudeUnifyFor i decls ranks fuel nodes roots",
+     "maudeUnifyFor Interrupt.never decls ranks fuel nodes roots",
+     "theorem theoryMaudeUnify_interrupted"),
     ("total_exists_stops_unasked", "Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots",
      "4", "theorem totalUnifyExists_quiet"),  # theoryUnifyExists_correct
     ("match_ignores_scope", MATCH_RUN, "TotalMatchWire.run decls nodes roots #[]",
