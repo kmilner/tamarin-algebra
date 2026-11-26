@@ -135,3 +135,8 @@ import Tamarin.MaudeUnifyRun
 import Tamarin.MaudeUnifyBridge
 import Tamarin.MaudeUnifyWire
 import Tamarin.MaudeUnifyExport
+import Tamarin.MaudeVariantsTerms
+import Tamarin.MaudeVariantsMatch
+import Tamarin.MaudeVariantsNarrow
+import Tamarin.MaudeVariantsSearch
+import Tamarin.MaudeVariantsExport
