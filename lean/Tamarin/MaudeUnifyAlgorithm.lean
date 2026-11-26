@@ -522,6 +522,36 @@ def assign (st : St s) (f : s.ACSym) (sel : List (List Nat)) (ws : List (Dag s))
   | [(w, 1)] => (w, false)
   | _ => (.ac f (normPicks r st.sortOf f picks), true)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- The witnesses that the elements give subterm `i`, with their counts, in one pass. -/
+def picksAt (i : Nat) : List (List Nat) → List (Dag s) → List (Dag s × Nat)
+  | e :: es, w :: ws => let c := e.getD i 0; if 0 < c then (w, c) :: picksAt i es ws else picksAt i es ws
+  | _, _ => []
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem picksAt_eq (i : Nat) : ∀ (sel : List (List Nat)) (ws : List (Dag s)),
+    picksAt i sel ws = ((sel.zip ws).filter fun (e, _) => 0 < e.getD i 0).map fun (e, w) => (w, e.getD i 0)
+  | [], _ => rfl
+  | _ :: _, [] => rfl
+  | e :: es, w :: ws => by
+    rw [picksAt, picksAt_eq i es ws, List.zip_cons_cons, List.filter_cons]
+    by_cases h : 0 < e.getD i 0
+    · simp only [h, decide_true, ↓reduceIte, List.map_cons]
+    · simp only [h, decide_false, Bool.false_eq_true, ↓reduceIte]
+
+/-- `assign` collecting the picks in one pass. -/
+def assignFast (st : St s) (f : s.ACSym) (sel : List (List Nat)) (ws : List (Dag s)) (i : Nat) : Dag s × Bool :=
+  let picks := picksAt i sel ws
+  match picks with
+  | [(w, 1)] => (w, false)
+  | _ => (.ac f (normPicks r st.sortOf f picks), true)
+
+@[csimp] theorem assign_eq_assignFast : @assign = @assignFast := by
+  funext s i1 i2 i3 i4 r st f sel ws i
+  unfold assign assignFast
+  rw [picksAt_eq]
+  rfl
+
 /-- `buildSolution` after the witnesses are allocated: each subterm that is
 not a reused witness is unified with what the selection assigns to it; an
 unbound variable that receives a product is bound to it directly. -/
@@ -605,9 +635,19 @@ inductive Walk where
   | done (status : Array Nat) (order : List Nat)
   | gaveUp
 
+/-- Fold over the slots a dag mentions, in the order of `vars`, without
+building the list. -/
+def foldVars {β : Type} (g : β → Nat → β) : β → Dag s → β
+  | acc, .var i => g acc i
+  | acc, .atom _ => acc
+  | acc, .free _ args => args.attach.foldl (fun acc ⟨d, _⟩ => foldVars g acc d) acc
+  | acc, .comm _ a b => foldVars g (foldVars g acc a) b
+  | acc, .ac _ args => args.attach.foldl (fun acc ⟨d, _⟩ => foldVars g acc d) acc
+
 /-- `findCycleFrom`: depth-first search through the bindings, recording each
 slot after the slots its binding mentions (`variableOrder`). `path` holds the
-slots being explored, latest first. Status 1 is being explored, 2 explored. -/
+slots being explored, latest first, and the order is kept latest first too.
+Status 1 is being explored, 2 explored. -/
 def explore (st : St s) : Nat → Array Nat → List Nat → List Nat → Nat → Walk
   | 0, _, _, _, _ => .gaveUp
   | k + 1, status, order, path, i =>
@@ -621,15 +661,17 @@ def explore (st : St s) : Nat → Array Nat → List Nat → List Nat → Nat �
         let go := fun (acc : Walk) (j : Nat) => match acc with
           | .done status order => explore st k status order (i :: path) j
           | other => other
-        match d.vars.foldl go (.done (status.setIfInBounds i 1) order) with
-        | .done status order => .done (status.setIfInBounds i 2) (order ++ [i])
+        match foldVars go (.done (status.setIfInBounds i 1) order) d with
+        | .done status order => .done (status.setIfInBounds i 2) (i :: order)
         | other => other
 
-/-- `findCycle` from the given slots in turn. -/
+/-- `findCycle` from the given slots in turn; the order is returned earliest first. -/
 def exploreAll (st : St s) (k : Nat) (roots : List Nat) : Walk :=
-  roots.foldl (fun acc i => match acc with
+  match roots.foldl (fun (acc : Walk) i => match acc with
     | .done status order => explore st k status order [] i
-    | other => other) (.done (Array.replicate st.vals.size 0) [])
+    | other => other) (Walk.done (Array.replicate st.vals.size 0) []) with
+  | .done status order => .done status order.reverse
+  | other => other
 
 /-- A cycle of bindings: each slot is bound, its binding mentions the next,
 the last's mentions the first, and some binding is not a variable. -/
