@@ -201,7 +201,7 @@ What an interrupted search computes is therefore irrelevant. The export's own re
 produced only when the very first question is answered `true`.
 
 **Proposer exports** are the other exports (`proposer` lines of the manifest): the pieces of the
-specialised variant solvers that still run in Lean, and three searches that each list a whole
+specialised variant solvers that still run in Lean, and four searches that each list a whole
 family of variants:
 
 | Export | What it runs | When the Rust backend calls it |
@@ -209,6 +209,18 @@ family of variants:
 | `tamarin_fold_variants` | Folding variant narrowing in the order of Maude's `VariantSearch` and `VariantFolder` ([`VariantFold`](Tamarin/VariantFold.lean)). | A sorted query that no specialised Rust solver covers, on a table the certifier accepted. |
 | `tamarin_checked_variants` | Narrowing bounded by a frontier depth ([`CheckedVariantsWire`](Tamarin/CheckedVariantsWire.lean)). | Kind-level queries, and every query on a table the certifier did not accept. |
 | `tamarin_general_variants` | The reference folding search over the whole table, which the caller retries with more fuel ([`GeneralVariants`](Tamarin/GeneralVariants.lean), [export](TamarinRuntime/Candidates/Table.lean)). | When the bounded search stops at its frontier on a certified table; in a batch session when no other search answered; under `TAM_RS_NATIVE_REFERENCE=variants`; and from `variants_for_convergent_theory`. |
+| `tamarin_maude_variants` | What Maude 3.5.1 lists for `get variants` on the module the Maude backend writes: its folding variant narrowing on the port of Maude's unifier, under the caller's ranks, with Maude's order of the variants, of their bindings and Maude's numbering of their variables ([`MaudeVariantsSearch`](Tamarin/MaudeVariantsSearch.lean), [wire](Tamarin/MaudeVariantsExport.lean)). | On native, every variants query, first. Where it gives up or the checker does not accept its family, native's own route (the rows above) answers. |
+
+The generator of Maude's listings reproduces Maude's `VariantSearch`, `VariantNarrowingSearchState`,
+`UnifierFilter` and `VariantFolder`: positions breadth first, the equations of a position's top
+symbol in module order, each unified with the subterm by the port of Maude's unifier, unifiers that
+bind a variable of the term to a reducible term dropped, the others filtered by subsumption, new
+variants reduced and folded, layers listed in order of creation. It is a total function: every
+recursion takes fuel or a structural measure, running out of fuel answers `#[#[3]]`, and its loops
+ask the caller's `poll`. Unifications of an equation with a subterm are shared within a call up to
+a renaming of the subterm's variables that keeps the order of their slots and names. On the captured
+corpus (4,566 distinct requests) it lists exactly the bindings Maude prints, in Maude's order; that
+is checked, not proved.
 
 The folding proposer uses the narrowing layer and the subsumption test of the certificate
 checker: a successor that is an instance of a retained variant is dropped, a successor that is
@@ -225,7 +237,9 @@ straight to that export in the same call (see the names of the range below).
 
 Proposers carry no contract. The Rust backend
 assembles their output into a proposed family of variants and uses that family only after
-`tamarin_theory_variant_check` accepted it; a rejected or undecided family fails the session.
+`tamarin_theory_variant_check` accepted it; a rejected or undecided family fails the session,
+except a family of `tamarin_maude_variants`, whose refusal sends the query to the other
+proposers.
 A wrong proposal, including a wrong pruning decision inside the proposer, therefore costs a
 rejection and never a wrong answer, which is why nothing has to be promised about a proposer.
 It follows that a proposer's output must never reach the prover without that check. The Rust
@@ -421,7 +435,8 @@ Known weak clauses:
   component search and the partition fallback. Nothing proves that every long loop asks.
   The variant checker is interruptible as well: it hands `poll` to every unification, matching
   and reduction it runs and asks before every member and every narrowing successor.
-  So is the folding proposer `tamarin_fold_variants`, which takes a `poll` as well.
+  So are the folding proposer `tamarin_fold_variants` and the generator of Maude's listings
+  `tamarin_maude_variants`, which take a `poll` as well.
   Still uninterruptible: `theory_match` and `theory_match_exists` (a fuzzing run found a
   scoped match that ignores its cancellation), `theory_certify` and every other proposer.
 
