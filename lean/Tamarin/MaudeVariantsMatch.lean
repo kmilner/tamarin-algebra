@@ -70,17 +70,25 @@ def shallowKey : D y → Nat
   | .comm f _ _ => 5 * f + 3
   | .ac f _ => 5 * f + 4
 
-/-- Whether every key of `ks` occurs in `ls` at least as often. -/
-def keysWithin (ks ls : List Nat) : Bool :=
-  ks.all fun k => ks.count k ≤ ls.count k
+/-- The number of arguments with the key `k`. -/
+def countKey (k : Nat) : List (D y) → Nat
+  | [] => 0
+  | d :: ds => (if shallowKey d == k then 1 else 0) + countKey k ds
+
+/-- Whether `ps` has at most as many elements as `ts`. -/
+def notLonger : List (D y) → List (D y) → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | _ :: ps, _ :: ts => notLonger ps ts
 
 /-- A necessary condition for the arguments `ps` of an AC pattern to match
 the arguments `ts` of a subject of the same symbol: each pattern argument
 takes at least one subject argument, and a pattern argument that is not a
 variable takes one with its top symbol. -/
 def acFits (ps ts : List (D y)) : Bool :=
-  ps.length ≤ ts.length &&
-    keysWithin ((ps.map shallowKey).filter (· != 0)) (ts.map shallowKey)
+  notLonger ps ts && ps.all fun p =>
+    let k := shallowKey p
+    k == 0 || countKey k ps ≤ countKey k ts
 
 mutual
 /-- A necessary condition for `t` to be an instance of `p`, checked without
@@ -307,6 +315,52 @@ def varsAgree (a b : Tuple y) : List (Nat × Nat) → List (Nat × Nat) → Bool
     | none =>
       (b.ms.getD i .kind).le (MS.ofSort (a.sorts.getD v .msg)) && varsAgree a b more ((v, i) :: seen)
 
+/-- The outcome of matching a component without search. -/
+inductive Det (y : Syms) where
+  | ok (σ : Sb y)
+  | fail
+  /-- The component needs the backtracking matcher. -/
+  | unknown
+
+/-- Match `pt` against `t` where no choice has to be made: free symbols, and
+AC products of variables of which at most one is unassigned, which then takes
+what the others leave (its share of each argument fixed by its multiplicity).
+Anything else is `unknown`. -/
+def mtDet (c : MC) : Nat → D y → D y → Sb y → Det y
+  | 0, _, _, _ => .unknown
+  | n + 1, pt, t, σ =>
+    match pt, t with
+    | .var i, t =>
+      match σ.getD i none with
+      | some b => if Dag.beq b t then .ok σ else .fail
+      | none => if fits c i t then .ok (σ.set! i (some t)) else .fail
+    | .atom a, .atom b => if a == b then .ok σ else .fail
+    | .free f ps, .free g ts =>
+      if f != g || ps.length != ts.length then .fail else
+      (ps.zip ts).foldl (fun acc (p, s) => match acc with
+        | .ok σ => mtDet c n p s σ
+        | other => other) (.ok σ)
+    | .ac f ps, .ac g ts =>
+      if f != g then .fail else
+      if !ps.all isVar then .unknown else
+      let groups := groupVars ps
+      let unbound := groups.filter fun (x, _) => (σ.getD x none).isNone
+      let need : List (D y) := (groups.filter fun (x, _) => (σ.getD x none).isSome).flatMap fun (x, m) =>
+        (List.replicate m (factors f ((σ.getD x none).getD (.var 0)))).flatten
+      match removeAll need ts, unbound with
+      | none, _ => .fail
+      | some [], [] => .ok σ
+      | some _, [] => .fail
+      | some left, [(x, m)] =>
+        let runs := runsOf left
+        if left.isEmpty || !runs.all (fun (_, k) => k % m == 0) then .fail else
+        let taken := runs.flatMap fun (e, k) => List.replicate (k / m) e
+        let b : D y := match taken with | [t] => t | _ => .ac f taken
+        if fits c x b then .ok (σ.set! x (some b)) else .fail
+      | some _, _ => .unknown
+    | .comm _ _ _, .comm _ _ _ => .unknown
+    | _, _ => .fail
+
 /-- Whether `b` is an instance of the pattern `a`, one matcher for every
 component at once, modulo AC and C and respecting sorts. The variable
 components are assigned first, then the matcher takes the others. -/
@@ -321,7 +375,19 @@ def Tuple.subsumes [Interrupt] (a b : Tuple y) : Bool :=
   match assignVars c b a.vars (Array.replicate a.sorts.size none) with
   | none => false
   | some σ =>
-    (mtList c matchFuel (a.rest.map (a.items.getD · (.var 0))) (a.rest.map (b.items.getD · (.var 0))) σ
-      (fun σ => some σ)).isSome
+    -- the components that need no search first, then the matcher for the others
+    let (det, deferred) := a.rest.foldl (fun (acc, deferred) i => match acc with
+      | some σ =>
+        match mtDet c matchFuel (a.items.getD i (.var 0)) (b.items.getD i (.var 0)) σ with
+        | .ok σ => (some σ, deferred)
+        | .fail => (none, deferred)
+        | .unknown => (some σ, i :: deferred)
+      | none => (none, deferred)) (some σ, [])
+    match det with
+    | none => false
+    | some σ =>
+      deferred.isEmpty ||
+        (mtList c matchFuel (deferred.map (a.items.getD · (.var 0))) (deferred.map (b.items.getD · (.var 0))) σ
+          (fun σ => some σ)).isSome
 
 end Tamarin.MaudeVariants
