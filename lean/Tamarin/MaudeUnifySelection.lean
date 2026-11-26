@@ -27,6 +27,18 @@ def support (v : Vector Nat n) : Vector Bool n := Vector.ofFn fun i => decide (0
 /-- Pointwise or. -/
 def union (a b : Vector Bool n) : Vector Bool n := Vector.ofFn fun i => a[i] || b[i]
 
+/-- `support` as a map. -/
+def supportFast (v : Vector Nat n) : Vector Bool n := v.map fun x => decide (0 < x)
+
+@[csimp] theorem support_eq_supportFast : @support = @supportFast := by
+  funext n v; exact Vector.ext fun i hi => by simp [support, supportFast]
+
+/-- `union` as a pointwise combination. -/
+def unionFast (a b : Vector Bool n) : Vector Bool n := Vector.zipWith (· || ·) a b
+
+@[csimp] theorem union_eq_unionFast : @union = @unionFast := by
+  funext n a b; exact Vector.ext fun i hi => by simp [union, unionFast]
+
 /-- The basis in Maude's list order with remainders: each element's remainder
 is the union of the supports of the elements after it. -/
 def withRems : List (Vector Nat n) → List (Elem n)
@@ -65,6 +77,19 @@ def add (tot v : Vector Nat n) : Vector Nat n := Vector.ofFn fun i => tot[i] + v
 /-- Remove the support of a vector from the uncovered coordinates. -/
 def cover (unc : Vector Bool n) (v : Vector Nat n) : Vector Bool n :=
   Vector.ofFn fun i => unc[i] && !decide (0 < v[i])
+
+/-- `add` as a pointwise combination. -/
+def addFast (tot v : Vector Nat n) : Vector Nat n := Vector.zipWith (· + ·) tot v
+
+@[csimp] theorem add_eq_addFast : @add = @addFast := by
+  funext n tot v; exact Vector.ext fun i hi => by simp [add, addFast]
+
+/-- `cover` as a pointwise combination. -/
+def coverFast (unc : Vector Bool n) (v : Vector Nat n) : Vector Bool n :=
+  Vector.zipWith (fun a b => a && !decide (0 < b)) unc v
+
+@[csimp] theorem cover_eq_coverFast : @cover = @coverFast := by
+  funext n unc v; exact Vector.ext fun i hi => by simp [cover, coverFast]
 
 /-- The selections, include before exclude, as Maude's forward and backtracking
 passes produce them. -/
