@@ -520,20 +520,71 @@ theorem same_iff {d e : Dag s} (hd : d.ground = true) (he : e.ground = true) (ρ
     · exact h
   · exact .inr
 
+/-- Whether `σ` binds a slot of the dag. -/
+def touched (σ : Nat → Option (Dag s)) : Dag s → Bool
+  | .var i => (σ i).isSome
+  | .atom _ => false
+  | .free _ args => args.attach.any fun ⟨d, _⟩ => touched σ d
+  | .comm _ a b => touched σ a || touched σ b
+  | .ac _ args => args.attach.any fun ⟨d, _⟩ => touched σ d
+
 /-- The dag with the slots that `σ` binds replaced by their values, and every
-rebuilt AC and C node normalized again (`DagNode::instantiate`). -/
+rebuilt AC and C node normalized again (`DagNode::instantiate`). A node that
+`σ` does not touch is kept as it is, as in Maude. -/
 def inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Dag s)) : Dag s → Dag s
   | .var i => (σ i).getD (.var i)
   | .atom a => .atom a
-  | .free f args => .free f (args.attach.map fun ⟨d, _⟩ => inst r sortOf σ d)
-  | .comm f a b => mkComm r sortOf f (inst r sortOf σ a) (inst r sortOf σ b)
-  | .ac f args => .ac f (normAC r sortOf f (args.attach.map fun ⟨d, _⟩ => inst r sortOf σ d))
+  | .free f args =>
+    if touched σ (.free f args) then .free f (args.attach.map fun ⟨d, _⟩ => inst r sortOf σ d)
+    else .free f args
+  | .comm f a b =>
+    if touched σ (.comm f a b) then mkComm r sortOf f (inst r sortOf σ a) (inst r sortOf σ b)
+    else .comm f a b
+  | .ac f args =>
+    if touched σ (.ac f args) then .ac f (normAC r sortOf f (args.attach.map fun ⟨d, _⟩ => inst r sortOf σ d))
+    else .ac f args
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- A dag that `σ` does not touch mentions only slots that `σ` leaves free. -/
+theorem untouched {σ : Nat → Option (Dag s)} (d : Dag s) (h : touched σ d = false) :
+    ∀ j ∈ d.vars, σ j = none := by
+  induction d using induct' with
+  | var i =>
+    intro j hj
+    simp only [vars, List.mem_singleton] at hj
+    subst hj
+    simpa [touched] using h
+  | atom a => intro j hj; simp [vars] at hj
+  | free f args ih =>
+    intro j hj
+    rw [vars_free, List.mem_flatMap] at hj
+    obtain ⟨d, hd, hj⟩ := hj
+    simp only [touched, List.any_eq_false] at h
+    exact ih d hd (by simpa using h ⟨d, hd⟩ (List.mem_attach _ _)) j hj
+  | comm f a b ia ib =>
+    intro j hj
+    simp only [touched, Bool.or_eq_false_iff] at h
+    simp only [vars, List.mem_append] at hj
+    rcases hj with hj | hj
+    · exact ia h.1 j hj
+    · exact ib h.2 j hj
+  | ac f args ih =>
+    intro j hj
+    rw [vars_ac, List.mem_flatMap] at hj
+    obtain ⟨d, hd, hj⟩ := hj
+    simp only [touched, List.any_eq_false] at h
+    exact ih d hd (by simpa using h ⟨d, hd⟩ (List.mem_attach _ _)) j hj
 
 /-- The valuation that gives each bound slot the denotation of its value. -/
 def through (ρ : Nat → Term s) (σ : Nat → Option (Dag s)) (i : Nat) : Term s :=
   match σ i with
   | some d => eval ρ d
   | none => ρ i
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem eval_untouched {σ : Nat → Option (Dag s)} (ρ : Nat → Term s) (d : Dag s) (h : touched σ d = false) :
+    eval ρ d = eval (through ρ σ) d :=
+  eval_congr d fun j hj => by rw [through, untouched d h j hj]
 
 theorem eval_inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Dag s))
     (ρ : Nat → Term s) (d : Dag s) : EquivB (eval ρ (inst r sortOf σ d)) (eval (through ρ σ) d) := by
@@ -543,24 +594,31 @@ theorem eval_inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → O
     cases σ i <;> simp [eval_var] <;> exact .refl _
   | atom a => rw [inst, eval_atom, eval_atom]; exact .refl _
   | free f args ih =>
-    rw [inst, eval_free, eval_free]
-    apply EquivB.free
-    intro i
-    simp only [List.getD_eq_getElem?_getD, List.getElem?_map, List.map_attach_eq_pmap]
-    cases h : args[i.val]? with
-    | none => simp [h]; exact .refl _
-    | some d => simpa [List.getElem?_pmap, h] using ih d (List.mem_of_getElem? h)
+    rw [inst]
+    split
+    · rw [eval_free, eval_free]
+      apply EquivB.free
+      intro i
+      simp only [List.getD_eq_getElem?_getD, List.getElem?_map, List.map_attach_eq_pmap]
+      cases h : args[i.val]? with
+      | none => simp [h]; exact .refl _
+      | some d => simpa [List.getElem?_pmap, h] using ih d (List.mem_of_getElem? h)
+    · next h => rw [eval_untouched ρ _ (by simpa using h)]; exact .refl _
   | comm f a b ia ib =>
     rw [inst]
-    exact .trans (eval_mkComm r sortOf ρ f _ _) (by rw [eval_comm, eval_comm]; exact .comm_congr f ia ib)
+    split
+    · exact .trans (eval_mkComm r sortOf ρ f _ _) (by rw [eval_comm, eval_comm]; exact .comm_congr f ia ib)
+    · next h => rw [eval_untouched ρ _ (by simpa using h)]; exact .refl _
   | ac f args ih =>
     rw [inst]
-    refine .trans (eval_normAC r sortOf ρ f _) ?_
-    rw [eval_ac, eval_ac]
-    have same : ((args.attach.map fun (x : {d // d ∈ args}) => inst r sortOf σ x.val).map (eval ρ)) =
-        args.map (fun d => eval ρ (inst r sortOf σ d)) := by simp
-    rw [same]
-    exact product_map_congr f args _ _ fun d hd => ih d hd
+    split
+    · refine .trans (eval_normAC r sortOf ρ f _) ?_
+      rw [eval_ac, eval_ac]
+      have same : ((args.attach.map fun (x : {d // d ∈ args}) => inst r sortOf σ x.val).map (eval ρ)) =
+          args.map (fun d => eval ρ (inst r sortOf σ d)) := by simp
+      rw [same]
+      exact product_map_congr f args _ _ fun d hd => ih d hd
+    · next h => rw [eval_untouched ρ _ (by simpa using h)]; exact .refl _
 
 /-- The dag of a term: AC applications flattened and sorted, C arguments
 sorted, variables in the slots `slot` gives them. -/

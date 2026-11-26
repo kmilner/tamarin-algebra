@@ -378,17 +378,25 @@ theorem inst_var (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option
     inst r so σ (.var i) = (σ i).getD (.var i) := by rw [inst]
 
 theorem inst_free (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.FreeSym)
-    (args : List (Dag s)) : inst r so σ (.free f args) = .free f (args.map (inst r so σ)) := by
+    (args : List (Dag s)) : inst r so σ (.free f args) =
+      if touched σ (.free f args) then .free f (args.map (inst r so σ)) else .free f args := by
   rw [inst]; simp
 
 theorem inst_comm (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.CSym)
-    (a b : Dag s) : inst r so σ (.comm f a b) = mkComm r so f (inst r so σ a) (inst r so σ b) := by
+    (a b : Dag s) : inst r so σ (.comm f a b) =
+      if touched σ (.comm f a b) then mkComm r so f (inst r so σ a) (inst r so σ b) else .comm f a b := by
   rw [inst]
 
 theorem inst_ac (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.ACSym)
-    (args : List (Dag s)) :
-    inst r so σ (.ac f args) = .ac f (normAC r so f (args.map (inst r so σ))) := by
+    (args : List (Dag s)) : inst r so σ (.ac f args) =
+      if touched σ (.ac f args) then .ac f (normAC r so f (args.map (inst r so σ))) else .ac f args := by
   rw [inst]; simp
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- An untouched dag is its own instance. -/
+theorem mem_vars_untouched {σ : Nat → Option (Dag s)} {d : Dag s} (h : touched σ d = false) {x : Nat}
+    (hx : x ∈ d.vars) : ∃ j ∈ d.vars, (σ j = none ∧ x = j) ∨ ∃ e, σ j = some e ∧ x ∈ e.vars :=
+  ⟨x, hx, .inl ⟨untouched d h x hx, rfl⟩⟩
 
 theorem mem_vars_mkComm {r : Ranks s} {so : Nat → Option SortId} {f : s.CSym} {a b : Dag s} {x : Nat}
     (h : x ∈ (mkComm r so f a b).vars) : x ∈ a.vars ∨ x ∈ b.vars := by
@@ -487,13 +495,18 @@ theorem mem_vars_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → O
     | some e => rw [hσ] at h; exact .inr ⟨e, rfl, h⟩
   | atom a => rw [inst] at h; simp [vars] at h
   | free f args ih =>
-    rw [inst_free, vars_free, List.mem_flatMap] at h
+    rw [inst_free] at h
+    split at h
+    case isFalse t => exact mem_vars_untouched (by simpa using t) h
+    rw [vars_free, List.mem_flatMap] at h
     obtain ⟨e, he, hx⟩ := h
     obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
     obtain ⟨j, hj, hr⟩ := ih a ha hx
     exact ⟨j, by rw [vars_free, List.mem_flatMap]; exact ⟨a, ha, hj⟩, hr⟩
   | comm f a b ia ib =>
     rw [inst_comm] at h
+    split at h
+    case isFalse t => exact mem_vars_untouched (by simpa using t) h
     rcases mem_vars_mkComm h with h | h
     · obtain ⟨j, hj, hr⟩ := ia h
       exact ⟨j, by rw [vars_comm]; exact List.mem_append_left _ hj, hr⟩
@@ -501,6 +514,8 @@ theorem mem_vars_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → O
       exact ⟨j, by rw [vars_comm]; exact List.mem_append_right _ hj, hr⟩
   | ac f args ih =>
     rw [inst_ac] at h
+    split at h
+    case isFalse t => exact mem_vars_untouched (by simpa using t) h
     obtain ⟨e, he, hx⟩ := mem_vars_normAC h
     obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
     obtain ⟨j, hj, hr⟩ := ih a ha hx
@@ -516,19 +531,26 @@ theorem wf_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option 
     | some e => exact hσ i (by simp [vars]) e h
   | atom a => rw [inst]; trivial
   | free f args ih =>
+    rw [inst_free]
+    split
+    case isFalse => exact hd
     rw [Wf] at hd
-    rw [inst_free, Wf, List.length_map]
+    rw [Wf, List.length_map]
     refine ⟨hd.1, fun e he => ?_⟩
     obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
     exact ih a ha (hd.2 a ha) fun j hj => hσ j (by rw [vars_free, List.mem_flatMap]; exact ⟨a, ha, hj⟩)
   | comm f a b ia ib =>
-    rw [Wf] at hd
     rw [inst_comm]
+    split
+    case isFalse => exact hd
+    rw [Wf] at hd
     exact wf_mkComm r so f (ia hd.1 fun j hj => hσ j (by rw [vars_comm]; exact List.mem_append_left _ hj))
       (ib hd.2 fun j hj => hσ j (by rw [vars_comm]; exact List.mem_append_right _ hj))
   | ac f args ih =>
-    rw [Wf] at hd
     rw [inst_ac]
+    split
+    case isFalse => exact hd
+    rw [Wf] at hd
     refine wf_normAC r so f (by simpa using hd.1) fun e he => ?_
     obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
     exact ih a ha (hd.2 a ha) fun j hj => hσ j (by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩)
