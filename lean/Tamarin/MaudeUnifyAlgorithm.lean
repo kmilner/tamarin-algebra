@@ -635,15 +635,6 @@ inductive Walk where
   | done (status : Array Nat) (order : List Nat)
   | gaveUp
 
-/-- Fold over the slots a dag mentions, in the order of `vars`, without
-building the list. -/
-def foldVars {β : Type} (g : β → Nat → β) : β → Dag s → β
-  | acc, .var i => g acc i
-  | acc, .atom _ => acc
-  | acc, .free _ args => args.attach.foldl (fun acc ⟨d, _⟩ => foldVars g acc d) acc
-  | acc, .comm _ a b => foldVars g (foldVars g acc a) b
-  | acc, .ac _ args => args.attach.foldl (fun acc ⟨d, _⟩ => foldVars g acc d) acc
-
 /-- `findCycleFrom`: depth-first search through the bindings, recording each
 slot after the slots its binding mentions (`variableOrder`). `path` holds the
 slots being explored, latest first, and the order is kept latest first too.
@@ -661,7 +652,7 @@ def explore (st : St s) : Nat → Array Nat → List Nat → List Nat → Nat �
         let go := fun (acc : Walk) (j : Nat) => match acc with
           | .done status order => explore st k status order (i :: path) j
           | other => other
-        match foldVars go (.done (status.setIfInBounds i 1) order) d with
+        match d.vars.foldl go (.done (status.setIfInBounds i 1) order) with
         | .done status order => .done (status.setIfInBounds i 2) (i :: order)
         | other => other
 
