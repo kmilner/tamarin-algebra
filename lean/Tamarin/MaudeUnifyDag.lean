@@ -596,7 +596,7 @@ def instArgs (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (parts
     fun a b => cmp r sortOf a b != .gt
 
 /-- Whether every slot of the dag passes a test, without building the list. -/
-@[specialize] def allVars (p : Nat → Bool) : Dag s → Bool
+def allVars (p : Nat → Bool) : Dag s → Bool
   | .var i => p i
   | .atom _ => true
   | .free _ args => args.attach.all fun ⟨d, _⟩ => allVars p d
