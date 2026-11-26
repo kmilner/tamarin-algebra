@@ -239,17 +239,45 @@ def first (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) : Lis
     ⟨Vector.ofFn fun j => if j = i then 1 else 0, cols[i],
       Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1)⟩
 
+/-- The frozen coordinates of the start at coordinate `i`: the earlier ones,
+and `i` itself when its bound is one, built from three runs. -/
+def frozenAt (upper : Vector (Option Nat) n) (i : Fin n) : Vector Bool n :=
+  ⟨(Array.replicate i.val true).push (upper[i] == some 1) ++ Array.replicate (n - i.val - 1) false, by
+    simp only [Array.size_append, Array.size_push, Array.size_replicate]; omega⟩
+
+theorem frozenAt_eq (upper : Vector (Option Nat) n) (i : Fin n) :
+    frozenAt upper i = Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1) := by
+  refine Vector.ext fun j hj => ?_
+  simp only [frozenAt, Vector.getElem_mk, Vector.getElem_ofFn]
+  rw [Array.getElem_append]
+  split
+  · next h =>
+    rw [Array.getElem_push]
+    split
+    · next h' =>
+      simp only [Array.size_replicate] at h'
+      simp [h']
+    · next h' =>
+      simp only [Array.size_replicate, Array.size_push] at h h'
+      have : j = i.val := by omega
+      subst this; simp
+  · next h =>
+    simp at h
+    have : ¬ j < i.val := by omega
+    have : j ≠ i.val := by omega
+    simp [*, Fin.ext_iff]
+
 /-- `first` building each unit vector by one update. -/
 def firstFast (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) : List (State n m) :=
   (List.finRange n).reverse.map fun (i : Fin n) =>
-    ⟨(Vector.replicate n 0).set i.val 1 i.isLt, cols[i],
-      Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1)⟩
+    ⟨(Vector.replicate n 0).set i.val 1 i.isLt, cols[i], frozenAt upper i⟩
 
 @[csimp] theorem first_eq_firstFast : @first = @firstFast := by
   funext n m cols upper
   unfold first firstFast
   congr 1
   funext i
+  rw [frozenAt_eq]
   congr 1
   refine Vector.ext fun j hj => ?_
   simp only [Vector.getElem_ofFn, Vector.getElem_set, Vector.getElem_replicate]
