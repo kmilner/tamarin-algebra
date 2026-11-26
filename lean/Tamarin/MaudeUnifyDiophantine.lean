@@ -130,7 +130,7 @@ def issueFast (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m)
       (acc.1 + 1, acc.2 || decide (σ.residue[r] * cols[j][r] < 0)) else acc) (0, false)
     !(σ.residue[r] == 0 || t.2) || t.1 == 1
 
-theorem issue_eq_issueFast : @issue = @issueFast := by
+@[csimp] theorem issue_eq_issueFast : @issue = @issueFast := by
   funext n m cols σ
   unfold issue issueFast hopeful movable
   rw [firstFin_eq]
@@ -141,63 +141,6 @@ theorem issue_eq_issueFast : @issue = @issueFast := by
   unfold tally at this
   rw [this]
   simp
-
-/-- The tally of `issueFast` kept in one number: twice the count of movable
-coordinates, plus one when one of them moves the equation towards zero. -/
-def tallyStep (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) (t : Nat) (j : Fin n) : Nat :=
-  if !σ.frozen[j] && cols[j][r] != 0 then
-    t + 2 + (if t % 2 == 0 && decide (σ.residue[r] * cols[j][r] < 0) then 1 else 0)
-  else t
-
-theorem tallyStep_foldl (cols : Vector (Vector Int m) n) (σ : State n m) (r : Fin m) :
-    ∀ (l : List (Fin n)) (acc : Nat × Bool),
-      l.foldl (tallyStep cols σ r) (2 * acc.1 + if acc.2 then 1 else 0) =
-        let res := l.foldl (fun acc j => if !σ.frozen[j] && cols[j][r] != 0 then
-          (acc.1 + 1, acc.2 || decide (σ.residue[r] * cols[j][r] < 0)) else acc) acc
-        2 * res.1 + if res.2 then 1 else 0
-  | [], acc => rfl
-  | j :: l, acc => by
-    rw [List.foldl_cons, List.foldl_cons]
-    rw [← tallyStep_foldl cols σ r l]
-    congr 1
-    unfold tallyStep
-    by_cases h : (!σ.frozen[j] && cols[j][r] != 0) = true
-    · simp only [h, ↓reduceIte]
-      cases acc.2 <;> cases decide (σ.residue[r] * cols[j][r] < 0) <;> simp <;> omega
-    · simp only [h, Bool.false_eq_true, ↓reduceIte]
-
-theorem enc_mod (c : Nat) (b : Bool) : ((2 * c + if b then 1 else 0) % 2 == 1) = b := by
-  cases b
-  · have : (2 * c + 0) % 2 = 0 := by omega
-    simp only [Bool.false_eq_true, ↓reduceIte, this]; rfl
-  · have : (2 * c + 1) % 2 = 1 := by omega
-    simp only [↓reduceIte, this]; rfl
-
-theorem enc_div (c : Nat) (b : Bool) : ((2 * c + if b then 1 else 0) / 2 == 1) = (c == 1) := by
-  cases b
-  · have : (2 * c + 0) / 2 = c := by omega
-    simp only [Bool.false_eq_true, ↓reduceIte, this]
-  · have : (2 * c + 1) / 2 = c := by omega
-    simp only [↓reduceIte, this]
-
-/-- `issueFast` with the tally in one number. -/
-def issueFast2 (cols : Vector (Vector Int m) n) (σ : State n m) : Option (Fin m) :=
-  firstFin m fun r =>
-    let t := Fin.foldl n (tallyStep cols σ r) 0
-    !(σ.residue[r] == 0 || t % 2 == 1) || t / 2 == 1
-
-@[csimp] theorem issue_eq_issueFast2 : @issue = @issueFast2 := by
-  rw [issue_eq_issueFast]
-  funext n m cols σ
-  unfold issueFast issueFast2
-  congr 1
-  funext r
-  rw [Fin.foldl_eq_finRange_foldl, Fin.foldl_eq_finRange_foldl]
-  have := tallyStep_foldl cols σ r (List.finRange n) (0, false)
-  simp only [Nat.mul_zero, Bool.false_eq_true, ite_false, Nat.add_zero] at this
-  rw [this]
-  dsimp only
-  rw [enc_mod, enc_div]
 
 /-- What the equation checks make of a state before it is expanded. -/
 inductive Verdict (n m : Nat) where

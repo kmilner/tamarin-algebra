@@ -467,7 +467,7 @@ theorem cmpKeyed_keyed (r : Ranks s) (sortOf : Nat → Option SortId) (a b : Dag
   · cases a <;> cases b <;> simp_all [cmpBody]
 
 /-- `mergeSort` with the cases of two and three elements written out. -/
-@[specialize] def sortSmall {α : Type} (le : α → α → Bool) : List α → List α
+@[inline] def sortSmall {α : Type} (le : α → α → Bool) : List α → List α
   | [a, b] => if le a b then [a, b] else [b, a]
   | [a, b, c] =>
     if le a b then (if le a c then a :: (if le b c then [b, c] else [c, b]) else [c, a, b])
