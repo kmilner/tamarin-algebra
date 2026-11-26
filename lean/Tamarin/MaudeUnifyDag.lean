@@ -566,6 +566,33 @@ def instArgs (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (parts
   List.merge ((parts.filter fun p => !p.1).map (·.2)) (normAC r sortOf f ((parts.filter (·.1)).map (·.2)))
     fun a b => cmp r sortOf a b != .gt
 
+/-- Whether every slot of the dag passes a test, without building the list. -/
+@[specialize] def allVars (p : Nat → Bool) : Dag s → Bool
+  | .var i => p i
+  | .atom _ => true
+  | .free _ args => args.attach.all fun ⟨d, _⟩ => allVars p d
+  | .comm _ a b => allVars p a && allVars p b
+  | .ac _ args => args.attach.all fun ⟨d, _⟩ => allVars p d
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem allVars_eq (p : Nat → Bool) (d : Dag s) : allVars p d = d.vars.all p := by
+  induction d using induct' with
+  | var i => simp [allVars, vars]
+  | atom a => simp [allVars, vars]
+  | free f args ih =>
+    rw [allVars, vars_free, List.all_flatMap]
+    apply Bool.eq_iff_iff.mpr
+    simp only [List.all_eq_true, List.mem_attach, true_implies, Subtype.forall]
+    exact ⟨fun h d hd => by have := h d hd; rw [ih d hd, List.all_eq_true] at this; exact this,
+      fun h d hd => by rw [ih d hd, List.all_eq_true]; exact h d hd⟩
+  | comm f a b ia ib => simp [allVars, vars, ia, ib, List.all_append]
+  | ac f args ih =>
+    rw [allVars, vars_ac, List.all_flatMap]
+    apply Bool.eq_iff_iff.mpr
+    simp only [List.all_eq_true, List.mem_attach, true_implies, Subtype.forall]
+    exact ⟨fun h d hd => by have := h d hd; rw [ih d hd, List.all_eq_true] at this; exact this,
+      fun h d hd => by rw [ih d hd, List.all_eq_true]; exact h d hd⟩
+
 /-- Whether `σ` binds a slot of the dag. -/
 def touched (σ : Nat → Option (Dag s)) : Dag s → Bool
   | .var i => (σ i).isSome

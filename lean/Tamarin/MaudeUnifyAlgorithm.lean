@@ -678,7 +678,10 @@ def explore (st : St s) : Nat → Array Nat → List Nat → List Nat → Nat �
       | none => .done (status.setIfInBounds i 2) order
       | some d =>
         let go := fun (acc : Walk) (j : Nat) => match acc with
-          | .done status order => explore st k status order (i :: path) j
+          | .done status order =>
+            -- an explored slot is skipped without a call, as the call would return at once
+            if k ≠ 0 ∧ status.getD j 0 = 2 then .done status order
+            else explore st k status order (i :: path) j
           | other => other
         match d.vars.foldl go (.done (status.setIfInBounds i 1) order) with
         | .done status order => .done (status.setIfInBounds i 2) (i :: order)
@@ -721,6 +724,26 @@ def isOrder (st : St s) (order : List Nat) : Bool :=
   match order.foldl step (some (Array.replicate st.vals.size false)) with
   | none => false
   | some seen => (List.range st.vals.size).all fun i => (st.value i).isNone || seen.getD i false
+
+/-- `isOrder` testing the slots of a binding without building their list. -/
+def isOrderFast (st : St s) (order : List Nat) : Bool :=
+  let step := fun (acc : Option (Array Bool)) (i : Nat) => match acc with
+    | none => none
+    | some seen =>
+      match st.value i with
+      | none => none
+      | some d =>
+        if Dag.allVars (fun j => (st.value j).isNone || seen.getD j false) d then
+          some (seen.setIfInBounds i true)
+        else none
+  match order.foldl step (some (Array.replicate st.vals.size false)) with
+  | none => false
+  | some seen => (List.range st.vals.size).all fun i => (st.value i).isNone || seen.getD i false
+
+@[csimp] theorem isOrder_eq_isOrderFast : @isOrder = @isOrderFast := by
+  funext s st order
+  unfold isOrder isOrderFast
+  simp only [Dag.allVars_eq]
 
 /-- Instantiate the bindings in the order (`DagNode::instantiate`). -/
 def instantiate (st : St s) (order : List Nat) : St s :=
