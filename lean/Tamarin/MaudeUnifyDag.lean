@@ -369,6 +369,60 @@ def cmpN (r : Ranks s) (sortOf : Nat → Option SortId) : Nat → Dag s → Dag 
       pairsBy (cmpN r sortOf n) (rx.zip ry)
     | _, _ => .eq
 
+/-- The comparison of two dags with the same top rank. -/
+def cmpBody (r : Ranks s) (c : Dag s → Dag s → Ordering) : Dag s → Dag s → Ordering
+  | .var i, .var j => compare (r.name i) (r.name j)
+  | .atom a, .atom b => compare (r.atomArg a) (r.atomArg b)
+  | .free _ xs, .free _ ys => lexBy c (xs.zip ys)
+  | .comm _ a b, .comm _ c' d => lexBy c [(a, c'), (b, d)]
+  | .ac _ xs, .ac _ ys =>
+    let rx := runs xs
+    let ry := runs ys
+    if rx.length ≠ ry.length then compare rx.length ry.length else
+    pairsBy c (rx.zip ry)
+  | _, _ => .eq
+
+theorem cmpN_succ (r : Ranks s) (sortOf : Nat → Option SortId) (n : Nat) (x y : Dag s) :
+    cmpN r sortOf (n + 1) x y =
+      if top r sortOf x ≠ top r sortOf y then compare (top r sortOf x) (top r sortOf y)
+      else cmpBody r (cmpN r sortOf n) x y := by
+  cases x <;> cases y <;> rfl
+
+/-- Whether two dags have the same top symbol, hence the same top rank. -/
+def sameTop (sortOf : Nat → Option SortId) : Dag s → Dag s → Bool
+  | .var i, .var j => sortOf i == sortOf j
+  | .atom a, .atom b => decide (a = b)
+  | .free f _, .free g _ => decide (f = g)
+  | .comm f _ _, .comm g _ _ => decide (f = g)
+  | .ac f _, .ac g _ => decide (f = g)
+  | _, _ => false
+
+theorem top_eq_of_sameTop (r : Ranks s) {sortOf : Nat → Option SortId} {x y : Dag s} :
+    sameTop sortOf x y = true → top r sortOf x = top r sortOf y := by
+  intro h
+  cases x <;> cases y <;> simp_all [sameTop, top]
+
+/-- `cmpN` that skips the ranks of equal top symbols. -/
+def cmpNFast (r : Ranks s) (sortOf : Nat → Option SortId) : Nat → Dag s → Dag s → Ordering
+  | 0, _, _ => .eq
+  | n + 1, x, y =>
+    if sameTop sortOf x y then cmpBody r (cmpNFast r sortOf n) x y else
+    let tx := top r sortOf x
+    let ty := top r sortOf y
+    if tx ≠ ty then compare tx ty else cmpBody r (cmpNFast r sortOf n) x y
+
+@[csimp] theorem cmpN_eq_cmpNFast : @cmpN = @cmpNFast := by
+  funext s i1 i2 i3 i4 r sortOf n
+  induction n with
+  | zero => funext x y; rfl
+  | succ n ih =>
+    funext x y
+    rw [cmpN_succ, cmpNFast, ih]
+    by_cases h : sameTop sortOf x y = true
+    · have e := top_eq_of_sameTop r h
+      simp only [h, e, ne_eq, not_true_eq_false, ite_false, ite_true]
+    · simp only [h, Bool.false_eq_true, ite_false]
+
 /-- Maude's term order on dags. -/
 def cmp (r : Ranks s) (sortOf : Nat → Option SortId) (x y : Dag s) : Ordering :=
   cmpN r sortOf (size x) x y
