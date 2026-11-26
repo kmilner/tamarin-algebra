@@ -56,13 +56,30 @@ def map (f : α → β) : Res α → Res β
 
 /-- Concatenate the lists of a list of computations; a failed one contributes
 nothing, one that gave up makes the whole give up. -/
-def concatMap (f : α → Res (List β)) : List α → Res (List β)
+def concatMap [Interrupt] (f : α → Res (List β)) : List α → Res (List β)
   | [] => .ok []
   | a :: as =>
     match f a with
     | .gaveUp => .gaveUp
     | .fail => concatMap f as
     | .ok bs => (concatMap f as).map (bs ++ ·)
+
+/-- `concatMap` as it is compiled: it asks before every computation, and when
+told to stop it ends with what it has. -/
+private def concatMapAsking [Interrupt] (f : α → Res (List β)) : List α → Res (List β)
+  | [] => .ok []
+  | a :: as =>
+    if Interrupt.poll () then .ok [] else
+    match f a with
+    | .gaveUp => .gaveUp
+    | .fail => concatMapAsking f as
+    | .ok bs => (concatMapAsking f as).map (bs ++ ·)
+
+@[csimp] private theorem concatMap_eq_asking : @concatMap = @concatMapAsking := by
+  funext α β i f l
+  induction l with
+  | nil => rfl
+  | cons a as ih => simp only [concatMap, concatMapAsking, Interrupt.quiet, Bool.false_eq_true, ite_false, ih]
 
 end Res
 
@@ -496,7 +513,7 @@ def buildFrom (k : Nat) (f : s.ACSym) (sel : List (List Nat)) (ws : List (Dag s)
 def basisFuel : Nat := 10000000
 
 /-- `ACU_UnificationSubproblem2::solve`: the states of all its solutions, in order. -/
-def acStates (k : Nat) (st : St s) (f : s.ACSym) (unifs : List (Dag s × Dag s)) : Res (List (St s)) :=
+def acStates [Interrupt] (k : Nat) (st : St s) (f : s.ACSym) (unifs : List (Dag s × Dag s)) : Res (List (St s)) :=
   let (subs, rows) := unifs.foldl (fun (acc : List (Dag s) × List (List Int)) (l, rt) =>
     addUnif st f acc.1 acc.2 l rt) ([], [])
   if rows.isEmpty then .ok [st] else
@@ -516,7 +533,7 @@ def acStates (k : Nat) (st : St s) (f : s.ACSym) (unifs : List (Dag s × Dag s))
       (Select.all upper basis)
 
 /-- `CUI_UnificationSubproblem::solve`: each problem forwards, then reversed. -/
-def commStates (k : Nat) : St s → List (Dag s × Dag s) → Res (List (St s))
+def commStates [Interrupt] (k : Nat) : St s → List (Dag s × Dag s) → Res (List (St s))
   | st, [] => .ok [st]
   | st, (l, rt) :: rest =>
     match l, rt with
@@ -538,7 +555,7 @@ def chooseTheory (st : St s) : Option (Theory s) :=
   st.pending.reverse.foldl chooseStep none
 
 /-- `PendingUnificationStack::solve`: all solved forms, in Maude's order. -/
-def run : Nat → St s → Res (List (St s))
+def run [Interrupt] : Nat → St s → Res (List (St s))
   | 0, _ => .gaveUp
   | k + 1, st =>
     match chooseTheory st with
@@ -705,7 +722,7 @@ def solveAll (k : Nat) (st : St s) (eqs : List (Dag s × Dag s)) : Res (St s) :=
 
 /-- All unifiers of dag equations over original slots with the given sorts,
 in Maude's order. -/
-def unify (k : Nat) (sorts : List SortId) (eqs : List (Dag s × Dag s)) : Res (List (Answer s)) :=
+def unify [Interrupt] (k : Nat) (sorts : List SortId) (eqs : List (Dag s × Dag s)) : Res (List (Answer s)) :=
   match solveAll r k (start sorts) eqs with
   | .gaveUp => .gaveUp
   | .fail => .ok []

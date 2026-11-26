@@ -166,14 +166,15 @@ theorem eval_side (r : Ranks s) (vs : List Variable) (ρ : Nat → Term s) (t : 
   (Dag.eval_ofTerm r _ vs.idxOf ρ t).trans (Term.subst_equiv _ _ t agree)
 
 /-- The port on a problem: `none` when it gave up. -/
-def portSolve (k : Nat) (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=
+def portSolve [Interrupt] (k : Nat) (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=
   let vs := varsOf p
   let r := ranksOf (headsOf p) vs
   let base := VariablePermutation.freshBound (avoid ++ vs)
   match h : unify r k (sortsOf vs) (dagsOf r vs p) with
-  | .ok answers => some (answers.attach.map fun ⟨ans, ha⟩ =>
+  | .ok answers => some (Interrupt.map (fun ⟨ans, ha⟩ =>
       Substitution.fromBindings (vs.map fun v => (v, answerImage vs base ans v)) (by
         intro v t hm
+        obtain rfl := Interrupt.eq_never ‹Interrupt›
         obtain ⟨w, hw, e⟩ := List.mem_map.mp hm
         obtain ⟨rfl, rfl⟩ := Prod.mk.inj e
         have hi : vs.idxOf w < (sortsOf vs).length := by
@@ -181,7 +182,7 @@ def portSolve (k : Nat) (p : Problem s) (avoid : List Variable) : Option (List (
         have := (unify_sound r k (sortsOf vs) (dagsOf r vs p)
           (fit_dagsOf r vs p fun v o => (varsOf_occurs p v).mpr o) h ha).2.1
           (fun j => .var (outVar base ans j)) (fun j => .var _) (vs.idxOf w) hi
-        simpa [sortsOf, List.getElem_idxOf, answerImage] using this))
+        simpa [sortsOf, List.getElem_idxOf, answerImage] using this)) answers.attach)
   | .fail => some []
   | .gaveUp => none
 
@@ -319,21 +320,27 @@ theorem portSolve_spec (k : Nat) (p : Problem s) (avoid : List Variable) {l : Li
 /-- The fuel of the port. -/
 def fuel : Nat := 100000
 
-/-- The port, with a fallback unifier for the problems it gives up on. -/
-def withFallback (k : Nat) (fallback : VerifiedUnifier s (fun _ => True)) : VerifiedUnifier s (fun _ => True) where
+/-- The port, with a fallback unifier for the problems it gives up on. A port
+that was told to stop does not start the fallback: the caller discards what
+an interrupted search returns, so the empty list stands for that outcome. -/
+def withFallback [Interrupt] (k : Nat) (fallback : VerifiedUnifier s (fun _ => True)) :
+    VerifiedUnifier s (fun _ => True) where
   solve p h avoid :=
     match portSolve k p avoid with
     | some answers => answers
-    | none => fallback.solve p h avoid
+    | none => Interrupt.guard [] fun _ => fallback.solve p h avoid
   correct p h avoid := by
+    obtain rfl := Interrupt.eq_never ‹Interrupt›
     split
     · next answers e => exact (portSolve_spec k p avoid e).1
     · exact fallback.correct p h avoid
   domain p h avoid σ hσ := by
+    obtain rfl := Interrupt.eq_never ‹Interrupt›
     split at hσ
     · next answers e => exact ((portSolve_spec k p avoid e).2 σ hσ).1
     · exact fallback.domain p h avoid σ hσ
   fresh p h avoid σ hσ := by
+    obtain rfl := Interrupt.eq_never ‹Interrupt›
     split at hσ
     · next answers e => exact ((portSolve_spec k p avoid e).2 σ hσ).2
     · exact fallback.fresh p h avoid σ hσ

@@ -1,4 +1,5 @@
 import Tamarin.ACHilbert
+import Tamarin.Interrupt
 
 /-!
 # Maude's Diophantine basis
@@ -172,7 +173,7 @@ def kids (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) (found
 /-- The search. `found` lists the solutions found so far, the latest first.
 A state whose residue is zero is recorded as Maude records it; otherwise it
 is checked and expanded. `none` reports an exhausted step budget. -/
-def search (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) :
+def search [Interrupt] (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) :
     Nat → List (State n m) → List (Vector Nat n) → Option (List (Vector Nat n))
   | _, [], found => some found
   | 0, _ :: _, _ => none
@@ -183,6 +184,31 @@ def search (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) :
       | .forced τ => search cols upper fuel (τ :: stack) found
       | .open τ => search cols upper fuel ((kids cols upper found τ (List.finRange n) τ.frozen).reverse ++ stack) found
 
+/-- `search` as it is compiled: every step asks first, and a search told to
+stop reports an exhausted budget. -/
+private def searchAsking [Interrupt] (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) :
+    Nat → List (State n m) → List (Vector Nat n) → Option (List (Vector Nat n))
+  | _, [], found => some found
+  | 0, _ :: _, _ => none
+  | fuel + 1, σ :: stack, found =>
+    if Interrupt.poll () then none else
+    if decide (∀ r : Fin m, σ.residue[r] = 0) then searchAsking cols upper fuel stack (σ.point :: found)
+    else match check cols upper found (n + 1) σ with
+      | .dead => searchAsking cols upper fuel stack found
+      | .forced τ => searchAsking cols upper fuel (τ :: stack) found
+      | .open τ => searchAsking cols upper fuel ((kids cols upper found τ (List.finRange n) τ.frozen).reverse ++ stack) found
+
+@[csimp] private theorem search_eq_asking : @search = @searchAsking := by
+  funext n m i cols upper fuel stack found
+  induction fuel generalizing stack found with
+  | zero => cases stack <;> rfl
+  | succ fuel ih =>
+    cases stack with
+    | nil => rfl
+    | cons σ stack =>
+      simp only [search, searchAsking, Interrupt.quiet, Bool.false_eq_true, ite_false]
+      split <;> (try split) <;> simp only [ih]
+
 /-- The unit vector of a coordinate, with the earlier coordinates frozen, and
 the coordinate itself when its bound is one. The last coordinate is searched
 first. -/
@@ -192,7 +218,7 @@ def first (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) : Lis
       Vector.ofFn fun j => decide (j.val < i.val) || (j = i && upper[i] == some 1)⟩
 
 /-- The basis in the order Maude finds it, or `none` when the step budget ran out. -/
-def basis (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) (fuel : Nat) :
+def basis [Interrupt] (cols : Vector (Vector Int m) n) (upper : Vector (Option Nat) n) (fuel : Nat) :
     Option (List (Vector Nat n)) :=
   (search cols upper fuel (first cols upper) []).map List.reverse
 

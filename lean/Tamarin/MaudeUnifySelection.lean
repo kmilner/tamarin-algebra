@@ -68,7 +68,7 @@ def cover (unc : Vector Bool n) (v : Vector Nat n) : Vector Bool n :=
 
 /-- The selections, include before exclude, as Maude's forward and backtracking
 passes produce them. -/
-def selections (upper : Vector (Option Nat) n) :
+def selections [Interrupt] (upper : Vector (Option Nat) n) :
     List (Elem n) → Vector Nat n → Vector Bool n → List (List (Elem n))
   | [], _, unc => if (List.finRange n).all (fun i => !unc[i]) then [[]] else []
   | e :: rest, tot, unc =>
@@ -76,8 +76,26 @@ def selections (upper : Vector (Option Nat) n) :
       (selections upper rest (add tot e.vec) (cover unc e.vec)).map (e :: ·) else []) ++
     (if reaches e.rem unc then selections upper rest tot unc else [])
 
+/-- `selections` as it is compiled: every node asks first, and a node told
+to stop has no selections. -/
+private def selectionsAsking [Interrupt] (upper : Vector (Option Nat) n) :
+    List (Elem n) → Vector Nat n → Vector Bool n → List (List (Elem n))
+  | [], _, unc => if (List.finRange n).all (fun i => !unc[i]) then [[]] else []
+  | e :: rest, tot, unc =>
+    if Interrupt.poll () then [] else
+    (if includable upper tot e then
+      (selectionsAsking upper rest (add tot e.vec) (cover unc e.vec)).map (e :: ·) else []) ++
+    (if reaches e.rem unc then selectionsAsking upper rest tot unc else [])
+
+@[csimp] private theorem selections_eq_asking : @selections = @selectionsAsking := by
+  funext n i upper L tot unc
+  induction L generalizing tot unc with
+  | nil => rfl
+  | cons e rest ih =>
+    simp only [selections, selectionsAsking, Interrupt.quiet, Bool.false_eq_true, ite_false, ih]
+
 /-- All selections of a basis in Maude's order. -/
-def all (upper : Vector (Option Nat) n) (basis : List (Vector Nat n)) : List (List (Elem n)) :=
+def all [Interrupt] (upper : Vector (Option Nat) n) (basis : List (Vector Nat n)) : List (List (Elem n)) :=
   selections upper (withRems basis) (Vector.replicate n 0) (Vector.replicate n true)
 
 /-! ### Correctness -/
