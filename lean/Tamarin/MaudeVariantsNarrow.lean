@@ -213,6 +213,73 @@ def rebuild (θ : Nat → D y) (t : D y) (path : List Nat) (repl : D y) : D y :=
       | none => subst θ t
     | d => subst θ d
 
+section
+variable [Interrupt]
+
+/-- Whether a slot that `bad` marks occurs in the dag. -/
+def touches (bad : Nat → Bool) : D y → Bool
+  | .var i => bad i
+  | .atom _ => false
+  | .free _ args => args.attach.any fun ⟨d, _⟩ => touches bad d
+  | .comm _ a b => touches bad a || touches bad b
+  | .ac _ args => args.attach.any fun ⟨d, _⟩ => touches bad d
+
+/-- `nf` of the instance by `θ` of a normal dag `t`, where `θ` renames the
+slots that `bad` does not mark injectively, keeping their sorts: a subterm
+without a marked slot stays normal under `θ` (a redex of its instance would
+be the instance of a redex), and is only put in the term order again. The
+others are reduced as `nf` reduces them: arguments first, then the top. -/
+def instNf (th : Theory y) (vs : Nat → SortId) (θ : Nat → D y) (bad : Nat → Bool) : Nat → D y → Option (D y)
+  | 0, _ => none
+  | n + 1, t =>
+    if !touches bad t then some (norm th.rt.vranks (fun i => some (vs i)) (subst θ t)) else
+    let so := fun i => some (vs i)
+    let r := th.rt.vranks
+    let inner : Option (D y) := match t with
+      | .var i => some (θ i)
+      | .free f args => (args.mapM (instNf th vs θ bad n)).map fun as => .free f as
+      | .comm f a b => do
+        let a' ← instNf th vs θ bad n a
+        let b' ← instNf th vs θ bad n b
+        pure (Dag.mkComm r so f a' b')
+      | .ac f args => (args.mapM (instNf th vs θ bad n)).map fun as => .ac f (Dag.normAC r so f as)
+      | d => some d
+    inner.bind fun t' => match rewriteTop th vs t' with
+      | some u => nf th vs n u
+      | none => some t'
+
+/-- `nf` of `rebuild θ t path repl` for a normal `t`, with `instNf` off the path. -/
+def rebuildNf (th : Theory y) (vs : Nat → SortId) (θ : Nat → D y) (bad : Nat → Bool) (fuel : Nat)
+    (t : D y) (path : List Nat) (repl : D y) : Option (D y) :=
+  let so := fun i => some (vs i)
+  let r := th.rt.vranks
+  let top := fun (t' : D y) => match rewriteTop th vs t' with
+    | some u => nf th vs fuel u
+    | none => some t'
+  match path with
+  | [] => nf th vs fuel repl
+  | j :: rest =>
+    match t with
+    | .free f args =>
+      (args.zipIdx.mapM fun (a, i) =>
+        if i == j then rebuildNf th vs θ bad fuel a rest repl else instNf th vs θ bad fuel a).bind fun as =>
+        top (.free f as)
+    | .comm f a b => do
+      let a' ← if j == 0 then rebuildNf th vs θ bad fuel a rest repl else instNf th vs θ bad fuel a
+      let b' ← if j == 0 then instNf th vs θ bad fuel b else rebuildNf th vs θ bad fuel b rest repl
+      top (Dag.mkComm r so f a' b')
+    | .ac f args =>
+      match (runsOf args)[j]? with
+      | some (e, _) => do
+        let others := (removeOne e args).getD args
+        let e' ← rebuildNf th vs θ bad fuel e rest repl
+        let os ← others.mapM (instNf th vs θ bad fuel)
+        top (.ac f (Dag.normAC r so f (e' :: os)))
+      | none => nf th vs fuel (subst θ t)
+    | d => nf th vs fuel (subst θ d)
+
+end
+
 /-! ### The narrowing step -/
 
 /-- A variant prepared for narrowing: its variables by first occurrence, those
@@ -260,7 +327,8 @@ test, which renaming does not change. -/
 stands for (the free slots in order). -/
 def finishFree (r : Ranks (Sig y)) (k : Nat) (nOrig : Nat) (st : MaudeUnify.St (Sig y)) :
     Res (Option (Answer (Sig y) × Array Nat)) :=
-  match exploreAll st k (List.range nOrig ++ (List.range st.vals.size).drop nOrig) with
+  -- `List.range nOrig ++ (List.range n).drop nOrig` is `List.range n` as `nOrig ≤ n`
+  match exploreAll st k (List.range (max nOrig st.vals.size)) with
   | .gaveUp => .gaveUp
   | .cycle c => if isCycle st c then .ok none else .gaveUp
   | .done _ order =>
@@ -448,12 +516,15 @@ def canonical (th : Theory y) (fuel : Nat) (e : Eqn y) (node' : D y) (ranks : Ar
       let outSorts := a.sorts.toArray
       let soN := fun j => outSorts[j]?
       let vsN := fun j => outSorts.getD j .msg
-      let imgs := a.images.toArray.map (norm th.rt.vranks soN)
-      let mine := imgs.extract ne (ne + m)
+      let raw := a.images.toArray
+      let mine := (raw.extract ne (ne + m)).map (norm th.rt.vranks soN)
       let (dropped, memo) := mine.foldl (fun (found, memo) d =>
         if found then (found, memo) else reducibleMemo th vsN d memo) (false, memo)
-      (out.push { imgs, sorts := outSorts, origin := free, dropped,
-                  tup := if dropped then Tuple.make #[] #[] else Tuple.make mine outSorts }, memo))
+      if dropped then
+        (out.push { imgs := #[], sorts := #[], origin := #[], dropped, tup := Tuple.make #[] #[] }, memo)
+      else
+        let imgs := (raw.extract 0 ne).map (norm th.rt.vranks soN) ++ mine
+        (out.push { imgs, sorts := outSorts, origin := free, dropped, tup := Tuple.make mine outSorts }, memo))
       ((#[] : Array (CAnswer y)), memo)
 
 /-- The images of the equation's variables and of the variant's (in the order
@@ -572,7 +643,17 @@ def child (th : Theory y) (fuel : Nat) (fr : Frame y) (u : Unifier y) : Option (
   let newSubst := fr.v.subst.map fun d => norm th.rt.vranks soN (subst θ d)
   if newSubst.any (reducible th vsN) then some none else
   let repl := subst (fun j => eImgs.getD j (.var 0)) u.rhs
-  (nf th vsN fuel (rebuild θ fr.v.term u.path repl)).map fun t =>
+  -- the variables of the variant that the unifier does not rename injectively
+  let images : Array (Option Nat) := fr.tv.map fun k => match θ k with
+    | .var i => if vsN i == fr.v.sortFn k then some i else none
+    | _ => none
+  let counts := images.foldl (fun acc o => match o with
+    | some i => acc.modify i (· + 1)
+    | none => acc) (Array.replicate sorts.size 0)
+  let bad := fun k => match images.getD (fr.tvIdx.getD k 0) none with
+    | some i => counts.getD i 0 != 1
+    | none => true
+  (rebuildNf th vsN θ bad fuel fr.v.term u.path repl).map fun t =>
     some { subst := newSubst, term := t, sorts }
 
 /-- One narrowing step of `v`: the new variants in Maude's order, and the
