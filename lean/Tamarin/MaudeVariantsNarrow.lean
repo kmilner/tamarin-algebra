@@ -250,7 +250,8 @@ def Unifier.subsumes [Interrupt] (a b : Unifier y) : Bool := a.tup.subsumes b.tu
 otherwise it evicts those it subsumes and is appended. -/
 def offer [Interrupt] (filter : Array (Unifier y)) (u : Unifier y) : Array (Unifier y) :=
   if filter.any (·.subsumes u) then filter
-  else (filter.filter fun old => !u.subsumes old).push u
+  else if filter.any u.subsumes then (filter.filter fun old => !u.subsumes old).push u
+  else filter.push u
 
 section
 variable [Interrupt]

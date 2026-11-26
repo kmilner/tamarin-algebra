@@ -251,27 +251,57 @@ structure Tuple (y : Syms) where
   keys : Array Nat
   /-- The least sort of each component. -/
   ms : Array MS
-  /-- As a pattern: the components that need the matcher. -/
-  rel : List Nat
   /-- As a pattern: the components that are a variable occurring nowhere
   else, with the variable's sort. -/
   lin : List (Nat × MS)
+  /-- As a pattern: the components that are a variable occurring elsewhere
+  too, with the variable. -/
+  vars : List (Nat × Nat)
+  /-- As a pattern: the other components, which need the matcher. -/
+  rest : List Nat
 
 def Tuple.make (items : Array (D y)) (sorts : Array SortId) : Tuple y :=
   let occ := items.foldl (countVars sorts.size) (Array.replicate sorts.size 0)
-  let (rel, lin) := items.zipIdx.foldr (fun (d, i) (rel, lin) => match d with
-    | .var v => if occ.getD v 0 == 1 then (rel, (i, MS.ofSort (sorts.getD v .msg)) :: lin) else (i :: rel, lin)
-    | _ => (i :: rel, lin)) ([], [])
-  { items, sorts, keys := items.map shallowKey, ms := items.map (msort y (sorts.getD · .msg)), rel, lin }
+  let (lin, vars, rest) := items.zipIdx.foldr (fun (d, i) (lin, vars, rest) => match d with
+    | .var v =>
+      if occ.getD v 0 == 1 then ((i, MS.ofSort (sorts.getD v .msg)) :: lin, vars, rest)
+      else (lin, (i, v) :: vars, rest)
+    | _ => (lin, vars, i :: rest)) ([], [], [])
+  { items, sorts, keys := items.map shallowKey, ms := items.map (msort y (sorts.getD · .msg)), lin, vars, rest }
+
+/-- Whether the keys of a pattern's components agree with a subject's from
+index `i` on: a variable fits every key. -/
+def keysFitFrom (a b : Array Nat) : Nat → Nat → Bool
+  | 0, _ => true
+  | n + 1, i => let k := a.getD i 0; (k == 0 || k == b.getD i 0) && keysFitFrom a b n (i + 1)
+
+def keysFit (a b : Array Nat) : Bool := a.size == b.size && keysFitFrom a b a.size 0
+
+/-- Assign each variable component of the pattern its subject component:
+`none` when one variable meets two different subjects or a subject of a sort
+the variable does not admit. -/
+def assignVars (c : MC) (b : Tuple y) : List (Nat × Nat) → Sb y → Option (Sb y)
+  | [], σ => some σ
+  | (i, v) :: more, σ =>
+    let t := b.items.getD i (.var 0)
+    match σ.getD v none with
+    | some u => if Dag.beq u t then assignVars c b more σ else none
+    | none => if fits c v t then assignVars c b more (σ.set! v (some t)) else none
 
 /-- Whether `b` is an instance of the pattern `a`, one matcher for every
-component at once, modulo AC and C and respecting sorts. -/
+component at once, modulo AC and C and respecting sorts. The variable
+components are assigned first, then the matcher takes the others. -/
 def Tuple.subsumes [Interrupt] (a b : Tuple y) : Bool :=
-  a.items.size == b.items.size &&
-  (a.keys.zip b.keys).all (fun (k, l) => k == 0 || k == l) &&
+  keysFit a.keys b.keys &&
   a.lin.all (fun (i, s) => (b.ms.getD i .kind).le s) &&
-  a.rel.all (fun i => quick (a.items.getD i (.var 0)) (b.items.getD i (.var 0))) &&
-  mtPairs { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) } a.sorts.size
-    (a.rel.map (a.items.getD · (.var 0))) (a.rel.map (b.items.getD · (.var 0)))
+  a.rest.all (fun i => quick (a.items.getD i (.var 0)) (b.items.getD i (.var 0))) &&
+  (a.vars.isEmpty && a.rest.isEmpty ||
+    let c : MC := { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) }
+    match assignVars c b a.vars (Array.replicate a.sorts.size none) with
+    | none => false
+    | some σ =>
+      a.rest.isEmpty ||
+        (mtList c matchFuel (a.rest.map (a.items.getD · (.var 0))) (a.rest.map (b.items.getD · (.var 0))) σ
+          (fun σ => some σ)).isSome)
 
 end Tamarin.MaudeVariants
