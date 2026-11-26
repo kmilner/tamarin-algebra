@@ -559,6 +559,13 @@ theorem same_iff {d e : Dag s} (hd : d.ground = true) (he : e.ground = true) (ρ
     · exact h
   · exact .inr
 
+/-- The arguments of a rebuilt product: the arguments that did not change keep
+their order, and the normalized instances of the others are merged in. -/
+def instArgs (r : Ranks s) (sortOf : Nat → Option SortId) (f : s.ACSym) (parts : List (Bool × Dag s)) :
+    List (Dag s) :=
+  List.merge ((parts.filter fun p => !p.1).map (·.2)) (normAC r sortOf f ((parts.filter (·.1)).map (·.2)))
+    fun a b => cmp r sortOf a b != .gt
+
 /-- Whether `σ` binds a slot of the dag. -/
 def touched (σ : Nat → Option (Dag s)) : Dag s → Bool
   | .var i => (σ i).isSome
@@ -580,7 +587,8 @@ def inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Da
     if touched σ (.comm f a b) then mkComm r sortOf f (inst r sortOf σ a) (inst r sortOf σ b)
     else .comm f a b
   | .ac f args =>
-    if touched σ (.ac f args) then .ac f (normAC r sortOf f (args.attach.map fun ⟨d, _⟩ => inst r sortOf σ d))
+    if touched σ (.ac f args) then
+      .ac f (instArgs r sortOf f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r sortOf σ d)))
     else .ac f args
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
@@ -625,6 +633,95 @@ theorem eval_untouched {σ : Nat → Option (Dag s)} (ρ : Nat → Term s) (d : 
     eval ρ d = eval (through ρ σ) d :=
   eval_congr d fun j hj => by rw [through, untouched d h j hj]
 
+theorem inst_untouched (r : Ranks s) (sortOf : Nat → Option SortId) {σ : Nat → Option (Dag s)} (d : Dag s)
+    (h : touched σ d = false) : inst r sortOf σ d = d := by
+  cases d with
+  | var i =>
+    rw [inst]
+    have : σ i = none := by simpa [touched] using h
+    rw [this]; rfl
+  | atom a => rw [inst]
+  | free f args => rw [inst]; simp [h]
+  | comm f a b => rw [inst]; simp [h]
+  | ac f args => rw [inst]; simp [h]
+
+/-- The arguments of a rebuilt product, as the untouched ones and the
+normalized instances of the touched ones. -/
+theorem instArgs_perm (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.ACSym)
+    (args : List (Dag s)) :
+    (instArgs r sortOf f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r sortOf σ d))).Perm
+      (args.filter (fun d => !touched σ d) ++
+        normAC r sortOf f ((args.filter (touched σ)).map (inst r sortOf σ))) := by
+  unfold instArgs
+  refine List.Perm.trans (List.merge_perm_append _) ?_
+  have hm : (args.attach.map fun (x : {d // d ∈ args}) => (touched σ x.val, inst r sortOf σ x.val)) =
+      args.map fun d => (touched σ d, inst r sortOf σ d) := by simp
+  rw [hm]
+  have hl : ((args.map fun d => (touched σ d, inst r sortOf σ d)).filter
+      fun p => !p.1).map (·.2) = args.filter (fun d => !touched σ d) := by
+    rw [List.filter_map, List.map_map]
+    have e : ((fun p : Bool × Dag s => !p.fst) ∘ fun d => (touched σ d, inst r sortOf σ d)) =
+      fun d => !touched σ d := rfl
+    rw [e]
+    have : ∀ d ∈ args.filter (fun d => !touched σ d), ((·.2) ∘ fun d => (touched σ d, inst r sortOf σ d)) d = d := by
+      intro d hd
+      exact inst_untouched r sortOf d (by simpa using (List.mem_filter.mp hd).2)
+    rw [List.map_congr_left this, List.map_id']
+  have hr : ((args.map fun d => (touched σ d, inst r sortOf σ d)).filter
+      fun p => p.1).map (·.2) = (args.filter (touched σ)).map (inst r sortOf σ) := by
+    rw [List.filter_map, List.map_map]
+    have e : ((fun p : Bool × Dag s => p.fst) ∘ fun d => (touched σ d, inst r sortOf σ d)) = touched σ := rfl
+    rw [e]
+    rfl
+  rw [hl, hr]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem touched_some {σ : Nat → Option (Dag s)} {f : s.ACSym} {args : List (Dag s)}
+    (h : touched σ (.ac f args) = true) : (args.filter (touched σ)) ≠ [] := by
+  simp only [touched, List.any_eq_true] at h
+  obtain ⟨⟨d, hd⟩, _, hd'⟩ := h
+  intro e
+  have : d ∈ args.filter (touched σ) := List.mem_filter.mpr ⟨hd, hd'⟩
+  rw [e] at this; cases this
+
+theorem eval_instArgs (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Dag s))
+    (ρ : Nat → Term s) (f : s.ACSym) (args : List (Dag s)) (h : touched σ (.ac f args) = true) :
+    EquivB (eval ρ (.ac f (instArgs r sortOf f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r sortOf σ d)))))
+      (eval ρ (.ac f (args.map (inst r sortOf σ)))) := by
+  rw [eval_ac, eval_ac]
+  refine .trans (product_perm f ((instArgs_perm r sortOf σ f args).map _)) ?_
+  generalize hK : args.filter (fun d => !touched σ d) = K
+  generalize hC : (args.filter (touched σ)).map (inst r sortOf σ) = C
+  have cne : C ≠ [] := by rw [← hC]; simpa using touched_some h
+  -- the untouched arguments are their own instances
+  have perm : (K ++ C).Perm (args.map (inst r sortOf σ)) := by
+    rw [← hK, ← hC]
+    have keep : (args.filter (fun d => !touched σ d)).map (inst r sortOf σ) = args.filter (fun d => !touched σ d) := by
+      rw [List.map_congr_left (g := fun d => d)
+        (fun d hd => inst_untouched r sortOf d (by simpa using (List.mem_filter.mp hd).2)), List.map_id']
+    rw [← keep, ← List.map_append]
+    exact (List.perm_append_comm.trans (List.filter_append_perm (touched σ) args)).map _
+  refine .trans ?_ (product_perm f (perm.map _))
+  have ne : normAC r sortOf f C ≠ [] := by
+    intro e
+    unfold normAC at e
+    have hl := (List.mergeSort_perm (flat f C) fun a b => cmp r sortOf a b != .gt).length_eq
+    rw [e] at hl
+    exact cne (flat_eq_nil.mp (List.eq_nil_of_length_eq_zero hl.symm))
+  cases K with
+  | nil =>
+    simp only [List.nil_append]
+    have := eval_normAC r sortOf ρ f C
+    rw [eval_ac, eval_ac] at this
+    exact this
+  | cons k ks =>
+    rw [List.map_append, List.map_append]
+    refine .trans (product_append f (by simp) (by simpa using ne)) ?_
+    refine .trans ?_ (product_append f (by simp) (by simpa using cne)).symm
+    have := eval_normAC r sortOf ρ f C
+    rw [eval_ac, eval_ac] at this
+    exact .ac_congr f (.refl _) this
+
 theorem eval_inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → Option (Dag s))
     (ρ : Nat → Term s) (d : Dag s) : EquivB (eval ρ (inst r sortOf σ d)) (eval (through ρ σ) d) := by
   induction d using induct' with
@@ -651,11 +748,9 @@ theorem eval_inst (r : Ranks s) (sortOf : Nat → Option SortId) (σ : Nat → O
   | ac f args ih =>
     rw [inst]
     split
-    · refine .trans (eval_normAC r sortOf ρ f _) ?_
-      rw [eval_ac, eval_ac]
-      have same : ((args.attach.map fun (x : {d // d ∈ args}) => inst r sortOf σ x.val).map (eval ρ)) =
-          args.map (fun d => eval ρ (inst r sortOf σ d)) := by simp
-      rw [same]
+    · next ht =>
+      refine .trans (eval_instArgs r sortOf σ ρ f args ht) ?_
+      rw [eval_ac, eval_ac, List.map_map]
       exact product_map_congr f args _ _ fun d hd => ih d hd
     · next h => rw [eval_untouched ρ _ (by simpa using h)]; exact .refl _
 

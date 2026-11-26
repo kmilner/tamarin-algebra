@@ -389,8 +389,9 @@ theorem inst_comm (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Optio
 
 theorem inst_ac (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.ACSym)
     (args : List (Dag s)) : inst r so σ (.ac f args) =
-      if touched σ (.ac f args) then .ac f (normAC r so f (args.map (inst r so σ))) else .ac f args := by
-  rw [inst]; simp
+      if touched σ (.ac f args) then .ac f (instArgs r so f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r so σ d)))
+      else .ac f args := by
+  rw [inst]
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 /-- An untouched dag is its own instance. -/
@@ -481,6 +482,34 @@ theorem wf_normAC (r : Ranks s) (so : Nat → Option SortId) (f : s.ACSym) {args
     rw [Wf] at this
     exact this.2 e he
 
+/-- An argument of a rebuilt product is an untouched argument or comes from
+the instance of a touched one. -/
+theorem mem_instArgs (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.ACSym)
+    (args : List (Dag s)) {e : Dag s}
+    (he : e ∈ instArgs r so f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r so σ d))) :
+    (e ∈ args ∧ touched σ e = false) ∨ ∃ d ∈ args, (e = inst r so σ d ∨ ∃ inner, inst r so σ d = .ac f inner ∧ e ∈ inner) := by
+  rcases List.mem_append.mp ((instArgs_perm r so σ f args).subset he) with h | h
+  · obtain ⟨h1, h2⟩ := List.mem_filter.mp h
+    exact .inl ⟨h1, by simpa using h2⟩
+  · rw [normAC, (List.mergeSort_perm _ _).mem_iff] at h
+    rcases mem_flat h with h | ⟨inner, hi, h⟩
+    · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+      exact .inr ⟨d, (List.mem_filter.mp hd).1, .inl rfl⟩
+    · obtain ⟨d, hd, e'⟩ := List.mem_map.mp hi
+      exact .inr ⟨d, (List.mem_filter.mp hd).1, .inr ⟨inner, e', h⟩⟩
+
+theorem length_instArgs (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s)) (f : s.ACSym)
+    (args : List (Dag s)) :
+    args.length ≤ (instArgs r so f (args.attach.map fun ⟨d, _⟩ => (touched σ d, inst r so σ d))).length := by
+  rw [(instArgs_perm r so σ f args).length_eq, List.length_append, normAC, List.length_mergeSort]
+  have := length_flat f ((args.filter (touched σ)).map (inst r so σ))
+  rw [List.length_map] at this
+  have p := List.filter_append_perm (touched σ) args
+  have := p.length_eq
+  rw [List.length_append] at this
+  have e : (args.filter (fun d => !touched σ d)).length = (args.filter (fun d => !(touched σ d))).length := rfl
+  omega
+
 /-- The slots of an instantiated dag: the unbound slots of the dag and the
 slots of the values of its bound ones. -/
 theorem mem_vars_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s))
@@ -516,10 +545,15 @@ theorem mem_vars_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → O
     rw [inst_ac] at h
     split at h
     case isFalse t => exact mem_vars_untouched (by simpa using t) h
-    obtain ⟨e, he, hx⟩ := mem_vars_normAC h
-    obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
-    obtain ⟨j, hj, hr⟩ := ih a ha hx
-    exact ⟨j, by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩, hr⟩
+    rw [vars_ac, List.mem_flatMap] at h
+    obtain ⟨e, he, hx⟩ := h
+    rcases mem_instArgs r so σ f args he with ⟨ha, ut⟩ | ⟨a, ha, rfl | ⟨inner, ei, hi⟩⟩
+    · exact ⟨x, by rw [vars_ac, List.mem_flatMap]; exact ⟨e, ha, hx⟩, .inl ⟨untouched e ut x hx, rfl⟩⟩
+    · obtain ⟨j, hj, hr⟩ := ih a ha hx
+      exact ⟨j, by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩, hr⟩
+    · have hx' : x ∈ (inst r so σ a).vars := by rw [ei, vars_ac, List.mem_flatMap]; exact ⟨e, hi, hx⟩
+      obtain ⟨j, hj, hr⟩ := ih a ha hx'
+      exact ⟨j, by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩, hr⟩
 
 theorem wf_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option (Dag s))
     (d : Dag s) (hd : d.Wf) (hσ : ∀ j ∈ d.vars, ∀ e, σ j = some e → e.Wf) : (inst r so σ d).Wf := by
@@ -551,9 +585,16 @@ theorem wf_inst (r : Ranks s) (so : Nat → Option SortId) (σ : Nat → Option 
     split
     case isFalse => exact hd
     rw [Wf] at hd
-    refine wf_normAC r so f (by simpa using hd.1) fun e he => ?_
-    obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
-    exact ih a ha (hd.2 a ha) fun j hj => hσ j (by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩)
+    rw [Wf]
+    refine ⟨Nat.le_trans hd.1 (length_instArgs r so σ f args), fun e he => ?_⟩
+    have wa : ∀ a ∈ args, (inst r so σ a).Wf := fun a ha =>
+      ih a ha (hd.2 a ha) fun j hj => hσ j (by rw [vars_ac, List.mem_flatMap]; exact ⟨a, ha, hj⟩)
+    rcases mem_instArgs r so σ f args he with ⟨ha, _⟩ | ⟨a, ha, rfl | ⟨inner, ei, hi⟩⟩
+    · exact hd.2 e ha
+    · exact wa a ha
+    · have := wa a ha
+      rw [ei, Wf] at this
+      exact this.2 e hi
 
 end Dag
 
