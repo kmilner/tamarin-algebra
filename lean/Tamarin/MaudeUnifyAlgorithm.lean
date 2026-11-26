@@ -485,6 +485,35 @@ def normPicks (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag 
       fun a b => Dag.cmpKeyed r sortOf a.1 b.1 != .gt).flatMap fun p => List.replicate p.2 p.1.1
   else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- The keyed dags, each as often as its multiplicity says. -/
+def expandKeyed : List ((Dag s × Nat × Nat) × Nat) → List (Dag s)
+  | [] => []
+  | (k, m) :: rest => List.replicate m k.1 ++ expandKeyed rest
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+theorem expandKeyed_eq : ∀ (l : List ((Dag s × Nat × Nat) × Nat)),
+    expandKeyed l = l.flatMap fun p => List.replicate p.2 p.1.1
+  | [] => rfl
+  | (k, m) :: rest => by rw [expandKeyed, expandKeyed_eq rest, List.flatMap_cons]
+
+/-- `normPicks` without sorting a single pick. -/
+def normPicksFast (sortOf : Nat → Option SortId) (f : s.ACSym) (picks : List (Dag s × Nat)) : List (Dag s) :=
+  match picks with
+  | [(w, m)] => if isVarD w then List.replicate m w else Dag.normAC r sortOf f (List.replicate m w)
+  | _ =>
+    if picks.all (fun p => match p.1 with | .var _ => true | _ => false) then
+      expandKeyed ((picks.map fun p => (Dag.keyed r sortOf p.1, p.2)).mergeSort
+        fun a b => Dag.cmpKeyed r sortOf a.1 b.1 != .gt)
+    else Dag.normAC r sortOf f (picks.flatMap fun p => List.replicate p.2 p.1)
+
+@[csimp] theorem normPicks_eq_normPicksFast : @normPicks = @normPicksFast := by
+  funext s i1 i2 i3 i4 r sortOf f picks
+  match picks with
+  | [] => simp [normPicks, normPicksFast, expandKeyed]
+  | [(w, m)] => cases w <;> simp [normPicks, normPicksFast, isVarD, Dag.keyed]
+  | p :: q :: rest => simp only [normPicks, normPicksFast]; rw [expandKeyed_eq]
+
 /-- What the selected elements assign to subterm `i`, and whether it is a
 product of the symbol. -/
 def assign (st : St s) (f : s.ACSym) (sel : List (List Nat)) (ws : List (Dag s)) (i : Nat) : Dag s × Bool :=
