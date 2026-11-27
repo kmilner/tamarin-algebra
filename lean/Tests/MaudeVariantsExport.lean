@@ -10,12 +10,12 @@ symbols come after every operator). The reply of the proposer
 with Maude's `#k` and `%k` as the variant's variable `k - 1`. The `rewrites:`
 counts and the variant terms are not part of the reply. -/
 
-/-- The search the export runs when its caller does not say stop
-(`Executable.maudeVariantsFor`). The interpreter that evaluates `#guard`
-crashes on the copy of the search the compiler specialised inside
-`maudeVariantsFor` (Lean 4.36; the compiled code, which the Rust tests run,
-does not), so the tests call the search itself. -/
-private abbrev kernel := @MaudeVariantsExport.run Interrupt.never
+/-- The search the export runs when its caller does not say stop: the copy
+the compiler specialised inside `Executable.maudeVariantsFor`. `lake env lean`
+does not rebuild imports, so run `lake build TamarinRuntime` after changing
+the search: the interpreter crashes on a specialised copy left in a stale
+`TamarinRuntime.olean`. -/
+private abbrev kernel := Executable.maudeVariantsFor Interrupt.never
 
 private def fuel : UInt64 := 1048576
 
