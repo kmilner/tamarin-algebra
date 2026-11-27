@@ -67,12 +67,12 @@ def main : IO Unit := do
       let second := fun (t : UInt64) => if orientations / 2 = 0 then #[2,t] else #[t,2]
       for swap in [false,true] do
         let roots := fun t => if swap then second t ++ first else first ++ second t
-        let yes := Tamarin.Executable.wholeUnify ds ns (roots 7)
+        let yes := Tamarin.Whole.runRefining Tamarin.MixedSizeGraph.refutesDecoded ds ns (roots 7)
         -- Setting u to the original sum solves this neighbor.
         unless yes == #[#[0]] || yes == #[#[2]] do
           throw <| IO.userError s!"refuted a satisfiable regrouping at {k}"
         -- Hash adds one node to the regrouped sum under every substitution.
-        unless Tamarin.Executable.wholeUnify ds ns (roots 8) == #[#[1]] do
+        unless Tamarin.Whole.runRefining Tamarin.MixedSizeGraph.refutesDecoded ds ns (roots 8) == #[#[1]] do
           throw <| IO.userError s!"missed a mixed-size contradiction at {k}"
         cases := cases + 2
   IO.println s!"Checked {cases} mixed graph requests against the original term-size argument."

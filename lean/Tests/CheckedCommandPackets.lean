@@ -21,7 +21,7 @@ private def ns : Array (Array UInt64) := #[#[0,0,2],#[2,0,0],#[2,1],#[2,2]]
 
 -- The general reducer can distinguish an unfinished search, a witnessed fork
 -- with inequivalent normal forms, and branches that join one step later.
-private abbrev reduce := Executable.generalReduce
+private abbrev reduce := GeneralReductionWire.run
 #guard reduce ds ns #[1,2,1,3] 1 1 == #[#[3]]
 #guard reduce ds ns #[1,2,1,3] 1 2 == #[#[2]]
 #guard reduce ds ns #[1,2,1,3,3,2] 1 2 == #[#[3]]
@@ -55,7 +55,88 @@ private def rules : Array UInt64 := #[3,0,4,1]
     reply.any (fun row => match row.toList with | [2,2,0,x,2,0,y,2,2,0,2] => x != y | _ => false)
 -- Same root with conflicting result positions cannot certify the table.
 #guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
-#guard Executable.checkedReduce ds ns #[3,0,3,1] 3 0 == #[#[2]]
+#guard CheckedReductionWire.run ds ns #[3,0,3,1] 3 0 == #[#[2]]
+-- The two projections are a table of the class the certifier has to accept
+-- (`theoryCertify_subterm` on the packet of a theory). The conflicting pair is outside it.
+#guard Executable.certifyTable ds ns rules 0
+#guard !Executable.certifyTable ds ns #[3,0,3,1] 0
+-- The single-path reducer follows the first branch of the checked one. On this
+-- certified table both return the same normal form for fst(pair(x,y)), a
+-- normal term is returned unchanged, and exhausted depth is reported as such.
+#guard Executable.certifyTable ds ns rules 4
+#guard CertifiedReductionWire.run ds ns rules 3 8 == GeneralReductionWire.run ds ns rules 3 8
+#guard (CertifiedReductionWire.run ds ns rules 3 8)[0]? == some #[1]
+#guard CertifiedReductionWire.run ds ns rules 6 8 == GeneralReductionWire.run ds ns rules 6 8
+#guard CertifiedReductionWire.run ds ns rules 3 0 == #[#[3]]
+#guard CertifiedReductionWire.run ds ns #[3] 3 8 == #[#[0]]
+-- Without a certificate the same path is still an irreducible reduct. A rule
+-- with an unbound right-side variable is refused.
+#guard Executable.pathReduce (fun _ => false) ds ns rules 3 8 == CertifiedReductionWire.run ds ns rules 3 8
+#guard Executable.pathReduce (fun _ => false) ds ns rules 6 8 == CertifiedReductionWire.run ds ns rules 6 8
+#guard Executable.pathReduce (fun _ => false) ds ns rules 3 0 == #[#[3]]
+#guard Executable.pathReduce (fun _ => false) ds ns #[6,0] 3 8 == #[#[2]]
+#guard Executable.pathReduce (fun _ => false) ds ns #[3] 3 8 == #[#[0]]
+-- A caller that says stop gets the interrupted reply, whatever the packet.
+#guard Executable.pathReduce (fun _ => true) ds ns rules 3 8 == #[#[4]]
+#guard Executable.pathReduce (fun _ => true) ds ns #[3] 3 8 == #[#[4]]
+
+-- A proposed family for fst(z),z. The identity and z := pair(x,y) are
+-- complete. The identity alone leaves a narrowing successor uncovered, the
+-- pair alone does not cover the query itself, and a reducible image is not a
+-- variant at all. Each row lists variable node, image node.
+private abbrev check := VariantCheckWire.run
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard check ds ns rules #[6,5] #[#[],#[5,2]] 16 0 == #[#[1]]
+#guard check ds ns rules #[6,5] #[#[5,5]] 16 0 == #[#[2,3,0]]
+#guard check ds ns rules #[6,5] #[#[5,2]] 16 0 == #[#[2,2,0]]
+#guard check ds ns rules #[6,5] #[] 16 0 == #[#[2,2,0]]
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,3]] 16 0 == #[#[2,1,1]]
+#guard check ds ns rules #[6,5] #[#[5,5],#[5,2]] 0 0 == #[#[3]]
+#guard check ds ns rules #[6,5] #[#[5]] 16 0 == #[#[0]]
+#guard check ds ns rules #[6,5] #[#[2,5]] 16 0 == #[#[0]]
+#guard check ds ns #[6,0] #[6,5] #[#[5,5]] 16 0 == #[#[2,4,0]]
+-- A family that is a product. fst(z) and snd(w) share no variable, so the
+-- four combinations of the two variants of each are complete. A combination
+-- that reuses the witnesses of z for w, a missing combination and a factor
+-- that lacks a variant are rejected.
+private def both : Array (Array UInt64) :=
+  ns ++ #[#[0,3,2],#[2,2,7],#[0,4,2],#[0,5,2],#[2,0,9,10]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11],#[5,2,7,11]] 16 0 == #[#[1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11],#[5,2,7,2]] 16 0 == #[#[2,3,1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[5,2],#[7,11]] 16 0 == #[#[2,3,1]]
+#guard check ds both rules #[6,5,8,7] #[#[],#[7,11]] 16 0 == #[#[2,3,0]]
+
+-- One certificate for the rows of the rules alone serves every call that adds
+-- rows to them. The added rows keep their node indices, an atom outside the
+-- table is an ambient name, and the replies are those of the whole packet.
+private def table : Array (Array UInt64) := ns.extract 0 5
+private def queryRows : Array (Array UInt64) := ns.extract 5 7
+private def named : Array (Array UInt64) := #[#[1,77,0],#[2,0,5,0],#[2,1,6],#[2,2,6]]
+private abbrev session := Executable.sessionReduce fun _ => false
+#guard Executable.sessionReduce (fun _ => true) ds table rules #[] 3 8 == #[#[4]]
+#guard Executable.certifyTable ds table rules 4
+#guard session ds table rules #[] 3 8 == CertifiedReductionWire.run ds ns rules 3 8
+#guard session ds table rules queryRows 6 8 == CertifiedReductionWire.run ds ns rules 6 8
+#guard session ds table rules named 7 8 == #[#[1],#[1,77,0]]
+#guard session ds table rules named 7 8 == CertifiedReductionWire.run ds (table ++ named) rules 7 8
+#guard session ds table rules named 8 8 == CertifiedReductionWire.run ds (table ++ named) rules 8 8
+#guard session ds table rules named 6 8 == CertifiedReductionWire.run ds (table ++ named) rules 6 8
+#guard session ds table rules named 7 0 == #[#[3]]
+#guard session ds table rules named 9 8 == #[#[0]]
+#guard session ds table rules #[#[2,1,6]] 5 8 == #[#[0]]
+#guard session ds table #[3] named 7 8 == #[#[0]]
+private abbrev sessionCheck := Executable.sessionVariantCheck fun _ => false
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard sessionCheck ds ns rules #[] #[6,5] #[#[5,5],#[5,2]] 16 0 == #[#[1]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5]] 16 0 == #[#[2,3,0]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,2]] 16 0 == #[#[2,2,0]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,3]] 16 0 == #[#[2,1,1]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5,5],#[5,2]] 0 0 == #[#[3]]
+#guard sessionCheck ds table rules queryRows #[6,5] #[#[5]] 16 0 == #[#[0]]
+#guard sessionCheck ds table rules queryRows #[7,5] #[#[5,5]] 16 0 == #[#[0]]
+-- A variant image may be a name the table never mentions.
+#guard sessionCheck ds table rules (queryRows ++ #[#[1,77,0],#[2,0,7,7]]) #[6,5]
+  #[#[5,5],#[5,2],#[5,8]] 16 0 == #[#[1]]
 end Tamarin.DestructorPacketTests
 
 namespace Tamarin.GeneralVariantPacketTests
@@ -81,6 +162,14 @@ private def rules : Array UInt64 := #[2,3,3,4,4,5,5,6,6,7,10,12,14,0,15,1]
 -- The generic ABI distinguishes an unfinished stage from a completed family.
 #guard Executable.generalVariants ds ns rules #[2,0] 4 == #[#[3]]
 #guard (Executable.generalVariants ds ns rules #[2,0] 32)[0]? == some #[1]
+-- The folding proposer lists the two variants in the order of Maude's layers, the
+-- identity first. A budget that does not suffice is reported as unfinished, whether
+-- it bounds the narrowing sites or the rewrite steps, and a malformed packet as such.
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 64 0 ==
+  #[#[1],#[],#[0,2,0,0,2],#[],#[0,2,2,9,0]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 64 1 == #[#[3]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[2,0] 2 0 == #[#[3]]
+#guard Executable.foldVariants (fun _ => false) ds ns rules #[99,0] 64 0 == #[#[0]]
 -- A competing normal endpoint for the same specialized input invalidates the family.
 #guard Executable.checkedVariants ds ns (rules ++ #[10,8]) #[2,0] 4 == #[#[2]]
 end Tamarin.GeneralVariantPacketTests

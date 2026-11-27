@@ -86,4 +86,53 @@ theorem correct : Correct run where
       simp [run,hi,hw]
     exact ⟨_,eq ▸ pack_decodes _ _ _ hw,ok⟩
 
+abbrev Decision := Array UInt64 → Array (Array UInt64) → Array UInt64 → Array UInt64 → UInt8
+
+/-- The first-answer entry point returns the head of a complete enumeration,
+the one the full kernel returns for the same packet. -/
+structure FirstCorrect (full kernel : Kernel) : Prop where
+  malformed : ∀ ds ns es ids, input ds ns es = none → kernel ds ns es ids = #[#[0]]
+  valid : ∀ ds ns es ids d p, input ds ns es = some ⟨d,p⟩ →
+    ∃ answers, Decodes p (full ds ns es ids) answers ∧ Matching.Complete p (Bindable ids) answers ∧
+      Decodes p (kernel ds ns es ids) answers.head?.toList
+
+/-- The decision entry point reports exactly whether a scoped match exists. -/
+structure ExistsCorrect (kernel : Decision) : Prop where
+  malformed : ∀ ds ns es ids, input ds ns es = none → kernel ds ns es ids = 0
+  valid : ∀ ds ns es ids d p, input ds ns es = some ⟨d,p⟩ →
+    (kernel ds ns es ids = 1 ∧ ∃ σ, Matching.Matches p σ ∧ Matching.Scoped p (Bindable ids) σ) ∨
+    (kernel ds ns es ids = 2 ∧ ¬ ∃ σ, Matching.Matches p σ ∧ Matching.Scoped p (Bindable ids) σ)
+
+theorem firstCorrect : FirstCorrect run runFirst where
+  malformed := fun ds ns es _ h => by simp [runFirst,h]
+  valid := by
+    intro ds ns es ids d p hi
+    have ok := complete p ids
+    have fits := representable (input_fieldsFit hi) ok
+    obtain ⟨wire,hw⟩ := pack_exists p _ fits
+    have head : ReferenceMatching.first p (domain p ids) =
+        ((ReferenceMatching.matcher d.sig).run p trivial (domain p ids)).head? :=
+      ReferenceMatching.first_eq p (domain p ids)
+    obtain ⟨one,ho⟩ := pack_exists p ((ReferenceMatching.matcher d.sig).run p trivial (domain p ids)).head?.toList
+      (fun σ hσ => fits σ (List.mem_of_mem_head? (by simpa using hσ)))
+    have full : run ds ns es ids = wire := by simp [run,hi,hw]
+    have short : runFirst ds ns es ids = one := by simp [runFirst,hi,head,ho]
+    exact ⟨_,full ▸ pack_decodes _ _ _ hw,ok,short ▸ pack_decodes _ _ _ ho⟩
+
+theorem existsCorrect : ExistsCorrect runExists where
+  malformed := fun ds ns es _ h => by simp [runExists,h]
+  valid := by
+    intro ds ns es ids d p hi
+    have ok := complete p ids
+    have some_ := ok.nonempty_iff
+    have head : ReferenceMatching.first p (domain p ids) =
+        ((ReferenceMatching.matcher d.sig).run p trivial (domain p ids)).head? :=
+      ReferenceMatching.first_eq p (domain p ids)
+    cases found : (ReferenceMatching.matcher d.sig).run p trivial (domain p ids) with
+    | nil =>
+      refine .inr ⟨by simp [runExists,hi,head,found],fun hit => ?_⟩
+      exact (some_.mpr hit) found
+    | cons σ rest =>
+      refine .inl ⟨by simp [runExists,hi,head,found],some_.mp (by simp [found])⟩
+
 end Tamarin.TotalMatchWire

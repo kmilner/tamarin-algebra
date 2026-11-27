@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 import Tamarin.ACResidual
 
 namespace Tamarin.CommonCancellationTests

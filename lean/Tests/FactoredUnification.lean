@@ -228,7 +228,7 @@ private def witness (_ : UInt64) : Variable := ⟨3,.msg⟩
 -- The two exports return a nonempty arm whose five entries all denote one
 -- witness. Only slot zero is used, so a locally constant slot map suffices.
 private theorem accepted : FactoredAC.Result request factor frame witness answer := by
-  have production : GraphUnification.Checked Executable.checkFactors Executable.graphHomogeneousUnify :=
+  have production : GraphUnification.Checked Executable.checkFactors GraphUnification.run :=
     GraphUnification.checked_correct FactorCheck.run_correct GraphUnification.run_correct
   refine production request factor plus rows packet wire (by decide +kernel) 2 frame (by decide)
     answer (by decide +kernel) witness ?_ ?_ ?_
@@ -261,7 +261,7 @@ private def projected : Answers := #[#[#[0,0,0,0], #[1,0,0]]]
 
 private theorem projected_ok : ProjectedBindings.Denotes request factor frame witness
     .identity projected := by
-  have h : ProjectedBindings.Checked Executable.checkFactors Executable.graphHomogeneousUnify
+  have h : ProjectedBindings.Checked Executable.checkFactors GraphUnification.run
       Executable.projectAnswers := ProjectedBindings.checked_correct
     (GraphUnification.checked_correct FactorCheck.run_correct GraphUnification.run_correct)
     AnswerProjection.project_correct

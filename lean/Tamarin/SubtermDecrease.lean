@@ -61,8 +61,9 @@ private instance : BEq (Head s) := ⟨ConstructorRows.headEq⟩
 /-- Propagate tiers backwards from the heads in ground results. A ground row
 already oriented at level zero needs no additional tier. A dependency path
 in an acyclic graph traverses at most one edge per ground definition; the same
-bound stops proposal on a cycle. Acceptance independently checks the result. -/
-def inferLevel (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+bound stops proposal on a cycle. Acceptance independently checks the result.
+The list holds the heads with a positive level. -/
+def levelTable (base : Head s → Nat) (rs : Problem s) : List (Head s × Nat) :=
   let deps := rs.filterMap fun r =>
     if r.rhs.variables.isEmpty && !(subterms r.lhs).tail.contains r.rhs then
       some (head r.lhs, (subterms r.rhs).map head, decide (rank base r.rhs < rank base r.lhs))
@@ -73,8 +74,11 @@ def inferLevel (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
     let needed := if depth == 0 && baseOriented then 0 else depth + 1
     if needed ≤ (levels.lookup h).getD 0 then levels
     else (h,needed) :: levels.eraseP (fun entry => entry.1 == h)
-  let levels := Nat.repeat (fun levels => deps.foldl update levels) deps.length []
-  fun h => (levels.lookup h).getD 0
+  Nat.repeat (fun levels => deps.foldl update levels) deps.length []
+
+/-- The level of every head in `levelTable`; zero for a head it does not list. -/
+def inferLevel (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+  fun h => ((levelTable base rs).lookup h).getD 0
 
 def defaultWeight (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
   weights base rs (inferLevel base rs)
@@ -89,7 +93,8 @@ private def residual (r : Equation s) : List (Head s) × List (Head s) :=
   let rhs := symbols r.rhs
   (rhs.foldl List.erase lhs, lhs.foldl List.erase rhs)
 
-private def relax (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+/-- The raised weights of `relax`, by head. -/
+private def relaxTable (base : Head s → Nat) (rs : Problem s) : List (Head s × Nat) :=
   let read (ws : List (Head s × Nat)) (h : Head s) := (ws.lookup h).getD (base h)
   let constraints := rs.map residual
   let update (ws : List (Head s × Nat)) (row : List (Head s) × List (Head s)) :=
@@ -105,7 +110,10 @@ private def relax (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
     | n+1, ws =>
       let next := constraints.foldl update ws
       if next == ws then ws else passes n next
-  read (passes constraints.length [])
+  passes constraints.length []
+
+private def relax (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+  fun h => ((relaxTable base rs).lookup h).getD (base h)
 
 /-- Try the supplied weighting and the ground dependency tiers first. If
 neither suffices, relax the residual strict inequalities for at most one
@@ -123,6 +131,36 @@ theorem preserves_decreasing (base : Head s → Nat) (rs : Problem s)
   · simp [proposeWeight,baseOK]
   · have groundOK := prior.resolve_left baseOK
     simp [proposeWeight,baseOK,groundOK]
+
+/-- The weighting `proposeWeight` chooses, as data: the supplied weights, the
+dependency tiers over a radix, or the relaxed weights. Reading a weight from it
+is a lookup in the stored list. -/
+inductive Proposal (s : Signature) where
+  | supplied
+  | tiered (radix : Nat) (levels : List (Head s × Nat))
+  | relaxed (raised : List (Head s × Nat))
+
+def Proposal.weight (base : Head s → Nat) : Proposal s → Head s → Nat
+  | .supplied => base
+  | .tiered radix levels => fun h => base h * radix ^ (levels.lookup h).getD 0
+  | .relaxed raised => fun h => (raised.lookup h).getD (base h)
+
+/-- The choice of `proposeWeight`, with each table it reads computed once. -/
+def propose (base : Head s → Nat) (rs : Problem s) : Proposal s :=
+  if decreasing base rs then .supplied else
+    let tiered := Proposal.tiered (radix base rs) (levelTable base rs)
+    if decreasing (tiered.weight base) rs then tiered else .relaxed (relaxTable base rs)
+
+theorem propose_weight (base : Head s → Nat) (rs : Problem s) :
+    (propose base rs).weight base = proposeWeight base rs := by
+  have tiers : (Proposal.tiered (radix base rs) (levelTable base rs)).weight base =
+      defaultWeight base rs := rfl
+  unfold propose proposeWeight
+  dsimp only
+  rw [tiers]
+  split
+  · rfl
+  · split <;> rfl
 
 end
 

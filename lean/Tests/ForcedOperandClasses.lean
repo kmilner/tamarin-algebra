@@ -2,6 +2,8 @@ import TamarinRuntime
 
 open Tamarin.Executable
 
+private abbrev forcedOperandClasses := Tamarin.ForcedOperandClasses.run
+
 private def equivalent (w : UInt64) (sides : Array (Array UInt64)) (i j : Nat) : Option Bool := do
   let out ← forcedOperandClasses w sides
   return (← out[i]?) == (← out[j]?)

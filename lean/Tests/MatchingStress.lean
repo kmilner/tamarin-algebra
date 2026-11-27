@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 /-! Exhaustive finite-model test of the flat matching contract. The oracle
 represents a free commutative semigroup on two generators by pairs of natural
@@ -92,8 +92,7 @@ example : CollectorMultiplicity.Admissible lengthGuard where
   rejects occ rhs bad := by simp [lengthGuard,exportedCollectorPossible_correct.rejects occ rhs bad]
 
 example : CollectorMultiplicity.Possible [0,1] [7] := by
-  unfold CollectorMultiplicity.Possible
-  decide
+  simp [CollectorMultiplicity.Possible, List.count_cons]
 example : lengthGuard #[0,1] #[7] = false := rfl
 
 private abbrev Bag := Nat × Nat

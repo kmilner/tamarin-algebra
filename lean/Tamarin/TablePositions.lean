@@ -133,6 +133,129 @@ private def walk [DecidableEq s.ACSym] (u : VerifiedUnifier s (fun _ => True))
       · exact .inr ⟨false,v',st,out⟩
       · exact .inr ⟨true,v',st,(EquivB.ac_swap ..).trans out⟩
 
+/-- Root branches of every term over a list of anchors. The branches of an
+application other than an AC product cover the rewrites at its root, those of
+an AC product the rewrites of its subproducts. Only substitutions that are
+normal on the variables of the anchors have to be covered. -/
+structure RootSource (rules : List (Equation s)) where
+  roots : List (Term s) → Term s → List (Branch s)
+  genuine : ∀ anchors t, (∀ w, t.Occurs w → Observed anchors w) → ∀ b ∈ roots anchors t,
+    StepModulo (ruleRoot rules) (b.subst.apply t) b.value
+  plain : ∀ anchors t, (∀ w, t.Occurs w → Observed anchors w) → (∀ f a b, t ≠ .ac f a b) →
+    ∀ ρ : Substitution s, (∀ w, Observed anchors w → Normal (ruleRoot rules) (ρ.image w)) →
+    ∀ v, AtRoot (ruleRoot rules) (ρ.apply t) v →
+    ∃ b ∈ roots anchors t, FitsOn (Observed anchors) ρ v b.subst b.value
+  product : ∀ anchors f a b, (∀ w, (Term.ac f a b).Occurs w → Observed anchors w) →
+    ∀ ρ : Substitution s, (∀ w, Observed anchors w → Normal (ruleRoot rules) (ρ.image w)) →
+    ∀ v, Occurrence (ruleRoot rules) f (ρ.apply (.ac f a b)) v →
+    ∃ d ∈ roots anchors (.ac f a b), FitsOn (Observed anchors) ρ v d.subst d.value
+
+/-- A branch below a frame. -/
+def below (frame : Frame s) (b : Branch s) : Branch s := ⟨b.subst,frame.fill b.subst b.value⟩
+
+/-- The root branches of every position of a term that is not a variable. -/
+def positions (roots : Term s → List (Branch s)) : Term s → List (Branch s)
+  | .var _ => []
+  | .atom a => roots (.atom a)
+  | .free f xs => roots (.free f xs) ++ (List.finRange (s.arity f)).flatMap fun i =>
+      (positions roots (xs i)).map (below (.free f xs i))
+  | .comm f a b => roots (.comm f a b) ++
+      ((positions roots a).map (below (.comm f b)) ++ (positions roots b).map (below (.comm f a)))
+  | .ac f a b => roots (.ac f a b) ++
+      ((positions roots a).map (below (.ac f (some b))) ++
+        (positions roots b).map (below (.ac f (some a))))
+
+private theorem positions_position [DecidableEq s.ACSym] (source : RootSource rules)
+    (anchors : List (Term s)) (admit : Substitution s → Prop)
+    (norm : ∀ ρ, admit ρ → ∀ w, Observed anchors w → Normal (ruleRoot rules) (ρ.image w))
+    (t : Term s) (live : ∀ w, t.Occurs w → Observed anchors w) :
+    ∃ P : Position (ruleRoot rules) (Observed anchors) admit t,
+      P.branches = positions (source.roots anchors) t := by
+  induction t with
+  | var w =>
+    exact ⟨⟨[],by simp,fun ρ ok v step => (norm ρ ok w (live w rfl) v step).elim⟩,rfl⟩
+  | atom a =>
+    refine ⟨⟨source.roots anchors (.atom a),source.genuine anchors _ live,?_⟩,rfl⟩
+    rintro ρ ok v ⟨p,q,l,fire,r⟩
+    have top := source.plain anchors (.atom a) live (fun _ _ _ h => nomatch h) ρ (norm ρ ok) v
+    cases p <;> cases l.head_eq
+    cases fire with | root h => exact top ⟨_,_,l,h,r⟩
+  | free f xs ih =>
+    have child (i) := ih i (fun w h => live w ⟨i,h⟩)
+    let top : Answers (ruleRoot rules) (Observed anchors) admit (.free f xs)
+        (fun σ v => AtRoot (ruleRoot rules) (σ.apply (.free f xs)) v) :=
+      ⟨source.roots anchors (.free f xs),source.genuine anchors _ live,fun ρ ok v st =>
+        source.plain anchors _ live (fun _ _ _ h => nomatch h) ρ (norm ρ ok) v st⟩
+    refine ⟨joinPositions top (List.finRange _) (List.mem_finRange) xs (Frame.free f xs)
+      (fun i => (child i).choose) ?_ ?_ ?_,?_⟩
+    · rintro i w ⟨j,_,h⟩
+      exact live w ⟨j,h⟩
+    · intro i σ v step
+      exact (ContextualReduction.free_iff ..).mpr (.inr ⟨i,v,step,.refl _⟩)
+    · exact fun ρ v => (ContextualReduction.free_iff ..).mp
+    · change source.roots anchors (.free f xs) ++ (List.finRange _).flatMap (fun i =>
+        (child i).choose.branches.map _) = _
+      have same (i) : (child i).choose.branches = positions (source.roots anchors) (xs i) :=
+        (child i).choose_spec
+      simp only [same]
+      rw [positions]
+      rfl
+  | comm f a b iha ihb =>
+    have left := iha (fun w h => live w (.inl h))
+    have right := ihb (fun w h => live w (.inr h))
+    let entries := pair a b
+    let fr := fun i => Frame.comm f (entries (!i))
+    let top : Answers (ruleRoot rules) (Observed anchors) admit (.comm f a b)
+        (fun σ v => AtRoot (ruleRoot rules) (σ.apply (.comm f a b)) v) :=
+      ⟨source.roots anchors (.comm f a b),source.genuine anchors _ live,fun ρ ok v st =>
+        source.plain anchors _ live (fun _ _ _ h => nomatch h) ρ (norm ρ ok) v st⟩
+    refine ⟨joinPositions top [false,true] (by decide) entries fr
+      (fun | false => left.choose | true => right.choose) ?_ ?_ ?_,?_⟩
+    · intro i w h; cases i
+      · exact live w (.inr h)
+      · exact live w (.inl h)
+    · intro i σ v step; cases i
+      · exact (ContextualReduction.comm_iff ..).mpr (.inr (.inl ⟨v,step,.refl _⟩))
+      · exact (ContextualReduction.comm_iff ..).mpr (.inr (.inr ⟨v,step,.comm_swap ..⟩))
+    · intro ρ v step
+      rcases (ContextualReduction.comm_iff ..).mp step with fire|⟨v',st,out⟩|⟨v',st,out⟩
+      · exact .inl fire
+      · exact .inr ⟨false,v',st,out⟩
+      · exact .inr ⟨true,v',st,(EquivB.comm_swap ..).trans out⟩
+    · change source.roots anchors (.comm f a b) ++ (left.choose.branches.map _ ++
+        (right.choose.branches.map _ ++ [])) = _
+      rw [left.choose_spec,right.choose_spec,List.append_nil,positions]
+      rfl
+  | ac f a b iha ihb =>
+    have left := iha (fun w h => live w (.inl h))
+    have right := ihb (fun w h => live w (.inr h))
+    let t := Term.ac f a b
+    let top : Answers (ruleRoot rules) (Observed anchors) admit t
+        (fun ρ v => Occurrence (ruleRoot rules) f (ρ.apply t) v) :=
+      ⟨source.roots anchors t,source.genuine anchors _ live,fun ρ ok v st =>
+        source.product anchors f a b live ρ (norm ρ ok) v st⟩
+    let entries := pair a b
+    let fr := fun i => Frame.ac f (some (entries (!i)))
+    refine ⟨joinPositions top [false,true] (by decide) entries fr
+      (fun | false => left.choose | true => right.choose) ?_ ?_ ?_,?_⟩
+    · rintro i w ⟨x,hx,hw⟩
+      obtain rfl := Option.mem_some_iff.mp hx
+      cases i
+      · exact live w (.inr hw)
+      · exact live w (.inl hw)
+    · intro i σ v step; cases i
+      · exact (NarrowingPositions.ac_children_iff ..).mpr (.inr (.inl ⟨v,step,.refl _⟩))
+      · exact (NarrowingPositions.ac_children_iff ..).mpr (.inr (.inr ⟨v,step,.ac_swap ..⟩))
+    · intro ρ v step
+      rcases (NarrowingPositions.ac_children_iff ..).mp step with fire|⟨v',st,out⟩|⟨v',st,out⟩
+      · exact .inl fire
+      · exact .inr ⟨false,v',st,out⟩
+      · exact .inr ⟨true,v',st,(EquivB.ac_swap ..).trans out⟩
+    · change source.roots anchors (.ac f a b) ++ (left.choose.branches.map _ ++
+        (right.choose.branches.map _ ++ [])) = _
+      rw [left.choose_spec,right.choose_spec,List.append_nil,positions]
+      rfl
+
 /-- A rewrite using a range-restricted table can only retain variables from
 the source. This also accounts for rewriting under structural equivalence. -/
 private theorem stepUses (bound : ReferenceReduction.Bound rules) {a b : Term s}
@@ -233,5 +356,37 @@ def positional [DecidableEq s.ACSym] (u : VerifiedUnifier s (fun _ => True))
   branches p := (atPoint u bound groups (keysOf query) p).branches
   genuine p _ := (atPoint u bound groups (keysOf query) p).genuine
   lifts p hp := (atPoint u bound groups (keysOf query) p).covers (fromInputs query p bound hp)
+
+/-- The terms of a point that narrowing keeps apart from: the images of the
+keys, then the values. -/
+def cells (keys : List Variable) (p : Point s n) : List (Term s) :=
+  keys.map p.assignment.image ++ List.ofFn p.value
+
+/-- The narrower that takes its root branches from a source. -/
+def positionalWith [DecidableEq s.ACSym] (source : RootSource rules) (bound : ReferenceReduction.Bound rules)
+    (query : Fin n → Term s) : FoldingNarrowing.Narrower rules query where
+  branches p i := positions (source.roots (cells (keysOf query) p)) (p.value i)
+  genuine p _ i b hb := by
+    let keys := keysOf query
+    obtain ⟨P,same⟩ := positions_position source (anchors p keys) (fun _ => False)
+      (fun _ ok => ok.elim) (p.value i) (fun w h => (anchors_iff p keys w).mpr (.inr ⟨i,h⟩))
+    exact P.genuine b (same ▸ hb)
+  lifts p hp i := by
+    let keys := keysOf query
+    let admiss (ρ : Substitution s) := ∀ w, Observed (anchors p keys) w →
+      Normal (ruleRoot rules) (ρ.image w)
+    obtain ⟨P,same⟩ := positions_position source (anchors p keys) admiss (fun _ h => h) (p.value i)
+      (fun w h => (anchors_iff p keys w).mpr (.inr ⟨i,h⟩))
+    have tracks := fromInputs query p bound hp
+    intro ρ ok v step
+    have norm : admiss ρ := by
+      intro w hw
+      have live := (anchors_iff p keys w).mp hw
+      rcases live with ⟨k,hm⟩|⟨j,hm⟩
+      · exact RulePattern.image_normal (ok k) hm
+      · obtain ⟨k,hk⟩ := tracks j w hm
+        exact RulePattern.image_normal (ok k) hk
+    obtain ⟨b,hb,η,agree,out⟩ := P.covers ρ norm v step
+    exact ⟨b,same ▸ hb,η,fun w h => agree w ((anchors_iff p keys w).mpr h),out⟩
 
 end Tamarin.TableNarrowing

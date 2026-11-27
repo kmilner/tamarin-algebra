@@ -1,25 +1,28 @@
 import Tamarin.CertifiedTableWire
+import Tamarin.TheoryWire
+import Tamarin.CertifiedReductionWire
+import Tamarin.VariantFold
+import Tamarin.SessionTableWire
 import TamarinRuntime.Candidates.Table
-import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
+import Tamarin.TotalUnifyExists
+import Tamarin.TotalUnifyFast
+import Tamarin.TheoryWireFast
+import Tamarin.UnifierNames
 import Tamarin.PackedConjunction
+import Tamarin.MaudeUnifyExport
+import Tamarin.MaudeVariantsExport
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
-import TamarinRuntime.Whole
-import TamarinRuntime.MixedSizeGraph
 import TamarinRuntime.ACSpanOverlap
 import TamarinRuntime.FactorCheck
 import TamarinRuntime.ResidualVariable
 import TamarinRuntime.ResidualRigid
-import TamarinRuntime.GraphUnification
 import TamarinRuntime.ACMatchPacket
 import TamarinRuntime.ACBagSearch
-import TamarinRuntime.ACBagAnswers
-import TamarinRuntime.ACPagePacket
 import TamarinRuntime.ACSortedBagPacket
-import TamarinRuntime.ACFeasibility
 import TamarinRuntime.AnswerProjection
 import TamarinRuntime.SortedMatch
 import TamarinRuntime.OpenMatchSelect
@@ -33,9 +36,13 @@ import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
 import TamarinRuntime.ReductionGraph
 import TamarinRuntime.OperandUnification
+-- No export names it, but build.rs links the TamarinRuntime modules that Lake reaches
+-- through this library's own imports, and ForcedOperandClasses (with ACForcedCoordinates) is
+-- otherwise reached only through Tamarin.ForcedOperandClasses.
 import TamarinRuntime.ForcedOperandClasses
 import TamarinRuntime.MaskedOperands
 import TamarinRuntime.OperandRefinement
+import TamarinRuntime.UnifierSelfNames
 
 /-!
 Fixed native export wrapper. Cargo builds this target without the proof/audit
@@ -46,15 +53,6 @@ namespace Tamarin.Executable
 @[export tamarin_ac_bag_match]
 def acBagMatch (packet : Matching.ACMatchPacket.Packet) : UInt8 :=
   Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet
-
-@[export tamarin_ac_bag_answers]
-def acBagAnswers (packet : Matching.ACMatchPacket.Packet) : Option Matching.ACMatchPacket.Answers :=
-  Matching.ACMatchPacket.runAnswersWith Matching.ACBagAnswers.run packet
-
-@[export tamarin_ac_bag_page]
-def acBagPage (packet : Matching.ACMatchPacket.Packet) (start : Array UInt64) (requested : UInt64) :
-    Option Matching.ACMatchPacket.Answers :=
-  Matching.ACPagePacket.runWith Matching.ACBagPages.run packet start requested
 
 @[export tamarin_ac_bag_typed_match]
 def acBagTypedMatch (rows limits : Matching.ACMatchPacket.Packet) : UInt8 :=
@@ -74,14 +72,6 @@ def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=
 @[export tamarin_pairing_variants]
 def pairingVariants (hasProjection : Bool) : UInt8 :=
   RuntimeCandidate.pairing.variants hasProjection
-
-@[export tamarin_pairing_project]
-def pairingProject (first : Bool) : UInt8 :=
-  RuntimeCandidate.pairing.project first
-
-@[export tamarin_reflexive_unify]
-def reflexiveUnify (recognized : Bool) : UInt8 :=
-  RuntimeCandidate.reflexive.solve recognized
 
 @[export tamarin_flat_ac_match]
 def flatACMatch (n : UInt64) (occurrences tail rhs : Array UInt64) : Array (Array (Array UInt64)) :=
@@ -125,14 +115,6 @@ def openMatchSelect (rigid subject : UInt64) : Option (Array (Array UInt64)) :=
 def sortedACMatch (acSort : UInt64) (varSort atomSort occ tail rhs : Array UInt64) :
     Option (Array (Array (Array UInt64))) :=
   SortedMatch.runWith flatACMatch acSort varSort atomSort occ tail rhs
-
-@[export tamarin_shared_offset]
-def sharedOffset (a b : UInt64) : Array (Array (Array UInt64)) :=
-  RuntimeCandidate.sharedOffset a b
-
-@[export tamarin_rigid_allocation]
-def rigidAllocation (reversed : Bool) : Array (Array (Array UInt64)) :=
-  RuntimeCandidate.rigidAllocation reversed
 
 @[export tamarin_comm_orientations]
 def commOrientations (a b c d : UInt64) (priority : UInt8) : UInt8 :=
@@ -199,27 +181,96 @@ def factorRefutes (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UI
 def unpackConjunction (nodes : PackedConjunction.Rows) (limit lhs rhs : UInt64) : PackedConjunction.Rows :=
   PackedConjunction.run nodes limit lhs rhs
 
-@[export tamarin_total_unify]
-def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
-    Array (Array UInt64) := TotalUnifyWire.run decls nodes roots
+/-! The searches of an interruptible export under a given caller. The caller
+is an explicit argument here and an instance argument below. The compiler
+specializes the calls in the body of a function for its instance arguments
+only if the function has no instance argument of its own, so these four are
+where the searches get specialized for the declarations of a packet. -/
 
-@[export tamarin_total_match]
+@[noinline] def totalUnifyFor (i : Interrupt) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : Array (Array UInt64) := @TotalUnifyWire.run i decls nodes roots
+
+@[noinline] def totalUnifyExistsFor (i : Interrupt) (decls : Array UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  @TotalUnifyWire.runExists i decls nodes roots
+
+@[noinline] def maudeUnifyFor (i : Interrupt) (decls : Array UInt64) (ranks : Array (Array UInt64))
+    (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  @MaudeUnifyExport.run i decls ranks fuel nodes roots
+
+@[noinline] def pathReduceFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
+  @PathReductionWire.run i ds ns rules root fuel
+
+@[noinline] def sessionReduceFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (root fuel : UInt64) :
+    Array (Array UInt64) :=
+  @SessionReductionWire.run i ds ns rules extra root fuel
+
+def totalUnify (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots
+
+def totalUnifyExists (poll : Unit → Bool) (decls : Array UInt64) (nodes : Array (Array UInt64))
+    (roots : Array UInt64) : UInt8 :=
+  Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots
+
+def maudeUnify (poll : Unit → Bool) (decls : Array UInt64) (ranks : Array (Array UInt64)) (fuel : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => maudeUnifyFor i decls ranks fuel nodes roots
+
+/-- Tables that name the variables a family of unifiers adds to its query:
+see `Tamarin.UnifierNames`. -/
+@[export tamarin_name_unifiers]
+def nameUnifiers (names heads : Array UInt64) (ranges proposal : Array (Array UInt64))
+    (nat low : Bool) : Array (Array UInt64) :=
+  UnifierNames.run names heads ranges proposal nat low
+
+/-- A proposal for `nameUnifiers`, made from what the caller reads off the
+reply of the unifier: see `Tamarin.UnifierSelfNames`. Nothing is promised about
+it; `nameUnifiers` tests it as any other proposal. -/
+@[export tamarin_propose_unifier_names]
+def proposeUnifierNames (names heads order : Array UInt64) (ranges : Array (Array UInt64))
+    (singles counts : Array UInt64) : Array (Array UInt64) :=
+  UnifierSelfNames.propose names heads order ranges singles counts
+
+/-- The reading of a reply of the unifier through the tables of
+`nameUnifiers`, as the caller's reader has to produce it. The caller's tests
+compare the two. `#[#[0]]` when there is no reading. -/
+@[export tamarin_apply_names]
+def applyNames (tables : Array (Array UInt64)) (nat : Bool) (reply : Array (Array UInt64)) :
+    Array (Array UInt64) :=
+  (UnifierNames.apply tables nat reply).getD #[#[0]]
+
 def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
     Array (Array UInt64) := TotalMatchWire.run decls nodes roots ids
 
-@[export tamarin_checked_reduce]
-def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := CheckedReductionWire.run decls nodes rules root fuel
+def totalMatchExists (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
+    UInt8 := TotalMatchWire.runExists decls nodes roots ids
 
-@[export tamarin_general_reduce]
-def generalReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := TableCandidate.reduce ds ns rules root fuel
+def pathReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (root fuel : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => pathReduceFor i ds ns rules root fuel
+
+def sessionReduce (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (root fuel : UInt64) :
+    Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => sessionReduceFor i ds ns rules extra root fuel
+
+@[noinline] def sessionVariantCheckFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (roots : Array UInt64)
+    (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
+  @SessionVariantCheckWire.run i ds ns rules extra roots family fuel work
+
+def sessionVariantCheck (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules : Array UInt64) (extra : Array (Array UInt64)) (roots : Array UInt64)
+    (family : Array (Array UInt64)) (fuel work : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work
 
 @[export tamarin_checked_variants]
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := CheckedVariantsWire.run ds ns rules roots fuel
 
-@[export tamarin_certify_table]
 def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64) (fuel : UInt64) : Bool :=
   CertifiedTableWire.run ds ns rules fuel
 
@@ -227,10 +278,29 @@ def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array 
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := TableCandidate.variants ds ns rules roots fuel
 
-@[export tamarin_whole_unify]
-def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :
+@[noinline] def foldVariantsFor (i : Interrupt) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules roots : Array UInt64) (fuel work : UInt64) : Array (Array UInt64) :=
+  @FoldVariantsWire.run i ds ns rules roots fuel work
+
+@[export tamarin_fold_variants]
+def foldVariants (poll : Unit → Bool) (ds : Array UInt64) (ns : Array (Array UInt64))
+    (rules roots : Array UInt64) (fuel work : UInt64) : Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => foldVariantsFor i ds ns rules roots fuel work
+
+@[noinline] def maudeVariantsFor (i : Interrupt) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Array (Array UInt64) :=
-  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations
+  @MaudeVariantsExport.run i flags free ac ranks fuel nodes roots
+
+/-- What Maude 3.5.1 lists for `get variants` on the module of the theory, in
+Maude's order and numbering, under the caller's ranks and fuel: see
+`Tamarin.MaudeVariantsExport`. A proposer: the caller uses the family only
+once `tamarin_theory_variant_check` has accepted it. -/
+@[export tamarin_maude_variants]
+def maudeVariants (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  Interrupt.run poll #[#[4]] fun i => maudeVariantsFor i flags free ac ranks fuel nodes roots
 
 @[export tamarin_variant_overlap_agrees]
 def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=
@@ -241,22 +311,8 @@ def checkFactors (decls : Array UInt64) (nodes : Array (Array UInt64))
     (original bindings residual : Array UInt64) : Bool :=
   FactorCheck.run decls nodes original bindings residual
 
-@[export tamarin_graph_homogeneous_unify]
-def graphHomogeneousUnify (width symbol sort : UInt64) (decls : Array UInt64)
-    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Option Homogeneous.Answers :=
-  GraphUnification.run width symbol sort decls nodes roots
-
-@[export tamarin_graph_ac_feasible]
-def graphACFeasible (width symbol sort : UInt64) (decls : Array UInt64)
-    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
-  ACFeasibility.run width symbol sort decls nodes roots
-
 @[export tamarin_operand_refine]
 def operandRefine (sides : Array UInt64) : Array UInt64 := OperandRefinementCandidate.keep sides
-
-@[export tamarin_forced_operand_classes]
-def forcedOperandClasses (width : UInt64) (sides : Array (Array UInt64)) : Option (Array UInt64) :=
-  ForcedOperandClasses.run width sides
 
 @[export tamarin_operand_unify]
 def operandUnify (width : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=
@@ -269,5 +325,73 @@ def maskedOperandUnify (width mask : UInt64) (sides : Array (Array UInt64)) : Op
 @[export tamarin_project_answers]
 def projectAnswers (width : UInt64) (answers : Homogeneous.Answers) : Option Homogeneous.Answers :=
   AnswerProjection.project width answers
+
+/-! Exports over the theory of a Tamarin file (`Tamarin.Theory`): the caller
+sends the builtin flags, the arities of its other free symbols and the number
+of its AC symbols instead of declaration words, and the user rules of a table.
+The builtin rules are added here. Each export is the export above on the packet
+`Tamarin.Theory` builds; arguments that are not those of a valid signature get
+the reply to an undecodable packet. The terms of a call on a table arrive as
+rows `extra` numbered from 0, and `root`, `roots` and `family` index them. -/
+
+@[export tamarin_theory_unify]
+def theoryUnify (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : Array (Array UInt64) :=
+  totalUnify poll (Theory.wireDeclarations flags free ac) nodes roots
+
+/-- The port of Maude's unification algorithm on the query of `theoryUnify`,
+under the caller's ranks and fuel: see `Tamarin.MaudeUnifyExport`. -/
+@[export tamarin_theory_maude_unify]
+def theoryMaudeUnify (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (ranks : Array (Array UInt64)) (fuel : UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) :=
+  maudeUnify poll (Theory.wireDeclarations flags free ac) ranks fuel nodes roots
+
+@[export tamarin_theory_unify_exists]
+def theoryUnifyExists (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  totalUnifyExists poll (Theory.wireDeclarations flags free ac) nodes roots
+
+@[export tamarin_theory_match]
+def theoryMatch (flags : UInt64) (free : Array UInt64) (ac : UInt64) (nodes : Array (Array UInt64))
+    (roots ids : Array UInt64) : Array (Array UInt64) :=
+  totalMatch (Theory.wireDeclarations flags free ac) nodes roots ids
+
+@[export tamarin_theory_match_exists]
+def theoryMatchExists (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (roots ids : Array UInt64) : UInt8 :=
+  totalMatchExists (Theory.wireDeclarations flags free ac) nodes roots ids
+
+@[export tamarin_theory_certify]
+def theoryCertify (flags : UInt64) (free : Array UInt64) (ac : UInt64) (nodes : Array (Array UInt64))
+    (rules : Array UInt64) (fuel : UInt64) : Bool :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  certifyTable p.ds p.ns p.es fuel
+
+@[export tamarin_theory_path_reduce]
+def theoryPathReduce (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (root fuel : UInt64) : Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  pathReduce poll p.ds (p.ns ++ Theory.moveRows p.ns.size extra) p.es
+    (Theory.place p.ns.size extra.size root) fuel
+
+@[export tamarin_theory_reduce]
+def theoryReduce (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (root fuel : UInt64) : Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  sessionReduce poll p.ds p.ns p.es (Theory.moveRows p.ns.size extra)
+    (Theory.place p.ns.size extra.size root) fuel
+
+@[export tamarin_theory_variant_check]
+def theoryVariantCheck (poll : Unit → Bool) (flags : UInt64) (free : Array UInt64) (ac : UInt64)
+    (nodes : Array (Array UInt64)) (rules : Array UInt64) (extra : Array (Array UInt64))
+    (roots : Array UInt64) (family : Array (Array UInt64)) (fuel work : UInt64) :
+    Array (Array UInt64) :=
+  let p := Theory.wirePacket flags free ac nodes rules
+  sessionVariantCheck poll p.ds p.ns p.es (Theory.moveRows p.ns.size extra)
+    (roots.map (Theory.place p.ns.size extra.size))
+    (family.map (·.map (Theory.place p.ns.size extra.size))) fuel work
 
 end Tamarin.Executable

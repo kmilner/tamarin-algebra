@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 namespace Tamarin.Matching.Tests
 open Tamarin.Pairing

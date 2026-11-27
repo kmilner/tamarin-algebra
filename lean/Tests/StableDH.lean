@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 import Tamarin.DHPeerComplete
 
 /-! Instantiate AC exclusion against every rule of the DH presentation.

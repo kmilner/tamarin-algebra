@@ -19,6 +19,18 @@ private theorem fits_iff {d : Dictionary} (widths : ∀ f, d.sig.arity f < UInt6
   | free f xs ih => simp [FieldsFit,widths f,Term.Occurs,ih]; grind
   | comm f l r il ir | ac f l r il ir => simp [FieldsFit,Term.Occurs,il,ir]; grind
 
+/-- Every reduct of a decoded observation fits the reply. -/
+theorem decodes_reduct {d : Dictionary} {rs : Problem d.sig} {t u : Term d.sig}
+    {ds ns es root} (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)
+    (bound : ReferenceReduction.Bound rs) (red : Reduces (ruleRoot rs) t u) :
+    Decodes d (emit u) u := by
+  obtain ⟨widths,observed⟩ := TableWire.input_fits h
+  have source := observed t List.mem_cons_self
+  have safe := (fits_iff widths u).mpr (fun v hv => (fits_iff widths t).mp source v
+    (TableNarrowing.reducesUses bound red v hv))
+  obtain ⟨ts,hw⟩ := fits_write _ safe
+  exact ⟨(ts.flatMap Token.words).toArray,ts,by simp [emit,hw],by simp [tokenize_words],write_executes u ts hw []⟩
+
 theorem decodes_emit {d : Dictionary} {rs : Problem d.sig} {t u : Term d.sig}
     {ds ns es root} (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)
     (bound : ReferenceReduction.Bound rs) (reply : ReductionReply (ruleRoot rs) t u) :

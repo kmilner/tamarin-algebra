@@ -440,6 +440,10 @@ private theorem below {n} (gs : List (Vec n)) (x : Vec n) (rep : Generates gs x)
   exact Nat.le_trans (by simpa using (Nat.mul_le_mul_left (gs.get i k) hc))
     (le_total (fun a => gs.get a k * c a) i)
 
+/-- A nonzero generated vector lies above a nonzero generator. -/
+theorem dominating {n} (gs : List (Vec n)) (x : Vec n) (rep : Generates gs x) (nz : ∃ i, 0 < x i) :
+    ∃ y ∈ gs, (∃ i, 0 < y i) ∧ ∀ i, y i ≤ x i := below gs x rep nz
+
 private theorem minimal_below {n} (gs : List (Vec n)) (x : Vec n) (mem : x ∈ gs) (nz : ∃ i, 0 < x i) :
     ∃ y ∈ minimize gs, ∀ i, y i ≤ x i := by
   classical
@@ -486,6 +490,388 @@ theorem generate_correct {n} (rows : List (Row n)) : BasisCorrect rows (generate
   induction rows with
   | nil => exact minimize_correct _ _ (units_correct n)
   | cons r rs ih => exact minimize_correct _ _ (intersect_correct r rs _ ih)
+
+private theorem exists_pos {n} (v : Vec n) (h : 0 < total v) : ∃ j, 0 < v j := by
+  apply Classical.byContradiction
+  intro none
+  have bound : ∀ i, v i ≤ 0 := fun i => Nat.le_of_not_lt (fun lt => none ⟨i,lt⟩)
+  have := total_le v 0 bound
+  omega
+
+private theorem term_le_dot {n} (a x : Vec n) (i : Fin n) : a i * x i ≤ dot a x :=
+  le_total (fun i => a i * x i) i
+
+theorem Row.mem_pairs {n} (r : Row n) (v : Vec n) :
+    v ∈ r.pairs ↔ (∃ i, (r.pos i = 0 ∧ r.neg i = 0) ∧ spike i 1 = v) ∨
+      ∃ i, r.pos i = 1 ∧ ∃ j, r.neg j = 1 ∧ pair i j = v := by
+  simp [Row.pairs]
+
+private theorem pair_holds {n} (r : Row n) (i j : Fin n) (hp : r.pos i = 1) (hq : r.neg j = 1) :
+    r.Holds (pair i j) := by
+  have ni : r.neg i = 0 := by have := r.disjoint i; omega
+  have pj : r.pos j = 0 := by have := r.disjoint j; omega
+  unfold Row.Holds pair
+  rw [dot_add, dot_add, dot_spike, dot_spike, dot_spike, dot_spike, hp, hq, ni, pj]
+
+private theorem spike_le {n} (i : Fin n) (x : Vec n) (h : 0 < x i) : ∀ k, spike i 1 k ≤ x k := by
+  intro k
+  unfold spike
+  split
+  · next e => subst e; exact h
+  · exact Nat.zero_le _
+
+private theorem pair_le {n} (i j : Fin n) (x : Vec n) (ne : i ≠ j) (hi : 0 < x i) (hj : 0 < x j) :
+    ∀ k, pair i j k ≤ x k := by
+  intro k
+  unfold pair spike
+  by_cases ki : k = i
+  · subst ki; simp [ne]; exact hi
+  · by_cases kj : k = j
+    · subst kj; simp [ki]; exact hj
+    · simp [ki, kj]
+
+private theorem pair_pos_left {n} (i j : Fin n) : 0 < pair i j i := by
+  have : spike i 1 i = 1 := by simp [spike]
+  unfold pair
+  omega
+
+private theorem pair_pos_right {n} (i j : Fin n) : 0 < pair i j j := by
+  have : spike j 1 j = 1 := by simp [spike]
+  unfold pair
+  omega
+
+private theorem pairs_complete {n} (r : Row n) (unit : ∀ i, r.pos i ≤ 1 ∧ r.neg i ≤ 1)
+    (x : Vec n) (hx : r.Holds x) : Generates r.pairs x := by
+  apply generate_of_dominated [r] _ _ x (by simpa [SystemHolds] using hx)
+  intro v hv ⟨i,hi⟩
+  have balanced : dot r.pos v = dot r.neg v := hv r (by simp)
+  have solved (y : Vec n) (hy : r.Holds y) : SystemHolds [r] y := by simpa [SystemHolds] using hy
+  by_cases neutral : r.pos i = 0 ∧ r.neg i = 0
+  · refine ⟨spike i 1, (r.mem_pairs _).mpr (.inl ⟨i,neutral,rfl⟩), solved _ ?_, ⟨i, by simp [spike]⟩,
+      spike_le i v hi⟩
+    unfold Row.Holds
+    rw [dot_spike, dot_spike, neutral.1, neutral.2]
+  · by_cases left : r.pos i = 1
+    · have ni : r.neg i = 0 := by have := r.disjoint i; omega
+      have some : 0 < total (fun j => r.neg j * v j) := by
+        have := term_le_dot r.pos v i
+        rw [left] at this
+        change 0 < dot r.neg v
+        omega
+      obtain ⟨j,hj⟩ := exists_pos _ some
+      have nj : r.neg j = 1 := by
+        have := (unit j).2
+        have : r.neg j ≠ 0 := fun z => by simp [z] at hj
+        omega
+      have vj : 0 < v j := by simpa [nj] using hj
+      have ne : i ≠ j := fun e => by subst e; omega
+      exact ⟨pair i j, (r.mem_pairs _).mpr (.inr ⟨i,left,j,nj,rfl⟩), solved _ (pair_holds r i j left nj),
+        ⟨i, pair_pos_left i j⟩, pair_le i j v ne hi vj⟩
+    · have right : r.neg i = 1 := by
+        have := unit i
+        omega
+      have pi : r.pos i = 0 := by have := r.disjoint i; omega
+      have some : 0 < total (fun j => r.pos j * v j) := by
+        have := term_le_dot r.neg v i
+        rw [right] at this
+        change 0 < dot r.pos v
+        omega
+      obtain ⟨j,hj⟩ := exists_pos _ some
+      have pj : r.pos j = 1 := by
+        have := (unit j).1
+        have : r.pos j ≠ 0 := fun z => by simp [z] at hj
+        omega
+      have vj : 0 < v j := by simpa [pj] using hj
+      have ne : j ≠ i := fun e => by subst e; omega
+      exact ⟨pair j i, (r.mem_pairs _).mpr (.inr ⟨j,pj,i,right,rfl⟩), solved _ (pair_holds r j i pj right),
+        ⟨i, pair_pos_right j i⟩, pair_le j i v ne vj hi⟩
+
+theorem Row.quick_holds {n} (r : Row n) (v : Vec n) (h : v ∈ r.quick) : r.Holds v := by
+  unfold Row.quick at h
+  split at h
+  · rcases (r.mem_pairs v).mp h with ⟨i,⟨p0,n0⟩,rfl⟩ | ⟨i,hp,j,hq,rfl⟩
+    · unfold Row.Holds
+      rw [dot_spike, dot_spike, p0, n0]
+    · exact pair_holds r i j hp hq
+  · exact ((r.mem_generators v).mp h).2.1
+
+theorem Row.quick_complete {n} (r : Row n) (x : Vec n) (hx : r.Holds x) : Generates r.quick x := by
+  unfold Row.quick
+  split
+  · next unit => exact pairs_complete r (of_decide_eq_true unit) x hx
+  · exact r.complete x hx
+
+theorem intersectQuick_correct {n} (r : Row n) (rs : List (Row n)) (gs : List (Vec n))
+    (hg : BasisCorrect rs gs) : BasisCorrect (r :: rs) (intersectQuick r gs) := by
+  intro x
+  rw [intersectQuick, lift_generates]
+  constructor
+  · intro h
+    obtain ⟨c, hc⟩ := (hg x).mp (fun q hq => h q (List.mem_cons_of_mem _ hq))
+    exact ⟨c, (r.pullback gs.get).quick_complete c <|
+      (r.pullback_iff ..).mpr (hc ▸ h r (List.mem_cons_self ..)), hc⟩
+  · rintro ⟨c, ⟨w,hw⟩,rfl⟩ q hq
+    rcases List.mem_cons.mp hq with rfl | hr
+    · apply (q.pullback_iff ..).mp
+      rw [← hw]
+      apply (system_mix [q.pullback gs.get] _ _ _) _ (List.mem_singleton_self _)
+      intro i row hr
+      obtain rfl := List.mem_singleton.mp hr
+      exact (q.pullback gs.get).quick_holds _ (List.get_mem _ _)
+    · exact system_mix rs _ _ (mem_sol rs gs hg) q hr
+
+/-- The shortcut changes how each row's generators are found, not what they span. -/
+theorem generateQuick_correct {n} (rows : List (Row n)) : BasisCorrect rows (generateQuick rows) := by
+  induction rows with
+  | nil => exact minimize_correct _ _ (units_correct n)
+  | cons r rs ih => exact minimize_correct _ _ (intersectQuick_correct r rs _ ih)
+
+private theorem dot_succ {n} (p v : Vec (n+1)) :
+    dot p v = p 0 * v 0 + dot (fun i => p i.succ) (fun i => v i.succ) := by
+  simp only [dot, total, List.ofFn_succ, List.sum_cons]
+
+private theorem dot_mono {n} (p v w : Vec n) (h : ∀ i, v i ≤ w i) : dot p v ≤ dot p w := by
+  induction n with
+  | zero => simp [dot, total]
+  | succ n ih =>
+    rw [dot_succ, dot_succ]
+    exact Nat.add_le_add (Nat.mul_le_mul_left _ (h 0)) (ih _ _ _ (fun i => h i.succ))
+
+/-- Bounded solutions of `a + pos·v = b + neg·v`. A prefix is abandoned as soon
+as the remaining coordinates cannot restore the balance. -/
+def search : (n : Nat) → (lim pos neg : Vec n) → (a b : Nat) → List (Vec n)
+  | 0, _, _, _, a, b => if a = b then [Fin.elim0] else []
+  | n+1, lim, pos, neg, a, b =>
+    if a + dot pos lim < b ∨ b + dot neg lim < a then [] else
+      (List.range (lim 0 + 1)).flatMap fun h =>
+        (search n (fun i => lim i.succ) (fun i => pos i.succ) (fun i => neg i.succ)
+          (a + pos 0 * h) (b + neg 0 * h)).map (prepend h)
+
+theorem mem_search {n} (lim pos neg v : Vec n) (a b : Nat) :
+    v ∈ search n lim pos neg a b ↔ (∀ i, v i ≤ lim i) ∧ a + dot pos v = b + dot neg v := by
+  induction n generalizing a b with
+  | zero =>
+    have empty : v = Fin.elim0 := funext fun i => Fin.elim0 i
+    have none (p : Vec 0) : dot p v = 0 := by simp [dot, total]
+    simp only [search, none, Nat.add_zero]
+    split
+    · next same => simp [empty, same]
+    · next ne => simp [ne]
+  | succ n ih =>
+    rw [dot_succ pos v, dot_succ neg v]
+    unfold search
+    split
+    · next cut =>
+      simp only [List.not_mem_nil, false_iff, not_and]
+      intro below eq
+      have l := dot_mono pos v lim below
+      have r := dot_mono neg v lim below
+      rw [dot_succ pos v] at l
+      rw [dot_succ neg v] at r
+      omega
+    · simp only [List.mem_flatMap, List.mem_range, List.mem_map]
+      constructor
+      · rintro ⟨h,hb,t,ht,rfl⟩
+        obtain ⟨below,eq⟩ := (ih _ _ _ _ _ _).mp ht
+        refine ⟨fun i => Fin.cases (by simp; omega) (fun j => by simpa using below j) i, ?_⟩
+        simpa [Nat.add_assoc] using eq
+      · rintro ⟨below,eq⟩
+        refine ⟨v 0, by have := below 0; omega, fun i => v i.succ,
+          (ih _ _ _ _ _ _).mpr ⟨fun j => below j.succ, by omega⟩, ?_⟩
+        funext i; exact Fin.cases rfl (fun _ => rfl) i
+
+/-- Read a table of limits. -/
+private def bounded {n} (table : Vector Nat n) : Vec n := fun i => table[i]
+
+/-- Nonzero solutions of a row below the given limits. -/
+def Row.within {n} (r : Row n) (lim : Vec n) : List (Vec n) :=
+  (search n (bounded (Vector.ofFn lim)) r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
+
+theorem Row.mem_within {n} (r : Row n) (lim v : Vec n) :
+    v ∈ r.within lim ↔ (∀ i, v i ≤ lim i) ∧ r.Holds v ∧ ∃ i, 0 < v i := by
+  simp only [Row.within, List.mem_filter, mem_search, bounded, Fin.getElem_fin, Vector.getElem_ofFn,
+    Fin.eta, Nat.zero_add, Row.Holds, List.any_eq_true, List.mem_ofFn, decide_eq_true_eq]
+  constructor
+  · rintro ⟨⟨below,eq⟩,_,⟨i,rfl⟩,pos⟩
+    exact ⟨below,eq,i,pos⟩
+  · rintro ⟨below,eq,i,pos⟩
+    exact ⟨⟨below,eq⟩,_,⟨i,rfl⟩,pos⟩
+
+/-- One coordinate of each sign, each taken as often as the other's coefficient. -/
+def Row.crosses {n} (r : Row n) : List (Vec n) :=
+  let idx := List.finRange n
+  (idx.filter fun i => 0 < r.pos i).flatMap fun i =>
+    (idx.filter fun j => 0 < r.neg j).map fun j => fun k => spike i (r.neg j) k + spike j (r.pos i) k
+
+/-- Solutions of a row that vanish on its neutral coordinates. With a unit
+side every coordinate is bounded by the largest coefficient. Otherwise a
+solution that is large on both sides contains a two-coordinate solution, and
+the remaining ones are small on one side. -/
+def Row.active {n} (r : Row n) : List (Vec n) :=
+  if r.unitSide then
+    r.within fun i => if r.pos i == 0 && r.neg i == 0 then 0 else r.limits i
+  else
+    r.crosses ++
+      r.within (fun i => if r.neg i == 0 then (if r.pos i == 0 then 0 else r.bound) else r.cap - 1) ++
+      r.within (fun i => if r.pos i == 0 then (if r.neg i == 0 then 0 else r.bound) else r.cap - 1)
+
+private theorem Row.cross_holds {n} (r : Row n) {i j : Fin n} (hp : 0 < r.pos i) (hn : 0 < r.neg j) :
+    r.Holds (fun k => spike i (r.neg j) k + spike j (r.pos i) k) := by
+  have hni : r.neg i = 0 := (r.disjoint i).resolve_left (by omega)
+  have hpj : r.pos j = 0 := (r.disjoint j).resolve_right (by omega)
+  simp [Row.Holds, dot_add, dot_spike, hni, hpj, Nat.mul_comm]
+
+private theorem Row.mem_crosses {n} (r : Row n) (v : Vec n) :
+    v ∈ r.crosses ↔ ∃ i, 0 < r.pos i ∧ ∃ j, 0 < r.neg j ∧
+      (fun k => spike i (r.neg j) k + spike j (r.pos i) k) = v := by
+  simp [Row.crosses]
+
+theorem Row.active_holds {n} (r : Row n) (v : Vec n) (h : v ∈ r.active) : r.Holds v := by
+  unfold Row.active at h
+  split at h
+  · exact ((r.mem_within _ v).mp h).2.1
+  · rcases List.mem_append.mp h with h | h
+    · rcases List.mem_append.mp h with h | h
+      · obtain ⟨i,hp,j,hn,rfl⟩ := (r.mem_crosses v).mp h
+        exact r.cross_holds hp hn
+      · exact ((r.mem_within _ v).mp h).2.1
+    · exact ((r.mem_within _ v).mp h).2.1
+
+/-- A nonzero solution away from the neutral coordinates dominates an active one. -/
+private theorem Row.active_dominates {n} (r : Row n) (v : Vec n) (hv : r.Holds v) (nz : ∃ i, 0 < v i)
+    (busy : ¬ ∃ i, 0 < v i ∧ r.pos i = 0 ∧ r.neg i = 0) :
+    ∃ y ∈ r.active, r.Holds y ∧ (∃ i, 0 < y i) ∧ ∀ i, y i ≤ v i := by
+  have zero (i) (neutral : r.pos i = 0 ∧ r.neg i = 0) : v i = 0 := by
+    have : ¬ 0 < v i := fun hp => busy ⟨i,hp,neutral⟩
+    omega
+  unfold Row.active
+  split
+  · obtain ⟨y,hy,ynz,le,small⟩ := dominated_limits r v hv nz
+    refine ⟨y,(r.mem_within _ y).mpr ⟨fun i => ?_,hy,ynz⟩,hy,ynz,le⟩
+    by_cases neutral : r.pos i = 0 ∧ r.neg i = 0
+    · have := le i
+      have := zero i neutral
+      simp [neutral.1, neutral.2]
+      omega
+    · have off : (r.pos i == 0 && r.neg i == 0) = false := by simpa using neutral
+      rw [off]
+      exact small i
+  · have live (i) (hi : 0 < v i) : 0 < r.pos i ∨ 0 < r.neg i := by
+      by_cases p : r.pos i = 0
+      · exact Or.inr (Nat.pos_of_ne_zero (fun q => busy ⟨i,hi,p,q⟩))
+      · exact Or.inl (Nat.pos_of_ne_zero p)
+    by_cases largeP : ∃ i, 0 < r.pos i ∧ r.cap ≤ v i
+    · by_cases largeN : ∃ j, 0 < r.neg j ∧ r.cap ≤ v j
+      · obtain ⟨i, hpi, hxi⟩ := largeP
+        obtain ⟨j, hnj, hxj⟩ := largeN
+        have hni : r.neg i = 0 := (r.disjoint i).resolve_left (by omega)
+        have ne : i ≠ j := by intro h; subst j; omega
+        refine ⟨_, List.mem_append_left _ (List.mem_append_left _
+          ((r.mem_crosses _).mpr ⟨i,hpi,j,hnj,rfl⟩)), r.cross_holds hpi hnj,
+          ⟨i, by simpa [spike, ne] using hnj⟩, ?_⟩
+        intro k
+        have hi := neg_le_cap r j
+        have hj := pos_le_cap r i
+        by_cases eq : k = i
+        · subst k; simp [spike,ne]; omega
+        · by_cases ej : k = j
+          · subst k; simp [spike,ne.symm]; omega
+          · simp [spike,eq,ej]
+      · have small := row_small _ _ _ _ (neg_le_cap r)
+          (fun i hi => Nat.lt_of_not_ge (fun h => largeN ⟨i,hi,h⟩)) hv.symm (fun i hi => (live i hi).symm)
+        refine ⟨v, List.mem_append_left _ (List.mem_append_right _
+          ((r.mem_within _ v).mpr ⟨fun i => ?_,hv,nz⟩)), hv, nz, fun _ => Nat.le_refl _⟩
+        by_cases hn : r.neg i = 0
+        · by_cases hp : r.pos i = 0
+          · simp [hn, hp, zero i ⟨hp,hn⟩]
+          · simpa [hn, hp, Row.bound] using small i
+        · have : v i < r.cap := Nat.lt_of_not_ge (fun h => largeN ⟨i,Nat.pos_of_ne_zero hn,h⟩)
+          simp [hn]
+          omega
+    · have small := row_small _ _ _ _ (pos_le_cap r)
+        (fun i hi => Nat.lt_of_not_ge (fun h => largeP ⟨i,hi,h⟩)) hv live
+      refine ⟨v, List.mem_append_right _ ((r.mem_within _ v).mpr ⟨fun i => ?_,hv,nz⟩),
+        hv, nz, fun _ => Nat.le_refl _⟩
+      by_cases hp : r.pos i = 0
+      · by_cases hn : r.neg i = 0
+        · simp [hn, hp, zero i ⟨hp,hn⟩]
+        · simpa [hn, hp, Row.bound] using small i
+      · have : v i < r.cap := Nat.lt_of_not_ge (fun h => largeP ⟨i,Nat.pos_of_ne_zero hp,h⟩)
+        simp [hp]
+        omega
+
+/-- A neutral coordinate contributes its unit vector and nothing else, so the
+search only ranges over the coordinates that occur in the row. -/
+def Row.loose {n} (r : Row n) : List (Vec n) :=
+  ((List.finRange n).filter fun i => r.pos i == 0 && r.neg i == 0).map (fun i => spike i 1) ++ r.active
+
+/-- The generators of a row: read off the support of a unit row, and found by
+the pruned search otherwise. -/
+def Row.compact {n} (r : Row n) : List (Vec n) := if r.isUnit then r.pairs else r.loose
+
+private theorem Row.mem_loose {n} (r : Row n) (v : Vec n) :
+    v ∈ r.loose ↔ (∃ i, (r.pos i = 0 ∧ r.neg i = 0) ∧ spike i 1 = v) ∨ v ∈ r.active := by
+  simp [Row.loose]
+
+theorem Row.compact_holds {n} (r : Row n) (v : Vec n) (h : v ∈ r.compact) : r.Holds v := by
+  unfold Row.compact at h
+  split at h
+  · rcases (r.mem_pairs v).mp h with ⟨i,⟨p0,n0⟩,rfl⟩ | ⟨i,hp,j,hq,rfl⟩
+    · unfold Row.Holds
+      rw [dot_spike, dot_spike, p0, n0]
+    · exact pair_holds r i j hp hq
+  · rcases (r.mem_loose v).mp h with ⟨i,⟨p0,n0⟩,rfl⟩ | active
+    · unfold Row.Holds
+      rw [dot_spike, dot_spike, p0, n0]
+    · exact r.active_holds v active
+
+theorem Row.compact_complete {n} (r : Row n) (x : Vec n) (hx : r.Holds x) : Generates r.compact x := by
+  unfold Row.compact
+  split
+  · next unit => exact pairs_complete r (of_decide_eq_true unit) x hx
+  · apply generate_of_dominated [r] _ _ x (by simpa [SystemHolds] using hx)
+    intro v hv nz
+    have solved (y : Vec n) (hy : r.Holds y) : SystemHolds [r] y := by simpa [SystemHolds] using hy
+    by_cases idle : ∃ i, 0 < v i ∧ r.pos i = 0 ∧ r.neg i = 0
+    · obtain ⟨i,hi,neutral⟩ := idle
+      refine ⟨spike i 1, (r.mem_loose _).mpr (.inl ⟨i,neutral,rfl⟩), solved _ ?_, ⟨i, by simp [spike]⟩,
+        spike_le i v hi⟩
+      unfold Row.Holds
+      rw [dot_spike, dot_spike, neutral.1, neutral.2]
+    · obtain ⟨y,member,hy,ynz,le⟩ := r.active_dominates v (hv _ (by simp)) nz idle
+      exact ⟨y, (r.mem_loose _).mpr (.inr member), solved _ hy, ynz, le⟩
+
+def intersectCompact {n} (r : Row n) (gs : List (Vec n)) :=
+  lift gs.get (r.pullback gs.get).compact
+
+theorem intersectCompact_correct {n} (r : Row n) (rs : List (Row n)) (gs : List (Vec n))
+    (hg : BasisCorrect rs gs) : BasisCorrect (r :: rs) (intersectCompact r gs) := by
+  intro x
+  rw [intersectCompact, lift_generates]
+  constructor
+  · intro h
+    obtain ⟨c, hc⟩ := (hg x).mp (fun q hq => h q (List.mem_cons_of_mem _ hq))
+    exact ⟨c, (r.pullback gs.get).compact_complete c <|
+      (r.pullback_iff ..).mpr (hc ▸ h r (List.mem_cons_self ..)), hc⟩
+  · rintro ⟨c, ⟨w,hw⟩,rfl⟩ q hq
+    rcases List.mem_cons.mp hq with rfl | hr
+    · apply (q.pullback_iff ..).mp
+      rw [← hw]
+      apply (system_mix [q.pullback gs.get] _ _ _) _ (List.mem_singleton_self _)
+      intro i row hr
+      obtain rfl := List.mem_singleton.mp hr
+      exact (q.pullback gs.get).compact_holds _ (List.get_mem _ _)
+    · exact system_mix rs _ _ (mem_sol rs gs hg) q hr
+
+/-- `generate` with the generators of every row found without enumerating a box. -/
+def generateCompact {n} : List (Row n) → List (Vec n)
+  | [] => minimize (units n)
+  | r :: rs => minimize (intersectCompact r (generateCompact rs))
+
+theorem generateCompact_correct {n} (rows : List (Row n)) : BasisCorrect rows (generateCompact rows) := by
+  induction rows with
+  | nil => exact minimize_correct _ _ (units_correct n)
+  | cons r rs ih => exact minimize_correct _ _ (intersectCompact_correct r rs _ ih)
 
 /-- Basis correctness is invariant under changing the table order, including
 the choice of concrete witness indices. -/

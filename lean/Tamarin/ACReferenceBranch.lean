@@ -1,13 +1,15 @@
 import Tamarin.ACReference
 import Tamarin.TermEquality
 import Tamarin.OperandBatch
+import Tamarin.VariablesFast
 
 /-! The unbounded reference AC step applied to arbitrary sorted operands.
 The output is a family of residual conjunctions in the original term language. -/
 namespace Tamarin.OperandBatch.Reference
 open ACSystem OperandAbstraction
-variable {sig : Signature} {n : Nat}
+variable {sig : Signature} {n : Nat} [Interrupt]
 
+omit [Interrupt] in
 private theorem sorted (f : sig.ACSym) (rows : List (Row n)) :
     ∀ v ∈ variables (abstractRows 0 f rows), v.sort = sig.acSort f := by
   rw [abstract_vars]
@@ -31,6 +33,7 @@ def split (f : sig.ACSym) (rows : List (Row n)) (term : Fin n → Term sig)
     (reserved term pending observe avoid bindings)
   answers.map fun σ => residual cols (operands 0 f term typed) σ ++ pending
 
+omit [Interrupt] in
 /-- Every original solution survives in a branch and every branch denotes
 only original solutions, including the instantiation of old bindings. -/
 theorem split_correct [DecidableEq sig.ACSym] (f : sig.ACSym) (rows : List (Row n))
@@ -75,6 +78,80 @@ theorem split_correct [DecidableEq sig.ACSym] (f : sig.ACSym) (rows : List (Row 
   · rintro ⟨child, member, den⟩
     obtain ⟨σ, hσ, rfl⟩ := List.mem_map.mp member
     exact ⟨σ, hσ, den⟩
+
+section Constrained
+variable {α : Type}
+
+private def columnTag (tag : Fin n → α) (v : Variable) : Option α :=
+  if h : v.id < n then some (tag ⟨v.id,h⟩) else none
+
+omit [Interrupt] in
+private theorem columnTag_at (f : sig.ACSym) (tag : Fin n → α) (i : Fin n) :
+    columnTag tag (column 0 f i) = some (tag i) := by
+  simp [columnTag, column, i.isLt]
+
+/-- The residuals of `split` whose homogeneous answer respects the column
+constraints. A capped column is not equated with a product at this head, and
+no witness is equated with two columns whose tags conflict. -/
+def splitWith (f : sig.ACSym) (rows : List (Row n)) (term : Fin n → Term sig)
+    (typed : ∀ i, HasSort (term i) (sig.acSort f)) (pending : Problem sig)
+    (observe avoid : List Variable) (bindings : Substitution sig)
+    (tag : Fin n → α) (cap : α → Bool) (clash : α → α → Bool) : List (Problem sig) :=
+  let abstract := abstractRows 0 f rows
+  let cols := (variables abstract).eraseDups
+  let answers := ACSystem.Reference.solveWith f abstract (sorted f rows)
+    (reserved term pending observe avoid bindings) (columnTag tag)
+    (fun a => a.any cap) (fun a b => a.any fun x => b.any (clash x))
+  Interrupt.map (fun σ => residual cols (operands 0 f term typed) σ ++ pending) answers
+
+theorem splitWith_subset {f : sig.ACSym} {rows : List (Row n)} {term typed pending observe avoid}
+    {bindings : Substitution sig} {tag : Fin n → α} {cap clash child}
+    (h : child ∈ splitWith f rows term typed pending observe avoid bindings tag cap clash) :
+    child ∈ split f rows term typed pending observe avoid bindings := by
+  obtain ⟨σ,hσ,rfl⟩ := List.mem_map.mp h
+  exact List.mem_map_of_mem (ACSystem.Reference.solveWith_subset hσ)
+
+omit [Interrupt] in
+theorem split_pending {f : sig.ACSym} {rows : List (Row n)} {term typed pending observe avoid}
+    {bindings : Substitution sig} {child}
+    (h : child ∈ split f rows term typed pending observe avoid bindings) :
+    ∀ e ∈ pending, e ∈ child := by
+  obtain ⟨σ,-,rfl⟩ := List.mem_map.mp h
+  exact fun e he => List.mem_append_right _ he
+
+theorem splitWith_missing {f : sig.ACSym} {rows : List (Row n)} {term typed pending observe avoid}
+    {bindings : Substitution sig} {tag : Fin n → α} {cap clash child}
+    (mem : child ∈ split f rows term typed pending observe avoid bindings)
+    (absent : child ∉ splitWith f rows term typed pending observe avoid bindings tag cap clash) :
+    (∃ i, cap (tag i) = true ∧ ∃ a b, (⟨.ac f a b, term i⟩ : Equation sig) ∈ child) ∨
+    ∃ i k, clash (tag i) (tag k) = true ∧
+      ∃ w, (⟨.var w, term i⟩ : Equation sig) ∈ child ∧ (⟨.var w, term k⟩ : Equation sig) ∈ child := by
+  obtain ⟨σ,hσ,rfl⟩ := List.mem_map.mp mem
+  have out : σ ∉ ACSystem.Reference.solveWith f (abstractRows 0 f rows) (sorted f rows)
+      (reserved term pending observe avoid bindings) (columnTag tag)
+      (fun a => a.any cap) (fun a b => a.any fun x => b.any (clash x)) :=
+    fun inside => absent (List.mem_map_of_mem inside)
+  have at_column (v) (hv : v ∈ variables (abstractRows 0 f rows)) :
+      ∃ i, v = column 0 f i ∧ (⟨σ.image v, term i⟩ : Equation sig) ∈
+        residual ((variables (abstractRows 0 f rows)).eraseDups) (operands 0 f term typed) σ ++ pending := by
+    have used := hv
+    rw [abstract_vars] at used
+    obtain ⟨i,_,rfl⟩ := List.mem_map.mp used
+    refine ⟨i,rfl,List.mem_append_left _ (List.mem_map.mpr ⟨_,List.mem_eraseDups.mpr hv,?_⟩)⟩
+    rw [operand_at]
+  rcases ACSystem.Reference.solveWith_missing hσ out with ⟨v,hv,capped,a,b,img⟩ | ⟨v,hv,u,hu,conflict,w,iv,iu⟩
+  · obtain ⟨i,rfl,eq⟩ := at_column v hv
+    rw [columnTag_at] at capped
+    rw [img] at eq
+    exact .inl ⟨i,by simpa using capped,a,b,eq⟩
+  · obtain ⟨i,rfl,ei⟩ := at_column v hv
+    obtain ⟨k,rfl,ek⟩ := at_column u hu
+    rw [columnTag_at, columnTag_at] at conflict
+    rw [iv] at ei
+    rw [iu] at ek
+    exact .inr ⟨i,k,by simpa using conflict,w,ei,ek⟩
+
+end Constrained
 
 section Source
 variable [DecidableEq sig.ACSym] [DecidableEq (Term sig)]
@@ -131,6 +208,15 @@ private def present (f : sig.ACSym) (p : Problem sig) (hs : SortedAt f p) :
   · exact ACRepresentation.flatten_hasSort f e.lhs (hs e he).1 _ l
   · exact ACRepresentation.flatten_hasSort f e.rhs (hs e he).2 _ r
 
+/-- The distinct operands of a selection and its rows over them. No sort is
+required of the operands. -/
+def layout (f : sig.ACSym) (p : Problem sig) :
+    (table : List (Term sig)) × {rows : List (Row table.length) // Represents f table.get rows p} :=
+  let factors (e : Equation sig) := ACRepresentation.flatten f e.lhs ++ ACRepresentation.flatten f e.rhs
+  let table := (p.flatMap factors).eraseDups
+  ⟨table, encodeRows f table p (fun e he _ ht =>
+    List.mem_eraseDups.mpr (List.mem_flatMap.mpr ⟨e,he,ht⟩))⟩
+
 /-- Generate residuals directly from the source equations. The caller
 selects an AC head and a batch, without constructing an abstraction or
 certifying a proposed matrix or basis. -/
@@ -140,6 +226,7 @@ def splitProblem (f : sig.ACSym) (selected : Problem sig) (hs : SortedAt f selec
   let batch := present f selected hs
   split f batch.rows batch.table.get batch.typed pending observe avoid bindings
 
+omit [Interrupt] in
 theorem splitProblem_correct (f : sig.ACSym) (selected : Problem sig) (hs : SortedAt f selected)
     (pending original : Problem sig) (partition : original.Perm (selected ++ pending))
     (observe avoid : List Variable) (bindings ρ : Substitution sig) :
@@ -149,6 +236,45 @@ theorem splitProblem_correct (f : sig.ACSym) (selected : Problem sig) (hs : Sort
   let batch := present f selected hs
   split_correct f batch.rows batch.table.get batch.typed batch.layout pending original
     partition observe avoid bindings ρ
+
+section Constrained
+variable {α : Type}
+
+/-- `splitProblem` restricted by constraints on the flattened operands. -/
+def splitProblemWith (f : sig.ACSym) (selected : Problem sig) (hs : SortedAt f selected)
+    (pending : Problem sig) (observe avoid : List Variable) (bindings : Substitution sig)
+    (tag : Term sig → α) (cap : α → Bool) (clash : α → α → Bool) : List (Problem sig) :=
+  let batch := present f selected hs
+  splitWith f batch.rows batch.table.get batch.typed pending observe avoid bindings
+    (fun i => tag (batch.table.get i)) cap clash
+
+theorem splitProblemWith_subset {f : sig.ACSym} {selected : Problem sig} {hs pending observe avoid}
+    {bindings : Substitution sig} {tag : Term sig → α} {cap clash child}
+    (h : child ∈ splitProblemWith f selected hs pending observe avoid bindings tag cap clash) :
+    child ∈ splitProblem f selected hs pending observe avoid bindings :=
+  splitWith_subset h
+
+omit [Interrupt] in
+theorem splitProblem_pending {f : sig.ACSym} {selected : Problem sig} {hs pending observe avoid}
+    {bindings : Substitution sig} {child}
+    (h : child ∈ splitProblem f selected hs pending observe avoid bindings) :
+    ∀ e ∈ pending, e ∈ child :=
+  split_pending h
+
+/-- A residual that the constrained split omits equates a capped operand with
+a product at the selected head, or one witness with two conflicting operands. -/
+theorem splitProblemWith_missing {f : sig.ACSym} {selected : Problem sig} {hs pending observe avoid}
+    {bindings : Substitution sig} {tag : Term sig → α} {cap clash child}
+    (mem : child ∈ splitProblem f selected hs pending observe avoid bindings)
+    (absent : child ∉ splitProblemWith f selected hs pending observe avoid bindings tag cap clash) :
+    (∃ t, cap (tag t) = true ∧ ∃ a b, (⟨.ac f a b, t⟩ : Equation sig) ∈ child) ∨
+    ∃ t u, clash (tag t) (tag u) = true ∧
+      ∃ w, (⟨.var w, t⟩ : Equation sig) ∈ child ∧ (⟨.var w, u⟩ : Equation sig) ∈ child := by
+  rcases splitWith_missing mem absent with ⟨i,capped,a,b,eq⟩ | ⟨i,k,conflict,w,ei,ek⟩
+  · exact .inl ⟨_,capped,a,b,eq⟩
+  · exact .inr ⟨_,_,conflict,w,ei,ek⟩
+
+end Constrained
 
 end Source
 end Tamarin.OperandBatch.Reference

@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 /-! Regression for the two value tuples printed by Maude for the YubiKey
 query. The sole equation in this test is project(l + r) = l with pure AC +.

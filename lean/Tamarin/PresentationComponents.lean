@@ -68,6 +68,29 @@ def accepts (ps : List (Part s)) (weights : Problem s → Head s → Nat) (fuel 
     TableDecrease.sorted whole && SymbolWeight.decreasing (weights whole) whole &&
     whole.all (fun r => claimed ps (head r.lhs) || checkOther whole fuel r)
 
+/-- `accepts` reads the weights only at the table it checks. -/
+theorem accepts_table_weights (ps : List (Part s)) (weights : Problem s → Head s → Nat) (fuel : Nat)
+    (rs : Problem s) : accepts ps weights fuel rs = accepts ps (fun _ => weights (table ps rs)) fuel rs :=
+  rfl
+
+/-- A table of free applications without components is accepted when it is
+sorted, the proposed weights decrease and every rule passes the structural
+row test. -/
+theorem accepts_of_checked {weights : Problem s → Head s → Nat} {fuel : Nat} {rs : Problem s}
+    (apps : ∀ r ∈ rs, ∃ f xs, r.lhs = .free f xs) (sorted : TableDecrease.sorted rs = true)
+    (dec : SymbolWeight.decreasing (weights rs) rs = true)
+    (rows : ∀ r ∈ rs, ConstructorRows.checkedRow rs fuel r = true) :
+    accepts [] weights fuel rs = true := by
+  have all : rs.filter (fun _ => true) = rs := List.filter_eq_self.mpr (by simp)
+  have whole : table [] rs = rs := by simp [table,extras,claimed,all]
+  unfold accepts
+  simp only [whole,List.isEmpty_nil,Bool.true_or,List.all_nil,Bool.and_true,sorted,dec,
+    Bool.and_eq_true,List.all_eq_true]
+  refine ⟨fun r hr => ?_,fun r hr => ?_⟩
+  · obtain ⟨f,xs,shape⟩ := apps r hr
+    rw [shape]
+  · simp [checkOther,rows r hr]
+
 structure Evidence (ps : List (Part s)) (rs : Problem s) : Prop where
   agrees : TablePresentation.Agrees rs (table ps rs)
   pres : NormalAlgebra.Presentation (table ps rs)

@@ -1,9 +1,10 @@
 import Tamarin.CertifiedTable
+import Tamarin.CertifiedTableWire
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
-import Tamarin.XorConstructorWire
-import Tamarin.JointGroupWire
-import Tamarin.BilinearWire
+import Tamarin.XorConstructorWireData
+import Tamarin.JointGroupWireData
+import Tamarin.BilinearWireData
 
 namespace Tamarin.CertifiedTableTests
 set_option maxRecDepth 8192

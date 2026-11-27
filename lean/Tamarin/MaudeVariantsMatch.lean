@@ -1,0 +1,393 @@
+import Tamarin.MaudeVariantsTerms
+import Tamarin.Interrupt
+
+/-!
+# Matching modulo AC and C with sorts, for Maude's `get variants`
+
+Maude's variant search matches in three places: the unifier filter and the
+variant folder ask whether one substitution is an instance of another
+(`UnifierFilter`, `VariantFolder::subsumes`), and reducibility asks whether a
+subterm is an instance of an equation's left side, with extension at an AC top
+(`DagNode::reducibleByVariantEquation`). Here is one backtracking matcher for
+all three.
+
+A pattern variable of sort `S` matches a subject whose least sort is below `S`
+(`msort`); the kind is below no sort. Pattern and subject have separate slots:
+the pattern's are bound by the matcher, the subject's are rigid. Both sides
+are in Maude's normal form, so equality modulo AC and C is syntactic equality.
+
+The matcher is written with continuations: `k` receives each match and decides
+whether to stop. Every function takes `fuel`, a bound on the depth of its
+recursion that callers choose far above the size of any problem; at 0 the
+branch finds nothing. The loops over the arguments of an AC subject ask the
+caller whether to go on (`Interrupt.guard`).
+-/
+namespace Tamarin.MaudeVariants
+open Tamarin MaudeUnify
+
+variable {y : Syms}
+
+/-- A partial assignment of the pattern's slots. -/
+abbrev Sb (y : Syms) := Array (Option (D y))
+
+/-- The sorts of the pattern's slots and of the subject's. -/
+structure MC where
+  psort : Nat → SortId
+  ssort : Nat → SortId
+
+/-- The depth bound callers give the matcher: no problem comes near it. -/
+def matchFuel : Nat := 1 <<< 30
+
+def isVar : D y → Bool
+  | .var _ => true
+  | _ => false
+
+/-- Whether the subject `t` may be assigned to the pattern slot `x`. -/
+@[inline] def fits (c : MC) (x : Nat) (t : D y) : Bool :=
+  (msort y c.ssort t).le (MS.ofSort (c.psort x))
+
+/-- The pattern variables of the arguments of an AC pattern with their
+multiplicities, in order of first occurrence. -/
+def groupVars (ps : List (D y)) : List (Nat × Nat) :=
+  ps.foldl (fun acc d => match d with
+    | .var v =>
+      match acc.findIdx? (·.1 == v) with
+      | some j => acc.modify j fun (x, m) => (x, m + 1)
+      | none => acc ++ [(v, 1)]
+    | _ => acc) []
+
+/-- The factors a bound AC pattern variable stands for. -/
+def factors (f : Nat) (b : D y) : List (D y) :=
+  match b with
+  | .ac g bs => if g == f then bs else [b]
+  | _ => [b]
+
+/-- The top symbol of a dag as a number, 0 for a variable. -/
+def shallowKey : D y → Nat
+  | .var _ => 0
+  | .atom a => 5 * a + 1
+  | .free f _ => 5 * f + 2
+  | .comm f _ _ => 5 * f + 3
+  | .ac f _ => 5 * f + 4
+
+/-- The number of arguments with the key `k`. -/
+def countKey (k : Nat) : List (D y) → Nat
+  | [] => 0
+  | d :: ds => (if shallowKey d == k then 1 else 0) + countKey k ds
+
+/-- Whether `ps` has at most as many elements as `ts`. -/
+def notLonger : List (D y) → List (D y) → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | _ :: ps, _ :: ts => notLonger ps ts
+
+/-- A necessary condition for the arguments `ps` of an AC pattern to match
+the arguments `ts` of a subject of the same symbol: each pattern argument
+takes at least one subject argument, and a pattern argument that is not a
+variable takes one with its top symbol. -/
+def acFits (ps ts : List (D y)) : Bool :=
+  notLonger ps ts && ps.all fun p =>
+    let k := shallowKey p
+    k == 0 || countKey k ps ≤ countKey k ts
+
+mutual
+/-- A necessary condition for `t` to be an instance of `p`, checked without
+backtracking or assignments. -/
+def quick : D y → D y → Bool
+  | .var _, _ => true
+  | .atom a, .atom b => a == b
+  | .free f ps, .free g ts => f == g && quickList ps ts
+  | .comm f a b, .comm g c d => f == g && ((quick a c && quick b d) || (quick a d && quick b c))
+  | .ac f ps, .ac g ts => f == g && acFits ps ts
+  | _, _ => false
+
+def quickList : List (D y) → List (D y) → Bool
+  | [], [] => true
+  | p :: ps, t :: ts => quick p t && quickList ps ts
+  | _, _ => false
+end
+
+section
+variable [Interrupt]
+
+mutual
+/-- Match `pt` against `t` under `σ`, passing every match to `k` until `k`
+returns a value. -/
+def mt {α : Type} (c : MC) : Nat → D y → D y → Sb y → (Sb y → Option α) → Option α
+  | 0, _, _, _, _ => none
+  | n + 1, pt, t, σ, k =>
+    match pt with
+    | .var i =>
+      match σ.getD i none with
+      | some b => if Dag.beq b t then k σ else none
+      | none => if fits c i t then k (σ.set! i (some t)) else none
+    | .atom a => match t with
+      | .atom b => if a == b then k σ else none
+      | _ => none
+    | .free f ps => match t with
+      | .free g ts => if f == g && ps.length == ts.length then mtList c n ps ts σ k else none
+      | _ => none
+    | .comm f a b => match t with
+      | .comm g u v =>
+        if f == g then
+          (mt c n a u σ fun σ => mt c n b v σ k) <|> (mt c n a v σ fun σ => mt c n b u σ k)
+        else none
+      | _ => none
+    | .ac f ps => match t with
+      | .ac g ts =>
+        if f == g && acFits ps ts then mac c n f ps ts σ false (fun σ rest => if rest.isEmpty then k σ else none)
+        else none
+      | _ => none
+
+/-- Match the patterns `ps` against the subjects `ts`, pairwise. -/
+def mtList {α : Type} (c : MC) : Nat → List (D y) → List (D y) → Sb y → (Sb y → Option α) → Option α
+  | 0, _, _, _, _ => none
+  | n + 1, ps, ts, σ, k =>
+    match ps, ts with
+    | [], [] => k σ
+    | q :: qs, t :: ts => mt c n q t σ fun σ => mtList c n qs ts σ k
+    | _, _ => none
+
+/-- AC matching of the arguments `ps` of a pattern of `f` against the
+subject's arguments `ss`. With `ext` the subject may keep arguments over,
+which `k` receives. -/
+def mac {α : Type} (c : MC) : Nat → Nat → List (D y) → List (D y) → Sb y → Bool →
+    (Sb y → List (D y) → Option α) → Option α
+  | 0, _, _, _, _, _, _ => none
+  | n + 1, f, ps, ss, σ, ext, k =>
+    match ps.findIdx? (fun d => !isVar d) with
+    | some i => tryEach c n f (ps[i]?.getD (.var 0)) (ps.eraseIdx i) [] none ss σ ext k
+    | none =>
+      -- only variables: bound ones take their factors, unbound ones share the rest
+      let groups := groupVars ps
+      let bound := groups.filter fun (x, _) => (σ.getD x none).isSome
+      let unbound := groups.filter fun (x, _) => (σ.getD x none).isNone
+      let need : List (D y) := bound.flatMap fun (x, m) =>
+        (List.replicate m (factors f ((σ.getD x none).getD (.var 0)))).flatten
+      match removeAll need ss with
+      | none => none
+      | some ss' => distribute c n f unbound ss' σ ext k
+
+/-- Try the non-variable pattern argument `q` against each subject argument
+in turn, skipping a subject equal to the one tried before it; `before` holds
+the arguments passed over, reversed. -/
+def tryEach {α : Type} (c : MC) : Nat → Nat → D y → List (D y) → List (D y) → Option (D y) →
+    List (D y) → Sb y → Bool → (Sb y → List (D y) → Option α) → Option α
+  | 0, _, _, _, _, _, _, _, _, _ => none
+  | n + 1, f, q, rest, before, prev, ss, σ, ext, k =>
+    match ss with
+    | [] => none
+    | s :: more =>
+      Interrupt.guard none fun _ =>
+      let skip := match prev with | some x => Dag.beq x s | none => false
+      if skip then tryEach c n f q rest (s :: before) prev more σ ext k else
+      (mt c n q s σ fun σ' => mac c n f rest (before.reverseAux more) σ' ext k) <|>
+        tryEach c n f q rest (s :: before) (some s) more σ ext k
+
+/-- Share the subject arguments `ss` among the unbound pattern variables
+`vars` (each with its multiplicity in the pattern). -/
+def distribute {α : Type} (c : MC) : Nat → Nat → List (Nat × Nat) → List (D y) → Sb y → Bool →
+    (Sb y → List (D y) → Option α) → Option α
+  | 0, _, _, _, _, _, _ => none
+  | n + 1, f, vars, ss, σ, ext, k =>
+    match vars with
+    | [] => if ss.isEmpty then k σ [] else if ext then k σ ss else none
+    | (x, m) :: more =>
+      chooseRun c n f x m (more.isEmpty && !ext) more (runsOf ss) [] [] 0 σ ext k
+
+/-- Choose how many copies `j` of each run the variable `x` of multiplicity
+`m` takes; `taken` and `left` collect the choices so far. When `last`, the
+variable has to take every remaining argument. -/
+def chooseRun {α : Type} (c : MC) : Nat → Nat → Nat → Nat → Bool → List (Nat × Nat) →
+    List (D y × Nat) → List (D y) → List (D y) → Nat → Sb y → Bool →
+    (Sb y → List (D y) → Option α) → Option α
+  | 0, _, _, _, _, _, _, _, _, _, _, _, _ => none
+  | n + 1, f, x, m, last, more, rs, taken, left, j, σ, ext, k =>
+    Interrupt.guard none fun _ =>
+    match rs with
+    | [] =>
+      if taken.isEmpty then none else
+      let b : D y := match taken with | [t] => t | _ => .ac f taken
+      if fits c x b then distribute c n f more left (σ.set! x (some b)) ext k else none
+    | (e, cnt) :: rest =>
+      if j * m > cnt then none else
+      let here : Option α :=
+        if last && j * m != cnt then none
+        else chooseRun c n f x m last more rest (taken ++ List.replicate j e)
+          (left ++ List.replicate (cnt - j * m) e) 0 σ ext k
+      here <|> chooseRun c n f x m last more rs taken left (j + 1) σ ext k
+end
+
+/-- The first match of the left side `lhs` (with `nv` slots) against `t` at
+the top, with extension when both are products of one AC symbol: the
+assignment and the arguments of `t` left over. -/
+def mtop (c : MC) (nv : Nat) (lhs t : D y) : Option (Sb y × List (D y)) :=
+  let σ0 : Sb y := Array.replicate nv none
+  match lhs, t with
+  | .ac f ps, .ac g ts =>
+    if f == g && acFits ps ts then mac c matchFuel f ps ts σ0 true (fun σ rest => some (σ, rest)) else none
+  | _, _ => if quick lhs t then mt c matchFuel lhs t σ0 (fun σ => some (σ, [])) else none
+
+/-- Whether the patterns (with `nv` slots) match their subjects
+simultaneously, without extension. -/
+def mtPairs (c : MC) (nv : Nat) (ps ts : List (D y)) : Bool :=
+  (mtList c matchFuel ps ts (Array.replicate nv none) (fun σ => some σ)).isSome
+
+end
+
+/-! ### Subsumption of tuples
+
+The unifier filter and the folder ask whether one tuple of dags is an
+instance of another, many times over for each tuple. A `Tuple` keeps what
+decides most of those questions without the matcher: the top symbol of each
+component, its least sort, and which components of a pattern are variables
+that occur nowhere else in it, which match any subject of a fitting sort. -/
+
+/-- The number of occurrences of each slot below `n` in a dag, added to `acc`. -/
+def countVars (n : Nat) (acc : Array Nat) : D y → Array Nat
+  | .var i => if i < n then acc.modify i (· + 1) else acc
+  | .atom _ => acc
+  | .free _ args => args.attach.foldl (fun acc ⟨d, _⟩ => countVars n acc d) acc
+  | .comm _ a b => countVars n (countVars n acc a) b
+  | .ac _ args => args.attach.foldl (fun acc ⟨d, _⟩ => countVars n acc d) acc
+
+/-- A tuple of dags over the slots `0 … sorts.size - 1`, prepared for
+subsumption. -/
+structure Tuple (y : Syms) where
+  items : Array (D y)
+  sorts : Array SortId
+  /-- The least sort of each component. -/
+  ms : Array MS
+  /-- Whether every component has a sort below `Msg`. -/
+  msgOk : Bool
+  /-- As a pattern: the components that are not variables, with their keys. -/
+  keyed : List (Nat × Nat)
+  /-- As a pattern: the components that are a variable of sort `Msg`
+  occurring nowhere else. -/
+  linMsg : List Nat
+  /-- As a pattern: the components that are a variable of another sort
+  occurring nowhere else, with the sort. -/
+  linSorted : List (Nat × MS)
+  /-- As a pattern: the components that are a variable occurring elsewhere
+  too, with the variable. -/
+  vars : List (Nat × Nat)
+  /-- As a pattern: the other components, which need the matcher. -/
+  rest : List Nat
+  /-- As a subject: the key of each component. -/
+  keys : Array Nat
+
+def Tuple.make (items : Array (D y)) (sorts : Array SortId) : Tuple y :=
+  let occ := items.foldl (countVars sorts.size) (Array.replicate sorts.size 0)
+  let ms := items.map (msort y (sorts.getD · .msg))
+  let (linMsg, linSorted, vars, rest) := items.zipIdx.foldr (fun (d, i) (linMsg, linSorted, vars, rest) =>
+    match d with
+    | .var v =>
+      if occ.getD v 0 == 1 then
+        match sorts.getD v .msg with
+        | .msg => (i :: linMsg, linSorted, vars, rest)
+        | srt => (linMsg, (i, MS.ofSort srt) :: linSorted, vars, rest)
+      else (linMsg, linSorted, (i, v) :: vars, rest)
+    | _ => (linMsg, linSorted, vars, i :: rest)) ([], [], [], [])
+  let keys := items.map shallowKey
+  { items, sorts, ms, msgOk := ms.all (·.le .msg), linMsg, linSorted, vars, rest, keys,
+    keyed := rest.map fun i => (i, keys.getD i 0) }
+
+/-- Assign each variable component of the pattern its subject component:
+`none` when one variable meets two different subjects or a subject of a sort
+the variable does not admit. -/
+def assignVars (c : MC) (b : Tuple y) : List (Nat × Nat) → Sb y → Option (Sb y)
+  | [], σ => some σ
+  | (i, v) :: more, σ =>
+    let t := b.items.getD i (.var 0)
+    match σ.getD v none with
+    | some u => if Dag.beq u t then assignVars c b more σ else none
+    | none => if fits c v t then assignVars c b more (σ.set! v (some t)) else none
+
+/-- `assignVars` without the assignment, for a pattern whose other components
+are all variables occurring once: each variable's subjects are equal and of
+a sort the variable admits. `seen` holds the variables met so far with their
+subject. -/
+def varsAgree (a b : Tuple y) : List (Nat × Nat) → List (Nat × Nat) → Bool
+  | [], _ => true
+  | (i, v) :: more, seen =>
+    match seen.find? (·.1 == v) with
+    | some (_, j) => Dag.beq (b.items.getD j (.var 0)) (b.items.getD i (.var 0)) && varsAgree a b more seen
+    | none =>
+      (b.ms.getD i .kind).le (MS.ofSort (a.sorts.getD v .msg)) && varsAgree a b more ((v, i) :: seen)
+
+/-- The outcome of matching a component without search. -/
+inductive Det (y : Syms) where
+  | ok (σ : Sb y)
+  | fail
+  /-- The component needs the backtracking matcher. -/
+  | unknown
+
+/-- Match `pt` against `t` where no choice has to be made: free symbols, and
+AC products of variables of which at most one is unassigned, which then takes
+what the others leave (its share of each argument fixed by its multiplicity).
+Anything else is `unknown`. -/
+def mtDet (c : MC) : Nat → D y → D y → Sb y → Det y
+  | 0, _, _, _ => .unknown
+  | n + 1, pt, t, σ =>
+    match pt, t with
+    | .var i, t =>
+      match σ.getD i none with
+      | some b => if Dag.beq b t then .ok σ else .fail
+      | none => if fits c i t then .ok (σ.set! i (some t)) else .fail
+    | .atom a, .atom b => if a == b then .ok σ else .fail
+    | .free f ps, .free g ts =>
+      if f != g || ps.length != ts.length then .fail else
+      (ps.zip ts).foldl (fun acc (p, s) => match acc with
+        | .ok σ => mtDet c n p s σ
+        | other => other) (.ok σ)
+    | .ac f ps, .ac g ts =>
+      if f != g then .fail else
+      if !ps.all isVar then .unknown else
+      let groups := groupVars ps
+      let unbound := groups.filter fun (x, _) => (σ.getD x none).isNone
+      let need : List (D y) := (groups.filter fun (x, _) => (σ.getD x none).isSome).flatMap fun (x, m) =>
+        (List.replicate m (factors f ((σ.getD x none).getD (.var 0)))).flatten
+      match removeAll need ts, unbound with
+      | none, _ => .fail
+      | some [], [] => .ok σ
+      | some _, [] => .fail
+      | some left, [(x, m)] =>
+        let runs := runsOf left
+        if left.isEmpty || !runs.all (fun (_, k) => k % m == 0) then .fail else
+        let taken := runs.flatMap fun (e, k) => List.replicate (k / m) e
+        let b : D y := match taken with | [t] => t | _ => .ac f taken
+        if fits c x b then .ok (σ.set! x (some b)) else .fail
+      | some _, _ => .unknown
+    | .comm _ _ _, .comm _ _ _ => .unknown
+    | _, _ => .fail
+
+/-- Whether `b` is an instance of the pattern `a`, one matcher for every
+component at once, modulo AC and C and respecting sorts. The variable
+components are assigned first, then the matcher takes the others. -/
+def Tuple.subsumes [Interrupt] (a b : Tuple y) : Bool :=
+  a.items.size == b.items.size &&
+  a.keyed.all (fun (i, k) => k == b.keys.getD i 0) &&
+  (b.msgOk || a.linMsg.all fun i => (b.ms.getD i .kind).le .msg) &&
+  a.linSorted.all (fun (i, s) => (b.ms.getD i .kind).le s) &&
+  if a.rest.isEmpty then varsAgree a b a.vars [] else
+  a.rest.all (fun i => quick (a.items.getD i (.var 0)) (b.items.getD i (.var 0))) &&
+  let c : MC := { psort := (a.sorts.getD · .msg), ssort := (b.sorts.getD · .msg) }
+  match assignVars c b a.vars (Array.replicate a.sorts.size none) with
+  | none => false
+  | some σ =>
+    -- the components that need no search first, then the matcher for the others
+    let (det, deferred) := a.rest.foldl (fun (acc, deferred) i => match acc with
+      | some σ =>
+        match mtDet c matchFuel (a.items.getD i (.var 0)) (b.items.getD i (.var 0)) σ with
+        | .ok σ => (some σ, deferred)
+        | .fail => (none, deferred)
+        | .unknown => (some σ, i :: deferred)
+      | none => (none, deferred)) (some σ, [])
+    match det with
+    | none => false
+    | some σ =>
+      deferred.isEmpty ||
+        (mtList c matchFuel (deferred.map (a.items.getD · (.var 0))) (deferred.map (b.items.getD · (.var 0))) σ
+          (fun σ => some σ)).isSome
+
+end Tamarin.MaudeVariants

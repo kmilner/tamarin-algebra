@@ -122,6 +122,21 @@ theorem reflect_canonical (x : Signature) (rs : Problem s) (scope : ReferenceRed
   · intro _ _ st k ht
     simpa only [restrict_embed] using restrict_sort (can.sortPreserving (lift_modulo st) k (embed_sort ht))
 
+/-- An irreducible reduct stays one over every extension of the signature,
+whether or not it is the only one. -/
+theorem normalForm (x : Signature) (rs : Problem s) (bound : ReferenceReduction.Bound rs) (a b : Term s)
+    (reply : NormalForm (ruleRoot rs) a b) :
+    NormalForm (ruleRoot (query x rs)) (embed x a) (embed x b) := by
+  refine ⟨lift_path reply.1,?_,?_⟩
+  · intro u hu
+    have st := (project_modulo bound hu (embedding_local _)).2
+    rw [restrict_embed] at st
+    exact reply.2.1 _ st
+  · intro k ha
+    have sort := restrict_sort ha
+    rw [restrict_embed] at sort
+    exact embed_sort (reply.2.2 k sort)
+
 theorem reduction (x : Signature) (rs : Problem s) (bound : ReferenceReduction.Bound rs) (a b : Term s)
     (reply : MaudeOperations.ReductionReply (ruleRoot rs) a b) :
     MaudeOperations.ReductionReply (ruleRoot (query x rs)) (embed x a) (embed x b) := by

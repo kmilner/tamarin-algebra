@@ -2,7 +2,7 @@ import TamarinRuntime
 import Tamarin.CheckedReductionPacket
 
 namespace Tamarin.CheckedReduction.Tests
-private abbrev reduce := Executable.checkedReduce
+private abbrev reduce := CheckedReductionWire.run
 -- One AC head, and three distinct nullary constructors a,b,c of sort Msg.
 private def ds : Array UInt64 := #[4,0,2,2,2,2, 2,1,0,2, 2,2,0,2, 2,3,0,2]
 private def ns : Array (Array UInt64) := #[

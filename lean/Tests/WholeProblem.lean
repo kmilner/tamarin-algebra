@@ -4,6 +4,9 @@ import Tamarin.WholeContract
 namespace Tamarin.WholeTests
 open Executable
 
+-- The whole-problem classifier is no longer an export: test its kernel.
+private abbrev wholeUnify := Whole.runRefining MixedSizeGraph.refutesDecoded
+
 -- AC 11, AC 12, C 11 and free 11 are distinct. The free operator accepts
 -- two Msg inputs. No names in the kernel designate a Tamarin builtin.
 private def ds : Array UInt64 := #[4,11,2,2,2,2, 4,12,2,2,2,2, 3,11,2,2,2,2, 2,11,2,2,2,2]

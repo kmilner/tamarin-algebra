@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 /-! Compare the linked pivot equations to direct addition of two atom counts.
 Neither the reference equation nor the evaluator uses the branch proof. -/

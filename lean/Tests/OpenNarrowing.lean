@@ -1,4 +1,4 @@
-import TamarinCI
+import TamarinProposers
 
 namespace Tamarin.Rewriting.OpenNarrowingTests
 open Pairing (signature PTerm PSubst Symbol)

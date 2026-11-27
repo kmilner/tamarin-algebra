@@ -74,4 +74,9 @@ theorem coveringSelections_eq (gs : List (ACBasis.Vec n)) :
   simp only [Covered, covers, support_bit, decide_eq_true_eq]
   simp
 
+/-- Compile the reference selection list with the pruned traversal. -/
+@[csimp] theorem selections_eq_covering : @selections = @coveringSelections := by
+  funext n gs
+  exact (coveringSelections_eq gs).symm
+
 end Tamarin.Homogeneous.Coverage

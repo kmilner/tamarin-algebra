@@ -47,8 +47,9 @@ example : ACBagAnswers.Within (coupled false) := by
   · refine ⟨by decide,by decide,by decide,by decide,?_⟩
     intro a ha
     refine ⟨2,?_,by decide⟩
-    have bounded : ∀ b ∈ ((coupled false).flatMap Prod.snd).eraseDups,
-        ∀ r ∈ coupled false, r.2.count b ≤ 2 := by decide
+    have bounded : (((coupled false).flatMap Prod.snd).eraseDups.all fun b =>
+        (coupled false).all fun r => decide (r.2.count b ≤ 2)) = true := by decide_cbv
+    simp only [List.all_eq_true, decide_eq_true_eq] at bounded
     exact bounded a (List.mem_eraseDups.mpr ha)
   · intro a _ u v hu hv
     exact determined _ _ _ rfl a u v hu hv

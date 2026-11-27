@@ -2,6 +2,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Two classes of Lean export are wrapped here (lean/ExportManifest.txt). The reply of a contract
+ * export is specified by theorems and may be used as the answer: unpack_conjunction,
+ * name_unifiers and the nine theory_* exports over the theory of a Tamarin file. Every other
+ * export, checked_variants, general_variants, fold_variants and maude_variants included, is a
+ * proposer with no
+ * contract: its output may only go into a proposed family of variants that
+ * tamarin_lean_theory_variant_check then has to accept. */
+
 /* The generated module initializer and export use the pinned Lean ABI. */
 extern lean_object *initialize_tamarin_x2dspec_TamarinRuntime(uint8_t builtin);
 extern uint8_t tamarin_flat_ac_equal(lean_object *lhs, lean_object *rhs);
@@ -211,9 +219,6 @@ typedef struct {
     size_t size;
 } whole_word_slice;
 
-extern lean_object *tamarin_whole_unify(lean_object *decls, lean_object *nodes,
-                                       lean_object *equations);
-
 extern uint8_t tamarin_check_factors(lean_object *, lean_object *, lean_object *,
                                      lean_object *, lean_object *);
 
@@ -222,23 +227,6 @@ static lean_object *word_rows(const whole_word_slice *rows, size_t count) {
     for (size_t i = 0; i < count; ++i)
         lean_array_set_core(nodes, i, atom_array(rows[i].data, rows[i].size));
     return nodes;
-}
-
-extern lean_object *tamarin_forced_operand_classes(uint64_t width, lean_object *sides);
-uint8_t tamarin_lean_forced_operand_classes(uint64_t width, const whole_word_slice *sides,
-                                           size_t count, uint64_t *labels) {
-    lean_object *reply = tamarin_forced_operand_classes(width, word_rows(sides, count));
-    if (lean_is_scalar(reply)) return 0;
-    lean_object *classes = lean_ctor_get(reply, 0);
-    uint8_t status = 255;
-    if (lean_array_size(classes) == width) {
-        status = 1;
-        for (size_t i = 0; i < width; ++i) {
-            labels[i] = lean_unbox_uint64(lean_array_get_core(classes, i));
-        }
-    }
-    lean_dec(reply);
-    return status;
 }
 
 extern uint8_t tamarin_ac_bag_match(lean_object *rows);
@@ -294,25 +282,6 @@ uint8_t tamarin_lean_variant_overlap_agrees(whole_word_slice decls, const whole_
         atom_array(roots.data, roots.size));
 }
 
-/* All input rows are borrowed for this call only. The Lean export consumes
- * its copies. The current reply format has exactly one row and one word. */
-uint8_t tamarin_lean_whole_unify(whole_word_slice decls, const whole_word_slice *rows,
-                                 size_t count, whole_word_slice equations) {
-    lean_object *nodes = word_rows(rows, count);
-    lean_object *result = tamarin_whole_unify(atom_array(decls.data, decls.size), nodes,
-        atom_array(equations.data, equations.size));
-    uint8_t status = 255;
-    if (lean_array_size(result) == 1) {
-        lean_object *row = lean_array_get_core(result, 0);
-        if (lean_array_size(row) == 1) {
-            uint64_t word = lean_unbox_uint64(lean_array_get_core(row, 0));
-            if (word <= 2) status = (uint8_t)word;
-        }
-    }
-    lean_dec(result);
-    return status;
-}
-
 extern lean_object *tamarin_operand_unify(uint64_t width, lean_object *sides);
 
 extern lean_object *tamarin_project_answers(uint64_t width, lean_object *answers);
@@ -330,33 +299,72 @@ static lean_object *take_some(lean_object *option) {
     return value;
 }
 
-extern lean_object *tamarin_ac_bag_answers(lean_object *rows);
-void *tamarin_lean_ac_bag_answers(const whole_word_slice *rows, size_t count) {
-    lean_object *reply = tamarin_ac_bag_answers(word_rows(rows, count));
-    return lean_is_scalar(reply) ? NULL : take_some(reply);
-}
-
-extern lean_object *tamarin_ac_bag_page(lean_object *rows, lean_object *cursor, uint64_t requested);
-
-/* The request owns one immutable packet across the page calls. Both this
- * reference and returned page arrays use tamarin_lean_match_release. */
-void *tamarin_lean_ac_bag_packet(const whole_word_slice *rows, size_t count) {
-    return word_rows(rows, count);
-}
-
-void *tamarin_lean_ac_bag_page(void *packet, whole_word_slice cursor, uint64_t requested) {
-    lean_object *rows = (lean_object *)packet;
-    lean_inc(rows);
-    lean_object *reply = tamarin_ac_bag_page(rows, atom_array(cursor.data, cursor.size), requested);
-    return lean_is_scalar(reply) ? NULL : take_some(reply);
-}
-
 extern lean_object *tamarin_open_match_select(uint64_t rigid, uint64_t subject);
 
 /* Transfer the row array into the same opaque row reader as flat matching. */
 static void *wrap_rows(lean_object *rows) {
     lean_object *outer = lean_alloc_array(1, 1);
     lean_array_set_core(outer, 0, rows);
+    return outer;
+}
+
+/* Interruption of a long search (lean/Tamarin/Interrupt.lean).
+
+   The exports wrapped with an interrupt_watch take a function `poll : Unit -> Bool` and ask it
+   before each step of their searches. Their theorems are about a `poll` that is a function, so one
+   whose first reply is false replies false every time, and the export then returns the specified
+   answer. The closure built here is not a function: it replies true from the moment the caller's
+   flag is set or the budget of questions is spent, and from then on every time. The compiled search
+   then abandons its loops and returns something unspecified.
+
+   What is trusted here: a reply is handed to the caller only if the closure replied false to every
+   question of that call (`stopped` is still 0). Such a run cannot be told from a run with the
+   constant function, so its result is the one the theorems describe. Every other reply is released
+   unread and the call returns NULL (or status 4), with the reason in `stopped`.
+
+   cancel may be NULL. It is read, never written, and may be set by another thread at any time.
+   budget 0 means no limit. asked and stopped are outputs and are reset by every call. */
+typedef struct {
+    const uint8_t *cancel;
+    uint64_t budget;
+    uint64_t asked;
+    uint8_t stopped;
+} interrupt_watch;
+
+/* stopped: the request was cancelled, or the budget of questions is spent. */
+#define WATCH_CANCELLED 1
+#define WATCH_SPENT 2
+
+static lean_object *watch_poll(lean_object *state, lean_object *unit) {
+    interrupt_watch *watch = (interrupt_watch *)((uintptr_t)state & ~(uintptr_t)1);
+    (void)unit;
+    if (!watch->stopped) {
+        watch->asked += 1;
+        if (watch->cancel && *(const volatile uint8_t *)watch->cancel) watch->stopped = WATCH_CANCELLED;
+        else if (watch->budget && watch->asked > watch->budget) watch->stopped = WATCH_SPENT;
+    }
+    return lean_box(watch->stopped != 0);
+}
+
+/* The closure Lean receives as `poll`. Its captured argument is the address of the watch with the
+   low bit set, which Lean's reference counting takes for an unboxed scalar and never follows. The
+   closure itself is consumed by the export, and nothing in a reply refers to it. */
+static lean_object *watch_closure(interrupt_watch *watch) {
+    watch->asked = 0;
+    watch->stopped = 0;
+    lean_object *closure = lean_alloc_closure((void *)watch_poll, 2, 1);
+    lean_closure_set(closure, 0, (lean_object *)((uintptr_t)watch | 1));
+    return closure;
+}
+
+/* The reply of a watched call, or NULL when the closure ever replied true. */
+static void *watched_rows(const interrupt_watch *watch, lean_object *reply) {
+    if (watch->stopped) {
+        lean_dec(reply);
+        return NULL;
+    }
+    lean_object *outer = lean_alloc_array(1, 1);
+    lean_array_set_core(outer, 0, reply);
     return outer;
 }
 
@@ -367,16 +375,6 @@ void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count
     return wrap_rows(tamarin_unpack_conjunction(word_rows(rows, count), limit, lhs, rhs));
 }
 
-extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *);
-
-extern uint8_t tamarin_certify_table(lean_object *, lean_object *, lean_object *, uint64_t);
-
-uint8_t tamarin_lean_certify_table(whole_word_slice decls, const whole_word_slice *rows,
-                                   size_t count, whole_word_slice rules, uint64_t fuel) {
-    return tamarin_certify_table(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                atom_array(rules.data, rules.size), fuel);
-}
-
 extern uint8_t tamarin_factor_refutes(lean_object *, lean_object *, lean_object *);
 
 uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_slice *rows,
@@ -385,42 +383,240 @@ uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_sli
                                  atom_array(equations.data, equations.size));
 }
 
-void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice equations) {
-    return wrap_rows(tamarin_total_unify(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                        atom_array(equations.data, equations.size)));
+extern lean_object *tamarin_name_unifiers(lean_object *, lean_object *, lean_object *, lean_object *,
+                                          uint8_t, uint8_t);
+
+/* Tables that name the variables a family of unifiers adds to its query. The reply of
+   tamarin_lean_theory_unify is read through them; no other reading of it is specified.
+   names holds two words for each variable row of the request, by the identifier of the row: the
+   caller's identifier of the variable's name hint and its index. heads holds the identifier and
+   sort words of the query variables in the order of the rows of every arm. ranges holds one row
+   for each arm of the reply, with the identifier and sort words of the variables of its range in
+   the order of first occurrence. proposal is empty or holds one row for each arm the caller keeps,
+   with a hint and an index for each variable of the arm's range. nat is 0 when the caller's module
+   has no sort of natural numbers; arms with a variable of that sort then get no table. Without a
+   proposal the names have the hint 0 and indices above every index of the query; low lets the
+   export use indices the query does not use where none are left above it.
+   The reply is {0} (declined) or the status row {1}, the row heads and, for each arm that is kept,
+   {arm, (identifier, sort, 0, hint, index | identifier, sort, 1, row, 0)...}: the variable becomes
+   the variable with that hint and index, or it stands for the query variable in that row of the arm,
+   whose binding is left out. */
+void *tamarin_lean_name_unifiers(whole_word_slice names, whole_word_slice heads,
+                                 const whole_word_slice *ranges, size_t range_count,
+                                 const whole_word_slice *proposal, size_t proposal_count,
+                                 uint8_t nat, uint8_t low) {
+    return wrap_rows(tamarin_name_unifiers(atom_array(names.data, names.size),
+                     atom_array(heads.data, heads.size), word_rows(ranges, range_count),
+                     word_rows(proposal, proposal_count), nat != 0, low != 0));
 }
 
-extern lean_object *tamarin_checked_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+extern lean_object *tamarin_propose_unifier_names(lean_object *, lean_object *, lean_object *,
+                                                  lean_object *, lean_object *, lean_object *);
 
-void *tamarin_lean_checked_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                                  size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_checked_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                           atom_array(rules.data, rules.size), root, fuel));
+/* tamarin_lean_name_unifiers on a proposal that Lean makes itself (tamarin_propose_unifier_names,
+   a proposer) for a reply of tamarin_lean_theory_unify with one arm. The naming export tests that
+   proposal as it tests any other, so the tables are those of tamarin_lean_name_unifiers for that
+   proposal. names, heads, ranges, nat and low are as there. order ranks the caller's hint
+   identifiers by the caller's order of the hints. singles holds, for each query variable in the
+   order of heads, the position in the range of the variable that is its whole image in the arm,
+   or a larger number when its image is something else; counts holds the number of occurrences
+   in the arm of each variable of the range. The result has two arms: the tables, and the proposal
+   (no row when nothing was proposed, which leaves the tables those without a proposal). */
+void *tamarin_lean_self_name_unifiers(whole_word_slice names, whole_word_slice heads,
+                                      whole_word_slice order, const whole_word_slice *ranges,
+                                      size_t range_count, whole_word_slice singles,
+                                      whole_word_slice counts, uint8_t nat, uint8_t low) {
+    lean_object *labels = atom_array(names.data, names.size);
+    lean_object *rows = atom_array(heads.data, heads.size);
+    lean_object *range = word_rows(ranges, range_count);
+    /* Both exports consume their arguments, and these three go to both. */
+    lean_inc(labels);
+    lean_inc(rows);
+    lean_inc(range);
+    lean_object *proposal = tamarin_propose_unifier_names(labels, rows,
+        atom_array(order.data, order.size), range, atom_array(singles.data, singles.size),
+        atom_array(counts.data, counts.size));
+    lean_inc(proposal);
+    lean_object *tables = tamarin_name_unifiers(labels, rows, range, proposal, nat != 0, low != 0);
+    lean_object *outer = lean_alloc_array(2, 2);
+    lean_array_set_core(outer, 0, tables);
+    lean_array_set_core(outer, 1, proposal);
+    return outer;
 }
 
-extern lean_object *tamarin_general_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+extern lean_object *tamarin_apply_names(lean_object *, uint8_t, lean_object *);
 
-void *tamarin_lean_general_reduce(whole_word_slice decls, const whole_word_slice *rows,
-                                  size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
-    return wrap_rows(tamarin_general_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
-                        atom_array(rules.data, rules.size), root, fuel));
-}
-
-extern lean_object *tamarin_total_match(lean_object *, lean_object *, lean_object *, lean_object *);
-
-void *tamarin_lean_total_match(whole_word_slice decls, const whole_word_slice *rows,
-                               size_t count, whole_word_slice equations, whole_word_slice bindable) {
-    return wrap_rows(tamarin_total_match(atom_array(decls.data, decls.size), word_rows(rows, count),
-                                        atom_array(equations.data, equations.size), atom_array(bindable.data, bindable.size)));
+/* The reply of tamarin_lean_theory_unify read through the tables of tamarin_lean_name_unifiers, in
+   words: {0} when there is no reading, or the status row {1} and then, for each arm with a table,
+   an empty row and one row {variable row, sort, tokens...} for each query variable the arm binds.
+   A token {5 + sort, index, hint} is a variable of the range; the other tokens are those of
+   tamarin_lean_theory_unify. The caller's reader is tested against this function. */
+void *tamarin_lean_apply_names(const whole_word_slice *tables, size_t table_count, uint8_t nat,
+                               const whole_word_slice *reply, size_t reply_count) {
+    return wrap_rows(tamarin_apply_names(word_rows(tables, table_count), nat != 0,
+                                        word_rows(reply, reply_count)));
 }
 
 extern lean_object *tamarin_checked_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t);
 
+/* A proposer: a bounded narrowing search. {2} declines. */
 void *tamarin_lean_checked_variants(whole_word_slice decls, const whole_word_slice *rows,
                                     size_t count, whole_word_slice rules, whole_word_slice roots, uint64_t fuel) {
     return wrap_rows(tamarin_checked_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
                     atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel));
+}
+
+/* The tamarin_lean_theory_* functions take the theory of a Tamarin file
+   (lean/Tamarin/Theory.lean) instead of declaration words: flags (dh 1, xor 2, bp 4, mset 8,
+   nat 16), the arities of the other free symbols (ids 16, 17, ...) and the number of user AC
+   symbols (ids 16, 17, ...). Lean derives the declarations of every symbol from them. The rows
+   and rules of a table are the user rules only, with node indices from 0; the rules of the
+   enabled builtins are added by Lean. The terms of a call on a table are the rows of extra,
+   numbered from 0, and root, roots and the node pairs of family index them. Arguments that are
+   not those of a valid signature get the reply to a malformed packet. */
+
+extern lean_object *tamarin_theory_unify(lean_object *, uint64_t, lean_object *, uint64_t,
+                                         lean_object *, lean_object *);
+
+/* The complete family of unifiers of the equations between the roots of rows: {1} and then, for
+   each unifier, an empty row and one binding row per query variable; {0} for a malformed packet.
+   NULL when the call was interrupted: see interrupt_watch. */
+void *tamarin_lean_theory_unify(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                const whole_word_slice *rows, size_t count,
+                                whole_word_slice equations, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_unify(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(rows, count),
+                        atom_array(equations.data, equations.size)));
+}
+
+extern lean_object *tamarin_theory_maude_unify(lean_object *, uint64_t, lean_object *, uint64_t,
+                                               lean_object *, uint64_t, lean_object *, lean_object *);
+
+/* The port of Maude's unification algorithm (lean/Tamarin/MaudeUnifyExport.lean) on the packet of
+   tamarin_lean_theory_unify, under the rank rows ranks: the ranks of the free, C and AC symbols by
+   id (rows 0, 1, 2), of the operator of the name constants of each sort by sort code (row 3), and
+   the variable symbol ranks (row 4) and sort indices (row 5) of the error sort at 0 and of each sort
+   at its code plus one; a missing word counts as 0. A query variable's identifier is the code of its
+   name and a name's identifier is the argument of its constant. fuel bounds the port's recursion.
+   {1} and then, for each unifier, an empty row and one binding row per query variable, all in one
+   order (Maude's slot order), the variables of the unifier numbered from the least identifier above
+   the query's in the order of the port's output slots; {3} when the port ran out of fuel or an
+   answer does not fit in words; {0} for a malformed packet. NULL when the call was interrupted: see
+   interrupt_watch. */
+void *tamarin_lean_theory_maude_unify(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                      const whole_word_slice *ranks, size_t rank_count,
+                                      uint64_t fuel, const whole_word_slice *rows, size_t count,
+                                      whole_word_slice equations, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_maude_unify(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(ranks, rank_count), fuel,
+                        word_rows(rows, count), atom_array(equations.data, equations.size)));
+}
+
+extern uint8_t tamarin_theory_unify_exists(lean_object *, uint64_t, lean_object *, uint64_t,
+                                           lean_object *, lean_object *);
+
+/* Same packet as tamarin_lean_theory_unify. 1: a unifier exists; 2: none exists; 0: malformed
+   packet; 4: the call was interrupted and decided nothing (see interrupt_watch). */
+uint8_t tamarin_lean_theory_unify_exists(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                         const whole_word_slice *rows, size_t count,
+                                         whole_word_slice equations, interrupt_watch *watch) {
+    uint8_t reply = tamarin_theory_unify_exists(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(rows, count),
+                        atom_array(equations.data, equations.size));
+    return watch->stopped ? 4 : reply;
+}
+
+extern lean_object *tamarin_theory_match(uint64_t, lean_object *, uint64_t, lean_object *,
+                                         lean_object *, lean_object *);
+
+void *tamarin_lean_theory_match(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                const whole_word_slice *rows, size_t count,
+                                whole_word_slice equations, whole_word_slice bindable) {
+    return wrap_rows(tamarin_theory_match(flags, atom_array(free.data, free.size), ac,
+                     word_rows(rows, count), atom_array(equations.data, equations.size),
+                     atom_array(bindable.data, bindable.size)));
+}
+
+extern uint8_t tamarin_theory_match_exists(uint64_t, lean_object *, uint64_t, lean_object *,
+                                           lean_object *, lean_object *);
+
+/* 1: a scoped match exists; 2: none exists; 0: malformed packet. */
+uint8_t tamarin_lean_theory_match_exists(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                         const whole_word_slice *rows, size_t count,
+                                         whole_word_slice equations, whole_word_slice bindable) {
+    return tamarin_theory_match_exists(flags, atom_array(free.data, free.size), ac,
+                                       word_rows(rows, count), atom_array(equations.data, equations.size),
+                                       atom_array(bindable.data, bindable.size));
+}
+
+extern uint8_t tamarin_theory_certify(uint64_t, lean_object *, uint64_t, lean_object *, lean_object *,
+                                      uint64_t);
+
+/* 1 certifies the table of the theory, builtin rules and user rules: it decodes, is range
+   restricted, convergent modulo the declared C and AC laws and has the finite variant property.
+   0 carries no information: it is the reply to a malformed packet and may be the reply to any
+   table, certified or not. */
+uint8_t tamarin_lean_theory_certify(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                    const whole_word_slice *rows, size_t count,
+                                    whole_word_slice rules, uint64_t fuel) {
+    return tamarin_theory_certify(flags, atom_array(free.data, free.size), ac, word_rows(rows, count),
+                                  atom_array(rules.data, rules.size), fuel);
+}
+
+extern lean_object *tamarin_theory_path_reduce(lean_object *, uint64_t, lean_object *, uint64_t,
+                                               lean_object *, lean_object *, lean_object *, uint64_t,
+                                               uint64_t);
+
+/* Reduce on a table that is only range restricted: one rewrite path is followed. {1, term} is an
+   irreducible reduct (not known to be unique), {2} an unsupported table or a reduct that lost a
+   sort, {3} a request for more depth, {0} a malformed packet. NULL when the call was
+   interrupted: see interrupt_watch. */
+void *tamarin_lean_theory_path_reduce(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                      const whole_word_slice *rows, size_t count,
+                                      whole_word_slice rules, const whole_word_slice *extra,
+                                      size_t added, uint64_t root, uint64_t fuel,
+                                      interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_path_reduce(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(rows, count),
+                        atom_array(rules.data, rules.size), word_rows(extra, added), root, fuel));
+}
+
+extern lean_object *tamarin_theory_reduce(lean_object *, uint64_t, lean_object *, uint64_t,
+                                          lean_object *, lean_object *, lean_object *, uint64_t,
+                                          uint64_t);
+
+/* Reduce on the table that tamarin_lean_theory_certify accepted for the same flags, free, ac,
+   rows and rules. The reply is {1, term} with the unique normal form, {3} a request for more
+   depth, or {0} for a malformed packet. NULL when the call was interrupted: see
+   interrupt_watch. */
+void *tamarin_lean_theory_reduce(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                 const whole_word_slice *rows, size_t count, whole_word_slice rules,
+                                 const whole_word_slice *extra, size_t added, uint64_t root,
+                                 uint64_t fuel, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_reduce(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(rows, count),
+                        atom_array(rules.data, rules.size), word_rows(extra, added), root, fuel));
+}
+
+extern lean_object *tamarin_theory_variant_check(lean_object *, uint64_t, lean_object *, uint64_t,
+                                                 lean_object *, lean_object *, lean_object *,
+                                                 lean_object *, lean_object *, uint64_t, uint64_t);
+
+/* Check a proposed family of variants on the table that tamarin_lean_theory_certify accepted
+   for the same flags, free, ac, rows and rules. roots index the observations in extra and each
+   family row lists pairs (variable row, image row) of extra. The reply has one row: {1}
+   accepted, {2, reason, member} rejected, {3} budget exhausted, {0} malformed packet. Only {1}
+   accepts. NULL when the call was interrupted: see interrupt_watch. */
+void *tamarin_lean_theory_variant_check(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                        const whole_word_slice *rows, size_t count,
+                                        whole_word_slice rules, const whole_word_slice *extra,
+                                        size_t added, whole_word_slice roots,
+                                        const whole_word_slice *family, size_t members,
+                                        uint64_t fuel, uint64_t work, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_theory_variant_check(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(rows, count),
+                        atom_array(rules.data, rules.size), word_rows(extra, added),
+                        atom_array(roots.data, roots.size), word_rows(family, members), fuel, work));
 }
 
 extern lean_object *tamarin_general_variants(lean_object *, lean_object *, lean_object *, lean_object *, uint64_t);
@@ -429,6 +625,41 @@ void *tamarin_lean_general_variants(whole_word_slice decls, const whole_word_sli
                                     size_t count, whole_word_slice rules, whole_word_slice roots, uint64_t fuel) {
     return wrap_rows(tamarin_general_variants(atom_array(decls.data, decls.size), word_rows(rows, count),
                     atom_array(rules.data, rules.size), atom_array(roots.data, roots.size), fuel));
+}
+
+extern lean_object *tamarin_fold_variants(lean_object *, lean_object *, lean_object *, lean_object *,
+                                         lean_object *, uint64_t, uint64_t);
+
+/* A proposer: folding variant narrowing within `work` narrowing sites. NULL when the call was
+   interrupted: see interrupt_watch. */
+void *tamarin_lean_fold_variants(whole_word_slice decls, const whole_word_slice *rows,
+                                 size_t count, whole_word_slice rules, whole_word_slice roots,
+                                 uint64_t fuel, uint64_t work, interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_fold_variants(watch_closure(watch),
+                        atom_array(decls.data, decls.size), word_rows(rows, count),
+                        atom_array(rules.data, rules.size), atom_array(roots.data, roots.size),
+                        fuel, work));
+}
+
+extern lean_object *tamarin_maude_variants(lean_object *, uint64_t, lean_object *, uint64_t,
+                                          lean_object *, uint64_t, lean_object *, lean_object *);
+
+/* A proposer: what Maude 3.5.1 lists for `get variants` on the module of the theory
+   (lean/Tamarin/MaudeVariantsExport.lean). The theory words of tamarin_lean_theory_maude_unify,
+   its rank rows and a row 6 with the ranks of list, cons and nil; fuel bounds every recursion of
+   the search and its number of layers. The rows are those of tamarin_lean_theory_maude_unify, and
+   a row {5, children...} stands for the arguments of a fact; the roots are the query, then the
+   left and right side of each equation of the module in module order. {1} and then, for each
+   variant, an empty row and one binding row per query variable in Maude's numbering, its term in
+   postfix with the variant's variable k as {0, k, sort}; {3} when the search gave up; {0} for a
+   malformed request. NULL when the call was interrupted: see interrupt_watch. */
+void *tamarin_lean_maude_variants(uint64_t flags, whole_word_slice free, uint64_t ac,
+                                  const whole_word_slice *ranks, size_t rank_count, uint64_t fuel,
+                                  const whole_word_slice *rows, size_t count, whole_word_slice roots,
+                                  interrupt_watch *watch) {
+    return watched_rows(watch, tamarin_maude_variants(watch_closure(watch), flags,
+                        atom_array(free.data, free.size), ac, word_rows(ranks, rank_count), fuel,
+                        word_rows(rows, count), atom_array(roots.data, roots.size)));
 }
 
 extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);
@@ -533,28 +764,6 @@ extern lean_object *tamarin_masked_operand_unify(uint64_t width, uint64_t mask, 
 projected_answers tamarin_lean_masked_operand_unify(uint64_t width, uint64_t mask,
                                                     const whole_word_slice *sides, size_t count) {
     return project_answers(width, tamarin_masked_operand_unify(width, mask, word_rows(sides, count)));
-}
-
-extern lean_object *tamarin_graph_homogeneous_unify(uint64_t width, uint64_t symbol, uint64_t sort,
-                                                     lean_object *decls, lean_object *nodes,
-                                                     lean_object *equations);
-
-extern uint8_t tamarin_graph_ac_feasible(uint64_t width, uint64_t symbol, uint64_t sort,
-                                         lean_object *decls, lean_object *nodes, lean_object *equations);
-
-uint8_t tamarin_lean_graph_ac_feasible(uint64_t width, uint64_t symbol, uint64_t sort,
-                                       whole_word_slice decls, const whole_word_slice *rows,
-                                       size_t count, whole_word_slice equations) {
-    return tamarin_graph_ac_feasible(width, symbol, sort, atom_array(decls.data, decls.size),
-        word_rows(rows, count), atom_array(equations.data, equations.size));
-}
-
-projected_answers tamarin_lean_graph_homogeneous_unify(uint64_t width, uint64_t symbol, uint64_t sort,
-                                                       whole_word_slice decls, const whole_word_slice *rows,
-                                                       size_t count, whole_word_slice equations) {
-    return project_answers(width, tamarin_graph_homogeneous_unify(width, symbol, sort,
-        atom_array(decls.data, decls.size), word_rows(rows, count),
-        atom_array(equations.data, equations.size)));
 }
 
 size_t tamarin_lean_match_row_size(const void *result, size_t arm, size_t index) {

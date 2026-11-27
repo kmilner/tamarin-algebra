@@ -6,6 +6,7 @@ valuations against the original equations before accepting them. -/
 namespace Tamarin.MixedUnification.Total
 open LocalAnswers
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+variable [Interrupt]
 
 private def coordinates (p : Problem s) (q : System s) :=
   ((p.variables.map (fun v => q.slot (.var v))) ++ q.constraints.flatMap Constraint.slots).eraseDups
@@ -15,9 +16,11 @@ private def templates (q : System s) (k : Nat → Nat) :=
     project q (θ ∘ ref ∘ k)
 
 def solve (p : Problem s) : List (UnifierSorts.Template s) :=
-  let q := purify p
-  (SlotPartitions.choices (coordinates p q)).flatMap fun k =>
-    (templates q k).filter fun θ => p.all fun e => ReferenceMatching.equal (e.lhs.subst θ) (e.rhs.subst θ)
+  Interrupt.guard [] fun _ =>
+    let q := purify p
+    Interrupt.flatMap (fun k => (templates q k).filter fun θ =>
+        p.all fun e => ReferenceMatching.equal (e.lhs.subst θ) (e.rhs.subst θ))
+      (SlotPartitions.choices (coordinates p q))
 
 theorem correct (p : Problem s) : UnifierSorts.CompleteTemplates p (solve p) := by
   let q := purify p

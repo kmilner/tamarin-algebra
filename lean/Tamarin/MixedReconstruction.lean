@@ -3,6 +3,7 @@ import Tamarin.FiniteOccurs
 import Tamarin.ReferenceMatching
 import Tamarin.TermEquality
 import Tamarin.UnifierSorts
+import Tamarin.Buckets
 
 /-! Purification for simultaneous free, C and AC unification. Each distinct source
 subterm has a slot. Equations identify their root slots before we emit the local
@@ -112,6 +113,22 @@ private def describe (k : Term s → Nat) : Term s → Option (Constraint s)
   | t@(.comm f a b) => some (.comm (k t) f (k a) (k b))
   | t@(.ac f a b) => some (.ac (k t) f (k a) (k b))
 
+/-- `describe` with the argument slots of a free application stored. The
+slot of an argument is a table lookup, and every later read of the constraint
+would repeat it. -/
+private def describeStored (k : Term s → Nat) : Term s → Option (Constraint s)
+  | .var _ => none
+  | t@(.atom a) => some (.atom (k t) a)
+  | t@(.free f xs) =>
+    let stored := Vector.ofFn fun i => k (xs i)
+    some (.free (k t) f fun i => stored[i])
+  | t@(.comm f a b) => some (.comm (k t) f (k a) (k b))
+  | t@(.ac f a b) => some (.ac (k t) f (k a) (k b))
+
+@[csimp] private theorem describe_eq_stored : @describe = @describeStored := by
+  funext s k t
+  cases t <;> simp [describe, describeStored]
+
 structure System (s : Signature) where
   slot : Term s → Nat
   constraints : List (Constraint s)
@@ -129,6 +146,18 @@ def purify [DecidableEq (Term s)] (p : Problem s) : System s :=
 private theorem inside [DecidableEq (Term s)] {p : Problem s} {e} (he : e ∈ p) {t}
     (ht : t ∈ subterms e.lhs ∨ t ∈ subterms e.rhs) : t ∈ inventory p :=
   List.mem_eraseDups.mpr (List.mem_flatMap.mpr ⟨e,he,List.mem_append.mpr ht⟩)
+
+/-- A subterm of a subterm is a subterm. -/
+theorem subterms_trans {t a : Term s} : t ∈ subterms a → ∀ u ∈ subterms t, u ∈ subterms a :=
+  descend a
+
+/-- The inventory contains every subterm of every side. -/
+theorem subterm_inventory [DecidableEq (Term s)] {p : Problem s} {e} (he : e ∈ p) {t}
+    (ht : t ∈ subterms e.lhs ∨ t ∈ subterms e.rhs) : t ∈ inventory p := inside he ht
+
+/-- The two sides of an equation share a slot. -/
+theorem slot_sides [DecidableEq (Term s)] (p : Problem s) :
+    ∀ e ∈ p, (purify p).slot e.lhs = (purify p).slot e.rhs := identify_links p _
 
 private theorem interpret {k : Term s → Nat} {V : Nat → Term s} (t : Term s)
     (models : ∀ u ∈ subterms t, ∀ c ∈ describe k u, c.Holds V) :
@@ -153,6 +182,229 @@ private theorem interpret {k : Term s → Nat} {V : Nat → Term s} (t : Term s)
 
 section Purification
 variable [DecidableEq (Term s)]
+
+/-- The slots of the interned terms after each merge, as a table. -/
+private def identifyTable (ts : List (Term s)) : List Nat → Problem s → List Nat
+  | table, [] => table
+  | table, e :: es =>
+    let a := table.getD (ts.idxOf e.lhs) 0
+    let b := table.getD (ts.idxOf e.rhs) 0
+    identifyTable ts (table.map (redirect a b)) es
+
+private theorem getD_map_idxOf (ts : List (Term s)) (key : Term s → Nat) {t : Term s}
+    (ht : t ∈ ts) (d : Nat) : (ts.map key).getD (ts.idxOf t) d = key t := by
+  have lt := List.idxOf_lt_length_of_mem ht
+  simp [List.getD_eq_getElem?_getD, lt, List.getElem_idxOf]
+
+private theorem identifyTable_eq (ts : List (Term s)) (p : Problem s) (key : Term s → Nat)
+    (known : ∀ e ∈ p, e.lhs ∈ ts ∧ e.rhs ∈ ts) :
+    identifyTable ts (ts.map key) p = ts.map (identify key p) := by
+  induction p generalizing key with
+  | nil => rfl
+  | cons e es ih =>
+    have ⟨hl,hr⟩ := known e List.mem_cons_self
+    simp only [identifyTable, identify]
+    rw [getD_map_idxOf ts key hl, getD_map_idxOf ts key hr, List.map_map]
+    exact ih _ (fun e he => known e (List.mem_cons_of_mem _ he))
+
+/-- A cheap key read from the top of a term. Symbols are not inspected, so the
+key separates terms by their shape and by the variables near the root. -/
+private def termKey : Nat → Term s → UInt64
+  | 0, _ => 0
+  | _+1, .var v => 2 * v.id.toUInt64 + 1
+  | _+1, .atom _ => 2
+  | d+1, .free f xs => Fin.foldl (s.arity f) (fun acc i => acc * 31 + termKey d (xs i)) 3
+  | d+1, .comm _ a b => (termKey d a * 31 + termKey d b) * 37 + 5
+  | d+1, .ac _ a b => (termKey d a * 31 + termKey d b) * 41 + 7
+
+/-- The length of the right spine of a product. The partial products of a
+long product agree near the root and differ in this length. -/
+private def spine : Term s → Nat
+  | .ac _ _ b => spine b + 1
+  | _ => 0
+
+def bucketKey (t : Term s) : Nat := (termKey 3 t).toNat + 1000003 * spine t
+
+/-- `inventory` comparing each subterm only with the kept subterms of the same key. -/
+private def inventoryBucketed (p : Problem s) : List (Term s) :=
+  Buckets.dedup bucketKey (p.flatMap fun e => subterms e.lhs ++ subterms e.rhs)
+
+@[csimp] theorem inventory_eq_bucketed : @inventory = @inventoryBucketed := by
+  funext s _ p
+  exact (Buckets.dedup_eq ..).symm
+
+/-- `identifyTable` on an array, reading the two slots by the supplied index
+and leaving the table alone when they already agree. -/
+private def identifyArray (idx : Term s → Nat) : Array Nat → Problem s → Array Nat
+  | table, [] => table
+  | table, e :: es =>
+    let a := table.getD (idx e.lhs) 0
+    let b := table.getD (idx e.rhs) 0
+    identifyArray idx (if a = b then table else table.map (redirect a b)) es
+
+private theorem identifyArray_eq (ts : List (Term s)) (table : Array Nat) (p : Problem s) :
+    (identifyArray ts.idxOf table p).toList = identifyTable ts table.toList p := by
+  induction p generalizing table with
+  | nil => rfl
+  | cons e es ih =>
+    have get (i : Nat) : table.getD i 0 = table.toList.getD i 0 := by
+      simp only [Array.getD, List.getD, Array.getElem?_toList]
+      split
+      · next h => rw [Array.getElem?_eq_getElem h]; rfl
+      · next h => rw [Array.getElem?_eq_none (Nat.le_of_not_lt h)]; rfl
+    simp only [identifyArray, identifyTable, ih, get]
+    split
+    · next same =>
+      rw [same]
+      congr 1
+      have fixed : redirect (table.toList.getD (ts.idxOf e.rhs) 0) (table.toList.getD (ts.idxOf e.rhs) 0) = id := by
+        funext x
+        simp [redirect]
+        intro h; exact h.symm
+      rw [fixed, List.map_id]
+    · simp
+
+/-- The positions of the elements of a list without repeats are the numbers
+below its length, in order. -/
+private theorem map_idxOf_range {α : Type} [BEq α] [LawfulBEq α] (ts : List α) (nd : ts.Nodup) :
+    ts.map ts.idxOf = List.range ts.length := by
+  apply List.ext_getElem (by simp)
+  intro i h₁ h₂
+  simp only [List.getElem_map, List.getElem_range]
+  exact nd.idxOf_getElem i (by simpa using h₁)
+
+private theorem filterMap_agree {α β : Type} {f g : α → Option β} (l : List α)
+    (h : ∀ a ∈ l, f a = g a) : l.filterMap f = l.filterMap g := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    rw [List.filterMap_cons, List.filterMap_cons, h a List.mem_cons_self,
+      ih fun b hb => h b (List.mem_cons_of_mem _ hb)]
+
+private theorem inventory_nodup (p : Problem s) : (inventory p).Nodup :=
+  Matching.ACBagSearch.dedup_distinct _
+
+/-- `describe` for a term whose slot is known. -/
+private def describeAt (k : Term s → Nat) (out : Nat) : Term s → Option (Constraint s)
+  | .var _ => none
+  | .atom a => some (.atom out a)
+  | .free f xs => some (.free out f fun i => k (xs i))
+  | .comm f a b => some (.comm out f (k a) (k b))
+  | .ac f a b => some (.ac out f (k a) (k b))
+
+omit [DecidableEq (Term s)] in
+private theorem describeAt_slot (k : Term s → Nat) (t : Term s) : describeAt k (k t) t = describe k t := by
+  cases t <;> rfl
+
+/-- `purify` with the subterms interned in buckets and the slot of every
+interned term computed once. The slot function of `purify` re-derives each
+merge on every call, and looks every term up by a linear scan. The interned
+terms are distinct, so the position of the `i`-th one is `i` and needs no
+lookup, neither for the first table of slots nor for the slot that the
+constraint of the term defines. -/
+private def purifyTabled (p : Problem s) : System s :=
+  let ts := inventory p
+  let index := Buckets.index bucketKey (ts.length + 1) 0 ts
+  let idx := fun t => Buckets.lookup bucketKey index ts.length t
+  let table := identifyArray idx (Array.range ts.length) p
+  let k := fun t =>
+    let i := idx t
+    if h : i < table.size then table[i] else identify ts.idxOf p t
+  ⟨k, ts.zipIdx.filterMap fun e => describeAt k (table.getD e.2 0) e.1⟩
+
+private theorem idx_eq (p : Problem s) :
+    (fun t => Buckets.lookup bucketKey
+      (Buckets.index bucketKey ((inventory p).length + 1) 0 (inventory p)) (inventory p).length t) =
+      (inventory p).idxOf := by
+  funext t
+  simpa using Buckets.lookup_index bucketKey ((inventory p).length + 1) (by omega) 0 (inventory p) t
+
+private theorem table_eq (p : Problem s) :
+    (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).toList =
+      (inventory p).map (identify (inventory p).idxOf p) := by
+  rw [identifyArray_eq]
+  have start : (Array.range (inventory p).length).toList = (inventory p).map (inventory p).idxOf := by
+    rw [map_idxOf_range _ (inventory_nodup p)]
+    simp
+  rw [start]
+  exact identifyTable_eq _ _ _ (fun e he => ⟨inside he (.inl (self_mem _)), inside he (.inr (self_mem _))⟩)
+
+private theorem slot_eq (p : Problem s) :
+    (fun t => if h : (inventory p).idxOf t <
+        (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).size
+      then (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p)[(inventory p).idxOf t]
+      else identify (inventory p).idxOf p t) = identify (inventory p).idxOf p := by
+  funext t
+  split
+  · next h =>
+    have lt : (inventory p).idxOf t < (inventory p).length := by
+      have := congrArg List.length (table_eq p)
+      simp only [Array.length_toList, List.length_map] at this
+      omega
+    rw [← Array.getElem_toList]
+    simp [table_eq, List.getElem_idxOf lt]
+  · rfl
+
+@[csimp] theorem purify_eq_tabled : @purify = @purifyTabled := by
+  funext s _ p
+  simp only [purify, purifyTabled, idx_eq, slot_eq]
+  congr 1
+  have known : ∀ e ∈ (inventory p).zipIdx,
+      describeAt (identify (inventory p).idxOf p)
+        ((identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).getD e.2 0) e.1 =
+        describe (identify (inventory p).idxOf p) e.1 := by
+    intro e he
+    obtain ⟨t,i⟩ := e
+    have at_i : (inventory p)[i]? = some t := by
+      simpa using (List.mem_zipIdx_iff_getElem?.mp he)
+    have lt : i < (inventory p).length := by
+      rcases Nat.lt_or_ge i (inventory p).length with h | h
+      · exact h
+      · rw [List.getElem?_eq_none h] at at_i; cases at_i
+    have here : (inventory p)[i] = t := by
+      rw [List.getElem?_eq_getElem lt] at at_i
+      exact Option.some.inj at_i
+    have slot : (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).getD i 0 =
+        identify (inventory p).idxOf p t := by
+      have size : i < (identifyArray (inventory p).idxOf (Array.range (inventory p).length) p).size := by
+        have := congrArg List.length (table_eq p)
+        simp only [Array.length_toList, List.length_map] at this
+        omega
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem size, Option.getD_some,
+        ← Array.getElem_toList]
+      simp [table_eq, here]
+    dsimp only
+    rw [slot, describeAt_slot]
+  rw [filterMap_agree _ known]
+  have spread (ts : List (Term s)) (g : Term s → Option (Constraint s)) :
+      ts.filterMap g = ts.zipIdx.filterMap fun e => g e.1 := by
+    conv => lhs; rw [← List.zipIdx_map_fst 0 ts]
+    rw [List.filterMap_map]
+    rfl
+  exact spread _ _
+
+/-- The slots of `purify` without the constructor constraints, for callers
+that only compare slots. The result is a record so that its table is built
+once and shared by every lookup. -/
+def slotsOnly (p : Problem s) : System s := ⟨(purify p).slot, []⟩
+
+private def slotsOnlyTabled (p : Problem s) : System s :=
+  let ts := inventory p
+  let index := Buckets.index bucketKey (ts.length + 1) 0 ts
+  let idx := fun t => Buckets.lookup bucketKey index ts.length t
+  let table := identifyArray idx (Array.range ts.length) p
+  let k := fun t =>
+    let i := idx t
+    if h : i < table.size then table[i] else identify ts.idxOf p t
+  ⟨k, []⟩
+
+@[csimp] theorem slotsOnly_eq_tabled : @slotsOnly = @slotsOnlyTabled := by
+  funext s _ p
+  show (⟨(purify p).slot, []⟩ : System s) = _
+  rw [purify_eq_tabled]
+  rfl
+
+theorem slotsOnly_slot (p : Problem s) : (slotsOnly p).slot = (purify p).slot := rfl
 
 def project (q : System s) (V : Nat → Term s) : UnifierSorts.Template s :=
   fun v => V (q.slot (.var v))
@@ -219,6 +471,70 @@ theorem extend_solution (p : Problem s) (θ : UnifierSorts.Template s)
   obtain ⟨V,h,values⟩ := extend_inventory p θ sol
   exact ⟨V,h,fun _ hv => values _ (var_in_inventory hv)⟩
 
+/-- The two sides of an equation of the problem have one slot. -/
+theorem purify_links (p : Problem s) : ∀ e ∈ p, (purify p).slot e.lhs = (purify p).slot e.rhs :=
+  identify_links p _
+
+/-- The sides of the equations are interned. -/
+theorem sides_in_inventory {p : Problem s} {e : Equation s} (he : e ∈ p) :
+    e.lhs ∈ inventory p ∧ e.rhs ∈ inventory p :=
+  ⟨inside he (.inl (self_mem _)),inside he (.inr (self_mem _))⟩
+
+/-- The subterms of an interned term are interned. -/
+theorem inventory_subterms {p : Problem s} {t : Term s} (ht : t ∈ inventory p) :
+    ∀ u ∈ subterms t, u ∈ inventory p := by
+  obtain ⟨e,he,hm⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp ht)
+  exact fun u hu => inside he ((List.mem_append.mp hm).imp
+    (fun h => descend _ h u hu) (fun h => descend _ h u hu))
+
+/-- Slots only identify what the equations link. A list of terms that holds,
+with each side of an equation, the other side holds every interned term that
+has the slot of one of its interned members. -/
+theorem purify_slot_closed (p : Problem s) (S : List (Term s))
+    (closed : ∀ e ∈ p, e.lhs ∈ S ↔ e.rhs ∈ S) {t u : Term s} (ht : t ∈ S) (hti : t ∈ inventory p)
+    (hu : u ∈ inventory p) (same : (purify p).slot t = (purify p).slot u) : u ∈ S := by
+  classical
+  let ts := inventory p
+  let a : Variable := ⟨0,.msg⟩
+  let b : Variable := ⟨1,.msg⟩
+  let V : Nat → Term s := fun n => if ∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = n then .var a else .var b
+  have key (y : Term s) (hy : y ∈ ts) : (∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y) ↔ y ∈ S := by
+    constructor
+    · rintro ⟨x,hx,hxt,eq⟩
+      have left := List.getElem_idxOf (List.idxOf_lt_length_of_mem hxt)
+      have right := List.getElem_idxOf (List.idxOf_lt_length_of_mem hy)
+      have : x = y := by
+        rw [← left,← right]
+        simp only [eq]
+      exact this ▸ hx
+    · intro h
+      exact ⟨y,h,hy,rfl⟩
+  have value (y : Term s) (hy : y ∈ ts) : V (ts.idxOf y) = if y ∈ S then .var a else .var b := by
+    by_cases inS : y ∈ S
+    · have yes : ∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y := (key y hy).mpr inS
+      simp only [V,yes,inS,↓reduceIte]
+    · have no : ¬∃ x ∈ S, x ∈ ts ∧ ts.idxOf x = ts.idxOf y := fun h => inS ((key y hy).mp h)
+      simp only [V,no,inS,↓reduceIte]
+  have links (e) (he : e ∈ p) : EquivB (V (ts.idxOf e.lhs)) (V (ts.idxOf e.rhs)) := by
+    rw [value _ (sides_in_inventory he).1,value _ (sides_in_inventory he).2]
+    by_cases l : e.lhs ∈ S
+    · simp only [l,(closed e he).mp l,↓reduceIte]
+      exact .refl _
+    · have r : e.rhs ∉ S := fun h => l ((closed e he).mpr h)
+      simp only [l,r,↓reduceIte]
+      exact .refl _
+  have at_t := identify_values p ts.idxOf V links t
+  have at_u := identify_values p ts.idxOf V links u
+  change identify ts.idxOf p t = identify ts.idxOf p u at same
+  rw [← same] at at_u
+  have joint := at_u.trans at_t.symm
+  rw [value u hu,value t hti] at joint
+  by_cases inS : u ∈ S
+  · exact inS
+  · simp only [inS,ht,↓reduceIte] at joint
+    have heads := joint.head_eq
+    simp [Model.eval,headModel,a,b] at heads
+
 end Purification
 
 private def inputs : Constraint s → List Nat
@@ -267,6 +583,69 @@ private theorem ready_exists {V : Nat → Term s} (todo : List (Constraint s))
     rw [← eq] at lt
     exact ready_exists todo model d hd
 termination_by FiniteOccurs.nodes (V c.out)
+
+/-- The outputs of the pending constraints, as a table of marks. -/
+private def outputs (todo : List (Constraint s)) : Array Bool :=
+  todo.foldl (fun acc d => acc.setIfInBounds d.out true)
+    (Array.replicate (todo.foldl (fun m d => max m d.out) 0 + 1) false)
+
+private theorem outputs_at (todo : List (Constraint s)) (i : Nat) :
+    (outputs todo).getD i false = todo.any (fun d => d.out == i) := by
+  have bound : ∀ (cs : List (Constraint s)) (m : Nat), ∀ d ∈ cs,
+      d.out ≤ cs.foldl (fun m d => max m d.out) m := by
+    intro cs
+    induction cs with
+    | nil => intro _ d hd; cases hd
+    | cons c cs ih =>
+      intro m d hd
+      have grows : ∀ (xs : List (Constraint s)) (a : Nat), a ≤ xs.foldl (fun m d => max m d.out) a := by
+        intro xs
+        induction xs with
+        | nil => exact fun a => Nat.le_refl a
+        | cons x xs ih => exact fun a => Nat.le_trans (Nat.le_max_left a x.out) (ih _)
+      rcases List.mem_cons.mp hd with rfl | hd
+      · exact Nat.le_trans (Nat.le_max_right m d.out) (grows cs _)
+      · exact ih _ d hd
+  have fill : ∀ (cs : List (Constraint s)) (acc : Array Bool), (∀ d ∈ cs, d.out < acc.size) →
+      (cs.foldl (fun acc d => acc.setIfInBounds d.out true) acc).getD i false =
+        (acc.getD i false || cs.any (fun d => d.out == i)) := by
+    intro cs
+    induction cs with
+    | nil => intro acc _; simp
+    | cons c cs ih =>
+      intro acc inside
+      rw [List.foldl_cons, ih _ (fun d hd => by
+        simpa using inside d (List.mem_cons_of_mem _ hd))]
+      have here := inside c List.mem_cons_self
+      simp only [List.any_cons, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds]
+      by_cases same : c.out = i
+      · subst same; simp [here]
+      · have off : (c.out == i) = false := by simpa using same
+        simp [same, off]
+  unfold outputs
+  rw [fill todo _ (fun d hd => by
+    have := bound todo 0 d hd
+    simp only [Array.size_replicate]
+    omega)]
+  have empty : (Array.replicate (todo.foldl (fun m d => max m d.out) 0 + 1) false).getD i false =
+      false := by
+    simp only [Array.getD_eq_getD_getElem?, Array.getElem?_replicate]
+    split <;> rfl
+  rw [empty, Bool.false_or]
+
+/-- `ready` reading the outputs from their table. -/
+private def readyIn (marks : Array Bool) (c : Constraint s) : Bool :=
+  (inputs c).all fun i => !marks.getD i false
+
+private theorem readyIn_eq (todo : List (Constraint s)) :
+    readyIn (outputs todo) = ready todo := by
+  funext c
+  simp only [readyIn, ready, outputs_at]
+
+/-- A valuation with one slot set. The value is an argument, so it is
+computed once and not on every read of the slot. -/
+private def installAt (out : Nat) (value : Term s) (images : Nat → Term s) (i : Nat) : Term s :=
+  if i = out then value else images i
 
 private def Factors (V images : Nat → Term s) (μ : Variable → Term s) :=
   ∀ i, EquivB (V i) ((images i).subst μ)
@@ -326,23 +705,29 @@ private def reconstruct (todo : List (Constraint s)) (images : Nat → Term s) :
       fun _ eq _ _ => by cases eq; rfl, by simp⟩⟩
   | c :: cs =>
     let pending := c :: cs
-    match found : pending.find? (ready pending) with
+    let test : Constraint s → Bool := readyIn (outputs pending)
+    have same : test = ready pending := readyIn_eq pending
+    match seen : pending.find? test with
     | none =>
+      have found : pending.find? (ready pending) = none := same ▸ seen
       refine ⟨none,⟨fun V μ model _ => ?_,by simp,by simp⟩⟩
       obtain ⟨d,hd,ok⟩ := ready_exists pending model c List.mem_cons_self
       exact False.elim ((List.find?_eq_none.mp found d hd) ok)
     | some d =>
+      have found : pending.find? (ready pending) = some d := same ▸ seen
       have hd := List.mem_of_find?_eq_some found
       let rest := pending.filter fun e => e.out != d.out
       have smaller : rest.length < pending.length :=
         List.length_filter_lt_length_iff_exists.mpr ⟨d,hd,by simp⟩
-      let recursed := reconstruct rest (install images d)
+      let value := d.term images
+      have stored : installAt d.out value images = install images d := rfl
+      let recursed := reconstruct rest (installAt d.out value images)
       have subset {e} (he : e ∈ rest) := (List.mem_filter.mp he).1
       refine ⟨recursed.val,⟨fun V μ model h => recursed.property.covers V μ
         (fun e he => model e (subset he)) (install_factors h (model d hd)),?_,?_⟩⟩
       · intro row hr i external
         rw [recursed.property.stable row hr i (fun e he => external e (subset he))]
-        simp [install,Ne.symm (external d hd)]
+        simp [installAt,Ne.symm (external d hd)]
       · intro row hr unique e he
         by_cases same : e.out = d.out
         · unfold Constraint.Holds
@@ -353,27 +738,254 @@ private def reconstruct (todo : List (Constraint s)) (images : Nat → Term s) :
             simpa [ready,List.all_eq_true] using (List.all_eq_true.mp chosen i hi)
           have kept (i) (hi : i ∈ inputs d) : row i = images i := by
             rw [recursed.property.stable row hr i (fun x hx => available i hi x (subset hx))]
-            simp [install,Ne.symm (available i hi d hd)]
+            simp [installAt,Ne.symm (available i hi d hd)]
           rw [term_agree d kept,recursed.property.stable row hr d.out
             (fun x hx => by simpa using (List.mem_filter.mp hx).2)]
-          simp [install]; exact .refl _
+          simp [installAt, value]; exact .refl _
         · exact recursed.property.solves row hr (fun x hx y hy => unique x (subset hx) y (subset hy))
             e (List.mem_filter.mpr ⟨he,by simpa using same⟩)
 termination_by todo.length
 
+private theorem reconstruct_nil (images : Nat → Term s) :
+    (reconstruct ([] : List (Constraint s)) images).val = some images := by
+  rw [reconstruct]
+
+private theorem reconstruct_cons (c : Constraint s) (cs : List (Constraint s)) (images : Nat → Term s) :
+    (reconstruct (c :: cs) images).val =
+      match (c :: cs).find? (readyIn (outputs (c :: cs))) with
+      | none => none
+      | some d => (reconstruct ((c :: cs).filter fun e => e.out != d.out)
+          (installAt d.out (d.term images) images)).val := by
+  rw [reconstruct]
+  split <;> simp_all
+
+/-- The valuation that a table of terms stands for: the entry of a slot
+inside the table, and the variable of the slot outside it. -/
+private def view (table : Array (Term s)) (i : Nat) : Term s :=
+  if h : i < table.size then table[i] else .var ⟨i,.msg⟩
+
+private theorem view_set (table : Array (Term s)) (out : Nat) (value : Term s)
+    (inside : out < table.size) :
+    view (table.setIfInBounds out value) = installAt out value (view table) := by
+  funext i
+  unfold view installAt
+  by_cases same : i = out
+  · subst same
+    simp [inside]
+  · have other : ¬ out = i := fun h => same h.symm
+    simp only [same, ↓reduceIte, Array.size_setIfInBounds]
+    split
+    · next lt =>
+      rw [Array.getElem_setIfInBounds lt]
+      simp only [other, ↓reduceIte]
+    · rfl
+
+/-- `reconstruct` on a table of the slots. The valuation of `reconstruct` is
+a chain of one closure per defined slot, and every read of a slot walks it.
+The first argument bounds the number of constraints. -/
+private def reconstructTable : Nat → List (Constraint s) → Array (Term s) → Option (Array (Term s))
+  | _, [], table => some table
+  | 0, _ :: _, _ => none
+  | fuel + 1, c :: cs, table =>
+    match (c :: cs).find? (readyIn (outputs (c :: cs))) with
+    | none => none
+    | some d =>
+      reconstructTable fuel ((c :: cs).filter fun e => e.out != d.out)
+        (table.setIfInBounds d.out (d.term (view table)))
+
+private theorem reconstructTable_eq (n : Nat) : ∀ (todo : List (Constraint s)) (table : Array (Term s)),
+    todo.length ≤ n → (∀ c ∈ todo, c.out < table.size) →
+    (reconstructTable n todo table).map view = (reconstruct todo (view table)).val := by
+  induction n with
+  | zero =>
+    intro todo table short _
+    obtain rfl : todo = [] := List.length_eq_zero_iff.mp (Nat.le_zero.mp short)
+    rw [reconstructTable, reconstruct_nil]
+    rfl
+  | succ n ih =>
+    intro todo table short inside
+    cases todo with
+    | nil =>
+      rw [reconstructTable, reconstruct_nil]
+      rfl
+    | cons c cs =>
+      rw [reconstructTable, reconstruct_cons]
+      cases found : (c :: cs).find? (readyIn (outputs (c :: cs))) with
+      | none => rfl
+      | some d =>
+        dsimp only
+        have member := List.mem_of_find?_eq_some found
+        rw [← view_set table d.out _ (inside d member)]
+        apply ih
+        · have shorter : ((c :: cs).filter fun e => e.out != d.out).length < (c :: cs).length :=
+            List.length_filter_lt_length_iff_exists.mpr ⟨d, member, by simp⟩
+          omega
+        · intro e he
+          rw [Array.size_setIfInBounds]
+          exact inside e (List.mem_filter.mp he).1
+
+private theorem out_le_fold (cs : List (Constraint s)) (m : Nat) :
+    m ≤ cs.foldl (fun m c => max m c.out) m ∧ ∀ c ∈ cs, c.out ≤ cs.foldl (fun m c => max m c.out) m := by
+  induction cs generalizing m with
+  | nil => exact ⟨Nat.le_refl m, fun c hc => nomatch hc⟩
+  | cons d ds ih =>
+    obtain ⟨grows, covers⟩ := ih (max m d.out)
+    refine ⟨Nat.le_trans (Nat.le_max_left m d.out) grows, fun c hc => ?_⟩
+    rcases List.mem_cons.mp hc with rfl | hc
+    · exact Nat.le_trans (Nat.le_max_right m c.out) grows
+    · exact covers c hc
+
 section Solve
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+
+/-- A variable or an atom: a term that only itself equals modulo B. -/
+private def simple : Term s → Bool
+  | .var _ | .atom _ => true
+  | _ => false
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+private theorem simple_alone {t u : Term s} (st : simple t = true) (h : EquivB t u) : u = t := by
+  have root := h.head_eq
+  cases t <;> cases u <;> simp_all [Model.eval, headModel, simple]
+
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.Atom] in
+private theorem flatten_classes (f : s.ACSym) (t : Term s) :
+    Cancellation.flatten f t = (ACRepresentation.flatten f t).map Cancellation.classOf := by
+  induction t with
+  | var | atom | free | comm => rfl
+  | ac g a b ia ib =>
+    by_cases same : f = g
+    · subst same
+      rw [Cancellation.flatten_ac, ia, ib]
+      simp [ACRepresentation.flatten]
+    · simp [Cancellation.flatten, ACRepresentation.flatten, same]
+
+open Classical in
+private theorem count_simple {t : Term s} (st : simple t = true) (l : List (Term s)) :
+    l.count t = (l.map Cancellation.classOf).count (Cancellation.classOf t) := by
+  induction l with
+  | nil => rfl
+  | cons x l ih =>
+    have same : (x = t) ↔ (Cancellation.classOf x = Cancellation.classOf t) :=
+      ⟨fun e => e ▸ rfl, fun e => simple_alone st (EquivB.symm (Quotient.exact e))⟩
+    simp only [List.map_cons, List.count_cons, ih, beq_iff_eq, same]
+
+/-- A product of variables and atoms equals a term modulo B exactly when the
+term has the same operands in some order. -/
+private theorem simple_product (f : s.ACSym) (a b : Term s)
+    (plain : ∀ x ∈ ACRepresentation.flatten f a, simple x = true) :
+    (ACRepresentation.flatten f a).Perm (ACRepresentation.flatten f b) ↔ EquivB a b := by
+  constructor
+  · intro perm
+    obtain ⟨u, hu, eu⟩ := ACRepresentation.flatten_correct f a
+    obtain ⟨w, hw, ew⟩ := ACRepresentation.flatten_correct f b
+    exact eu.symm.trans ((ACRepresentation.decode_perm f perm u w hu hw).trans ew)
+  · intro eq
+    have classes : ((ACRepresentation.flatten f a).map Cancellation.classOf).Perm
+        ((ACRepresentation.flatten f b).map Cancellation.classOf) := by
+      rw [← flatten_classes, ← flatten_classes]
+      exact Cancellation.flatten_equiv f eq
+    apply List.perm_iff_count.mpr
+    intro t
+    by_cases st : simple t = true
+    · classical
+      have left := count_simple st (ACRepresentation.flatten f a)
+      have right := count_simple st (ACRepresentation.flatten f b)
+      have same := classes.count_eq (Cancellation.classOf t)
+      exact left.trans (same.trans right.symm)
+    · have outA : t ∉ ACRepresentation.flatten f a := fun h => st (plain t h)
+      have outB : t ∉ ACRepresentation.flatten f b := by
+        intro h
+        obtain ⟨x, hx, ex⟩ := List.mem_map.mp
+          (classes.mem_iff.mpr (List.mem_map_of_mem (f := Cancellation.classOf) h))
+        have alone := simple_alone (plain x hx) (Quotient.exact ex)
+        exact st (alone ▸ plain x hx)
+      rw [List.count_eq_zero.mpr outA, List.count_eq_zero.mpr outB]
+
+/-- Equality modulo B, answered at once for identical terms, and by comparing
+the operands for a product of variables and atoms. The constructor installed
+for a slot is syntactically the slot's value, so only competing definitions
+reach a comparison of bags. -/
+private def agree (a b : Term s) : Bool :=
+  decide (a = b) ||
+    match a with
+    | .ac f _ _ =>
+      let operands := ACRepresentation.flatten f a
+      if operands.all simple then operands.isPerm (ACRepresentation.flatten f b)
+      else ReferenceMatching.equal a b
+    | _ => ReferenceMatching.equal a b
+
+private theorem agree_iff (a b : Term s) : agree a b = true ↔ EquivB a b := by
+  unfold agree
+  rw [Bool.or_eq_true]
+  constructor
+  · rintro (same | rest)
+    · exact of_decide_eq_true same ▸ .refl _
+    · split at rest
+      · next f x y =>
+        dsimp only at rest
+        split at rest
+        · next plain =>
+          exact (simple_product f _ b (List.all_eq_true.mp plain)).mp (List.isPerm_iff.mp rest)
+        · exact (ReferenceMatching.equal_iff ..).mp rest
+      · exact (ReferenceMatching.equal_iff ..).mp rest
+  · intro eq
+    right
+    split
+    · next f x y =>
+      dsimp only
+      split
+      · next plain =>
+        exact List.isPerm_iff.mpr ((simple_product f _ b (List.all_eq_true.mp plain)).mpr eq)
+      · exact (ReferenceMatching.equal_iff ..).mpr eq
+    · exact (ReferenceMatching.equal_iff ..).mpr eq
 
 /-- A completed result is a mathematically complete raw family. If the
 schematic valuation needs further unification among constructor definitions,
 leave the query open for component solving. -/
-def reconstruct? (p : Problem s) : Option (List (UnifierSorts.Template s)) :=
-  let q := purify p
+def reconstructOf (q : System s) : Option (List (UnifierSorts.Template s)) :=
   match (reconstruct q.constraints (fun i => .var ⟨i,.msg⟩)).val with
   | none => some []
   | some row =>
-    if q.constraints.all (fun c => ReferenceMatching.equal (row c.out) (c.term row))
+    if q.constraints.all (fun c => agree (row c.out) (c.term row))
     then some [project q row] else none
+
+/-- `reconstructOf` with the valuation kept in a table of the slots. -/
+private def reconstructOfTabled (q : System s) : Option (List (UnifierSorts.Template s)) :=
+  let size := q.constraints.foldl (fun m c => max m c.out) 0 + 1
+  match reconstructTable q.constraints.length q.constraints
+      (Array.ofFn (n := size) fun i => .var ⟨i.val,.msg⟩) with
+  | none => some []
+  | some table =>
+    let row := view table
+    if q.constraints.all (fun c => agree (row c.out) (c.term row))
+    then some [project q row] else none
+
+@[csimp] private theorem reconstructOf_eq_tabled : @reconstructOf = @reconstructOfTabled := by
+  funext s _ _ _ _ q
+  have start (n : Nat) : view (Array.ofFn (n := n) fun i => (.var ⟨i.val,.msg⟩ : Term s)) =
+      fun i => .var ⟨i,.msg⟩ := by
+    funext i
+    unfold view
+    split
+    · simp
+    · rfl
+  have same := reconstructTable_eq q.constraints.length q.constraints
+    (Array.ofFn (n := q.constraints.foldl (fun m c => max m c.out) 0 + 1)
+      fun i => (.var ⟨i.val,.msg⟩ : Term s)) (Nat.le_refl _) (fun c hc => by
+      have := (out_le_fold q.constraints 0).2 c hc
+      simp only [Array.size_ofFn]
+      omega)
+  rw [start] at same
+  unfold reconstructOf reconstructOfTabled
+  dsimp only
+  rw [← same]
+  cases reconstructTable q.constraints.length q.constraints
+      (Array.ofFn (n := q.constraints.foldl (fun m c => max m c.out) 0 + 1)
+        fun i => (.var ⟨i.val,.msg⟩ : Term s)) <;> rfl
+
+def reconstruct? (p : Problem s) : Option (List (UnifierSorts.Template s)) :=
+  reconstructOf (purify p)
 
 theorem reconstruct_correct {p : Problem s} {rows} (result : reconstruct? p = some rows) :
     UnifierSorts.CompleteTemplates p rows := by
@@ -386,10 +998,10 @@ theorem reconstruct_correct {p : Problem s} {rows} (result : reconstruct? p = so
     let μ := fun (w : Variable) => V w.id
     obtain ⟨row,hr,hrow⟩ := r.property.covers V μ hV (fun i => .refl _)
     exact ⟨row,hr,μ,fun v hv => (agree v hv).trans (hrow _)⟩
-  unfold reconstruct? at result
+  unfold reconstruct? reconstructOf at result
   change (match r.val with
     | none => some []
-    | some row => if q.constraints.all (fun c => ReferenceMatching.equal (row c.out) (c.term row))
+    | some row => if q.constraints.all (fun c => agree (row c.out) (c.term row))
       then some [project q row] else none) = some rows at result
   cases hr : r.val with
   | none =>
@@ -404,7 +1016,7 @@ theorem reconstruct_correct {p : Problem s} {rows} (result : reconstruct? p = so
     next ok =>
       cases result
       have model : q.Model row := fun c hc =>
-        (ReferenceMatching.equal_iff ..).mp (List.all_eq_true.mp ok c hc)
+        (agree_iff ..).mp (List.all_eq_true.mp ok c hc)
       refine ⟨?_,?_⟩
       · intro θ hθ
         obtain rfl := List.mem_singleton.mp hθ
@@ -426,19 +1038,26 @@ theorem reconstructs_agreeing (p : Problem s)
   change (match r.val with
     | none => some []
     | some row =>
-      if q.constraints.all (fun c => ReferenceMatching.equal (row c.out) (c.term row)) then
+      if q.constraints.all (fun c => agree (row c.out) (c.term row)) then
         some [project q row]
       else none).isSome = true
   cases hr : r.val with
   | none => rfl
   | some row =>
-    have ok := List.all_eq_true.mpr (fun c hc => (ReferenceMatching.equal_iff ..).mpr
+    have ok := List.all_eq_true.mpr (fun c hc => (agree_iff ..).mpr
       (r.property.solves row hr h c hc))
     simp [ok]
 
 theorem reconstructs_singleDefinition (p : Problem s)
     (h : SingleDefinition (purify p).constraints) : (reconstruct? p).isSome :=
   reconstructs_agreeing p (fun c hc d hd eq _ => (h c hc d hd eq) ▸ EquivB.refl _)
+
+/-- The empty problem has one reconstructed template. -/
+theorem reconstruct_empty : ∃ x, reconstruct? (s := s) [] = some [x] := by
+  have empty : (purify (s := s) []).constraints = [] := by simp [purify, inventory]
+  unfold reconstruct? reconstructOf
+  rw [empty, reconstruct_nil]
+  exact ⟨_, rfl⟩
 
 end Solve
 

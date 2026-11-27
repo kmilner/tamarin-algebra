@@ -195,6 +195,31 @@ private theorem row_sources {sig : Signature} [DecidableEq sig.ACSym] {n : Nat}
     · obtain ⟨e,member,rep⟩ := ih row rest
       exact ⟨e,List.mem_cons_of_mem _ member,rep⟩
 
+/-- The occurrence rows of a batch of operand equations. -/
+def incidenceRows {n} (batch : List (OperandBatch.Row n)) : List (Row n) :=
+  (batch.map asRow).map ACLinearConsequence.incidence
+
+/-- Two operands of a selection whose coordinates receive the same label are
+equal under every solution of the problem. -/
+theorem forced_of_labels {sig : Signature} [DecidableEq sig.ACSym] (f : sig.ACSym) {n : Nat}
+    (term : Fin n → Term sig) (batch : List (OperandBatch.Row n)) (selected p : Problem sig)
+    (layout : OperandBatch.Represents f term batch selected) (part : selected ⊆ p)
+    (out : Vector Nat n) (returned : ForcedCoordinates.run (incidenceRows batch) = some out)
+    (i j : Fin n) (usedI : i ∈ OperandBatch.used batch) (usedJ : j ∈ OperandBatch.used batch)
+    (same : out[i] = out[j]) : ACForcedEquations.Forced p [⟨term i,term j⟩] := by
+  apply ACForcedEquations.forced_pair_of_holds f term p (batch.map asRow)
+    (fun r hr => by
+      obtain ⟨e,he,rep⟩ := row_sources layout r hr
+      exact ⟨e,part he,rep⟩) i j
+  · intro k member
+    have used : k ∈ OperandBatch.used batch := by
+      rcases List.mem_cons.mp member with rfl|rest
+      · exact usedI
+      · obtain rfl := List.mem_singleton.mp rest; exact usedJ
+    obtain ⟨pair,hp,hk⟩ := List.mem_flatMap.mp used
+    exact ⟨asRow pair,List.mem_map_of_mem hp,hk⟩
+  · exact ForcedCoordinates.run_correct.sound _ out returned i j same
+
 /-- Equal labels permit retaining an equality between the actual caller
 operands. Both columns must be present in the encoded selection; unselected
 equations and variables of the original problem remain in scope. -/

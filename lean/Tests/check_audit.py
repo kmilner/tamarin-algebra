@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Negative integration checks for the actual root-module build audit.
+"""Negative integration checks for the root-module build audit and the standalone export audit.
 
 Each probe elaborates a temporary copy of TamarinCI.lean with one additional
 declaration before its audit. Production files are never modified. The
@@ -7,6 +7,7 @@ implemented_by probe has a kernel proof of logical correctness, so rejecting
 it specifically tests the gap between logical and executable definitions.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import os
 import re
@@ -16,93 +17,24 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "TamarinCI.lean").read_text()
-def obligation(name: str) -> str:
-    """Copy one CI theorem without accidentally importing intervening gates."""
-    start = SOURCE.index(f"theorem {name}")
-    return SOURCE[start:SOURCE.index("\n\n", start) + 1]
+PROPOSERS = (ROOT / "TamarinProposers.lean").read_text()
 
 
-# Assemble exports and their proof obligations in one temporary module, so
-# mutations check the current source rather than an old imported .olean.
+# Assemble the contract exports and their contract statements in one temporary
+# module, so mutations check the current source rather than an old imported
+# .olean. The module holds the text of TamarinRuntime.lean, which defines the
+# exports, followed by every contract theorem of the proof root. It imports
+# what the proof root imports except the umbrella module, which imports the
+# compiled runtime.
 RUNTIME = (ROOT / "TamarinRuntime.lean").read_text()
-PROOFS = (ROOT / "Tamarin/Executable.lean").read_text()
 imports = list(dict.fromkeys(
-    line for line in (RUNTIME + PROOFS).splitlines()
-    if line.startswith("import ") and line != "import TamarinRuntime"
+    line for line in (RUNTIME + SOURCE).splitlines()
+    if line.startswith("import ") and line not in ("import Tamarin", "import Lean")
 ))
+CONTRACT = SOURCE[SOURCE.index("\nnamespace Tamarin\n"):SOURCE.index("\nend Tamarin\n") + len("\nend Tamarin\n")]
 EXECUTABLE = "\n".join(imports) + "\n" + "\n".join(
-    line for line in (RUNTIME + "\n" + PROOFS).splitlines()
-    if not line.startswith("import ")
-)
-# Assemble the pairing candidate proof and fixed export obligation without
-# importing the compiled wrappers: mutations must test these exact definitions.
-PAIRING_PROOFS = (ROOT / "Tamarin/PairingCandidateProofs.lean").read_text()
-EXECUTABLE = "import Tamarin.PairingContract\n" + EXECUTABLE + "\n" + "\n".join(
-    line for line in PAIRING_PROOFS.splitlines() if not line.startswith("import ")
-) + """
-theorem exportedPairing_correct : Tamarin.PairingBackend.Correct
-    { variants := Tamarin.Executable.pairingVariants,
-      project := Tamarin.Executable.pairingProject } :=
-  Tamarin.PairingCandidateProofs.correct
-theorem exportedPairing_sharedCorrect : Tamarin.PairingBackend.SharedCorrect
-    { variants := Tamarin.Executable.pairingVariants,
-      project := Tamarin.Executable.pairingProject } :=
-  exportedPairing_correct.shared
-"""
-REFLEXIVE_PROOFS = (ROOT / "Tamarin/ReflexiveCandidateProofs.lean").read_text()
-EXECUTABLE = "import Tamarin.Reflexive\n" + EXECUTABLE + "\n" + "\n".join(
-    line for line in REFLEXIVE_PROOFS.splitlines() if not line.startswith("import ")
-) + """
-theorem exportedReflexive_correct : Tamarin.ReflexiveBackend.Correct
-    { solve := Tamarin.Executable.reflexiveUnify } :=
-  Tamarin.ReflexiveCandidateProofs.correct
-"""
-MATCH_PROOFS = (ROOT / "Tamarin/FlatMatchCandidateProofs.lean").read_text()
-EXECUTABLE = "import Tamarin.FlatMatchContract\n" + EXECUTABLE + "\n" + "\n".join(
-    line for line in MATCH_PROOFS.splitlines() if not line.startswith("import ")
-)
-offset_obligation = SOURCE[SOURCE.index("theorem exportedSharedOffset_correct"):
-                          SOURCE.index("theorem exportedSharedOffset_semantic")]
-EXECUTABLE = ("import Tamarin.SharedOffsetCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + offset_obligation + "end Tamarin\n")
-factor_start = SOURCE.index("theorem exportedACFactorExclusion_correct")
-factor_obligation = SOURCE[factor_start:SOURCE.index("\n\n", factor_start) + 1]
-EXECUTABLE = ("import Tamarin.ACFactorExclusion\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + factor_obligation + "end Tamarin\n")
-root_start = SOURCE.index("theorem exportedRootExclusion_correct")
-root_obligation = SOURCE[root_start:SOURCE.index("\n\n", root_start) + 1]
-EXECUTABLE = ("import Tamarin.RootExclusion\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + root_obligation + "end Tamarin\n")
-constructor_obligation = SOURCE[SOURCE.index("theorem exportedConstructorVariant_correct"):
-                               SOURCE.index("theorem exportedConstructorVariant_semantic")]
-EXECUTABLE = ("import Tamarin.ConstructorVariantCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + constructor_obligation + "end Tamarin\n")
-reduction_obligation = SOURCE[SOURCE.index("theorem exportedRuleReduction_correct"):
-                             SOURCE.index("theorem exportedRuleReduction_semantic")]
-EXECUTABLE = ("import Tamarin.RuleReductionCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + reduction_obligation + "end Tamarin\n")
-ground_start = SOURCE.index("theorem exportedGroundDecision_correct")
-ground_decision = SOURCE[ground_start:SOURCE.index("\n\n", ground_start) + 1]
-EXECUTABLE = ("import Tamarin.GroundVariantCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + ground_decision + "end Tamarin\n")
-cancel_common_start = SOURCE.index("theorem exportedCancelCommon_correct")
-cancel_common = SOURCE[cancel_common_start:SOURCE.index("\n\n", cancel_common_start) + 1]
-EXECUTABLE = ("import Tamarin.CancelCommonCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + cancel_common + "end Tamarin\n")
-rigid_start = SOURCE.index("theorem exportedRigidAllocation_correct")
-rigid_obligation = SOURCE[rigid_start:SOURCE.index("\n\n", rigid_start) + 1]
-EXECUTABLE = ("import Tamarin.RigidAllocationCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + rigid_obligation + "end Tamarin\n")
-whole_obligation = obligation("exportedFactorRefutes_correct") + obligation("exportedWholeUnify_correct") + obligation("exportedWholeUnify_mixedRequired")
-EXECUTABLE = ("import Tamarin.MixedSizeWhole\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + whole_obligation + "end Tamarin\n")
-xor_start = SOURCE.index("theorem exportedXorBranches_correct")
-xor_obligation = SOURCE[xor_start:SOURCE.index("\n\n", xor_start) + 1]
-EXECUTABLE = ("import Tamarin.XorCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + xor_obligation + "end Tamarin\n")
-comm_obligation = obligation("exportedCommOrientations_correct") + obligation("exportedCommOrientations_bound")
-EXECUTABLE = ("import Tamarin.CommutativeCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + comm_obligation + "end Tamarin\n")
+    line for line in RUNTIME.splitlines() if not line.startswith("import ")
+) + "\n" + CONTRACT
 MARKER = "open Lean in\nrun_cmd do"
 PROBES = [
     (
@@ -131,6 +63,32 @@ theorem verified_correct (n : Nat) : verified n = n := rfl
 end Tamarin.AuditProbe
 """,
         "unchecked implemented_by replacement",
+    ),
+    # Use real inductives and the compiler's own declaration names. Either
+    # half can lie even when the other half has the expected implementation.
+    (
+        "forged_logical_constructor_index",
+        """
+namespace Tamarin.AuditProbe
+set_option genCtorIdx false in
+inductive Tag | left | right
+unsafe def Tag.ctorIdx._impl (x : Tag) : Nat := getObjTagNat x
+@[implemented_by Tag.ctorIdx._impl] def Tag.ctorIdx (_ : Tag) : Nat := 0
+end Tamarin.AuditProbe
+""",
+        "has unchecked implemented_by replacement",
+    ),
+    (
+        "forged_runtime_constructor_index",
+        """
+namespace Tamarin.AuditProbe
+set_option genCtorIdx false in
+inductive Tag | left | right
+unsafe def Tag.ctorIdx._impl (_ : Tag) : Nat := 0
+@[implemented_by Tag.ctorIdx._impl] def Tag.ctorIdx (x : Tag) : Nat := Tag.casesOn x 0 1
+end Tamarin.AuditProbe
+""",
+        "has unchecked implemented_by replacement",
     ),
     (
         "extern",
@@ -185,746 +143,443 @@ end OtherNamespace
         "depends on unapproved axiom",
     ),
     (
+        "contract_theorem_about_proposer",
+        "theorem Tamarin.AuditProbe.aboutProposer :\n"
+        "    Tamarin.Executable.xorOdd 1 = Tamarin.Executable.xorOdd 1 := rfl\n",
+        "mentions the proposer export",
+    ),
+    (
         "private_axiom",
         "namespace OtherNamespace\nprivate axiom assumed : False\nend OtherNamespace\n",
         "depends on unapproved axiom",
     ),
 ]
 
-EXPORT_MUTATIONS = [
-    ("factor_clash_without_evidence", "  FactorRefutation.run ds ns es", "  true",
-     "theorem exportedFactorRefutes_correct"),
-    (
-        "empty_products_treated_as_equal",
-        "  RuntimeCandidate.backend.equal lhs rhs",
-        "  if lhs.isEmpty && rhs.isEmpty then 2 else RuntimeCandidate.backend.equal lhs rhs",
-        "theorem flatAC_empty_inputs",
-    ),
-    (
-        "ground_false_unsat",
-        "def flatACEqual (lhs rhs : Array UInt64) : UInt8 :=\n"
-        "  RuntimeCandidate.backend.equal lhs rhs",
-        "def flatACEqual (lhs rhs : Array UInt64) : UInt8 := 1",
-        "theorem flatACEqual_correct",
-    ),
-    (
-        "ground_always_unsupported",
-        "def flatACEqual (lhs rhs : Array UInt64) : UInt8 :=\n"
-        "  RuntimeCandidate.backend.equal lhs rhs",
-        "def flatACEqual (lhs rhs : Array UInt64) : UInt8 := 0",
-        "theorem flatACEqual_completes",
-    ),
-    (
-        "residual_false_unsat",
-        "def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=\n"
-        "  RuntimeCandidate.backend.residual tail rhs",
-        "def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=\n  #[1]",
-        "theorem flatACResidual_empty_complete",
-    ),
-    (
-        "residual_always_unsupported",
-        "def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=\n"
-        "  RuntimeCandidate.backend.residual tail rhs",
-        "def flatACResidual (tail rhs : Array UInt64) : Array UInt64 :=\n  #[0]",
-        "theorem flatACResidual_completes",
-    ),
-]
-
-
-EXPORT_MUTATIONS.extend([
-    (
-        "pairing_drops_narrowing_branch",
-        "def pairingVariants (hasProjection : Bool) : UInt8 :=\n"
-        "  RuntimeCandidate.pairing.variants hasProjection",
-        "def pairingVariants (hasProjection : Bool) : UInt8 := 1",
-        "theorem exportedPairing_correct",
-    ),
-    (
-        "pairing_always_unsupported",
-        "def pairingVariants (hasProjection : Bool) : UInt8 :=\n"
-        "  RuntimeCandidate.pairing.variants hasProjection",
-        "def pairingVariants (hasProjection : Bool) : UInt8 := 0",
-        "theorem exportedPairing_correct",
-    ),
-    (
-        "pairing_wrong_projection",
-        "def pairingProject (first : Bool) : UInt8 :=\n"
-        "  RuntimeCandidate.pairing.project first",
-        "def pairingProject (first : Bool) : UInt8 := 1",
-        "theorem exportedPairing_correct",
-    ),
-])
-
-EXPORT_MUTATIONS.extend([
-    (
-        "reflexive_false_unsat",
-        "def reflexiveUnify (recognized : Bool) : UInt8 :=\n"
-        "  RuntimeCandidate.reflexive.solve recognized",
-        "def reflexiveUnify (recognized : Bool) : UInt8 := 1",
-        "theorem exportedReflexive_correct",
-    ),
-    (
-        "reflexive_always_unsupported",
-        "def reflexiveUnify (recognized : Bool) : UInt8 :=\n"
-        "  RuntimeCandidate.reflexive.solve recognized",
-        "def reflexiveUnify (recognized : Bool) : UInt8 := 0",
-        "theorem exportedReflexive_correct",
-    ),
-])
-
-
-MATCH_RUN = (
-    "  (RuntimeCandidate.flatMatcher.run n.toNat (occurrences.toList.map UInt64.toNat)\n"
-    "    tail.toList rhs.toList)"
-)
-EXPORT_MUTATIONS.extend([
-    ("matching_drops_all_branches", MATCH_RUN, "  ([] : List (List (List UInt64)))",
-     "theorem exported (n : UInt64)"),
-    ("matching_returns_empty_binding", MATCH_RUN, "  ([[[]]] : List (List (List UInt64)))",
-     "theorem exported (n : UInt64)"),
-    ("matching_keeps_only_first_branch", MATCH_RUN, "  (" + MATCH_RUN.strip() + ".take 1)",
-     "theorem exported (n : UInt64)"),
-])
-
-OFFSET_RUN = "  RuntimeCandidate.sharedOffset a b"
-EXPORT_MUTATIONS.extend([
-    ("offset_loses_ground_branch", OFFSET_RUN, "  #[#[#[b, 0], #[a, 0]]]",
-     "theorem exportedSharedOffset_correct"),
-    ("offset_loses_shared_branch", OFFSET_RUN, "  #[#[#[b], #[a]]]",
-     "theorem exportedSharedOffset_correct"),
-    ("offset_splits_shared_witness", OFFSET_RUN, "  #[#[#[b], #[a]], #[#[b, 0], #[a, 1]]]",
-     "theorem exportedSharedOffset_correct"),
-])
-
-FACTOR_RUN = "  RuntimeCandidate.excludeACFactors rows heads"
-EXPORT_MUTATIONS.extend([
-    ("ac_exclusion_skips_rule", FACTOR_RUN,
-     "  RuntimeCandidate.excludeACFactors (rows.extract 0 1) heads",
-     "theorem exportedACFactorExclusion_correct"),
-    ("ac_exclusion_ignores_last_factor", FACTOR_RUN,
-     "  RuntimeCandidate.excludeACFactors rows (heads.extract 0 1)",
-     "theorem exportedACFactorExclusion_correct"),
-    ("ac_exclusion_uses_wildcard_as_missing_head", FACTOR_RUN,
-     "  rows.all fun row => row.any fun k => !heads.contains k",
-     "theorem exportedACFactorExclusion_correct"),
-    ("ac_exclusion_always_defers", FACTOR_RUN, "  false",
-     "theorem exportedACFactorExclusion_correct"),
-])
-
-ROOT_RUN = "  RuntimeCandidate.excludeRoot rows args"
-EXPORT_MUTATIONS.extend([
-    ("root_exclusion_skips_overlapping_rules", ROOT_RUN,
-     "  RuntimeCandidate.excludeRoot (rows.extract 0 1) args",
-     "theorem exportedRootExclusion_correct"),
-    ("root_exclusion_always_defers", ROOT_RUN, "  false",
-     "theorem exportedRootExclusion_correct"),
-])
-
-CONSTRUCTOR_RUN = "  RuntimeCandidate.constructorVariant roots used"
-EXPORT_MUTATIONS.extend([
-    ("constructors_ignore_rule_roots", CONSTRUCTOR_RUN, "  true",
-     "theorem exportedConstructorVariant_correct"),
-    ("constructors_always_decline", CONSTRUCTOR_RUN, "  false",
-     "theorem exportedConstructorVariant_correct"),
-    ("constructors_check_only_first_operator", CONSTRUCTOR_RUN,
-     "  RuntimeCandidate.constructorVariant roots (used.extract 0 1)",
-     "theorem exportedConstructorVariant_correct"),
-])
-
-EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedCertifyTable_correct") + "end Tamarin\n"
-EXPORT_MUTATIONS.extend([
-    ("certifies_conflicting_tables", "CertifiedTableWire.run ds ns rules fuel", "true",
-     "theorem exportedCertifyTable_correct"),
-    ("certifies_missing_rules", "CertifiedTableWire.run ds ns rules fuel", "CertifiedTableWire.run ds ns #[] fuel",
-     "theorem exportedCertifyTable_correct"),
-    ("refuses_all_certificates", "CertifiedTableWire.run ds ns rules fuel", "false",
-     "theorem exportedCertifyTable_correct"),
-])
-REDUCTION_RUN = "  RuntimeCandidate.reduceRuleSlot slot keys subjects"
-EXPORT_MUTATIONS.extend([
-    ("reduction_ignores_repeated_slot", REDUCTION_RUN, "  subjects.extract 0 1",
-     "theorem exportedRuleReduction_correct"),
-    ("reduction_never_returns_result", REDUCTION_RUN, "  #[]",
-     "theorem exportedRuleReduction_correct"),
-])
-
-
-GROUND_VARIANT_RUN = "  RuntimeCandidate.groundVariant holes anchors deps rigid"
-EXPORT_MUTATIONS.extend([
-    ("ground_variant_forgets_captured_inputs", GROUND_VARIANT_RUN,
-     "  RuntimeCandidate.groundVariant holes anchors #[] rigid", "theorem exportedGroundDecision_correct"),
-    ("ground_variant_merges_anchor_slots", GROUND_VARIANT_RUN,
-     "  RuntimeCandidate.groundVariant holes #[] deps rigid", "theorem exportedGroundDecision_correct"),
-    ("ground_variant_accepts_nonrigid", GROUND_VARIANT_RUN,
-     "  RuntimeCandidate.groundVariant holes anchors deps true", "theorem exportedGroundDecision_correct"),
-    ("ground_variant_never_completes", GROUND_VARIANT_RUN,
-     "  0", "theorem exportedGroundDecision_correct"),
-])
-
-
-CANCEL_COMMON_RUN = "  RuntimeCandidate.cancelCommon lhs rhs"
-EXPORT_MUTATIONS.extend([
-    ("cancel_common_leaves_overlap", CANCEL_COMMON_RUN, "  #[lhs, rhs]",
-     "theorem exportedCancelCommon_correct"),
-    ("cancel_common_drops_multiplicity", CANCEL_COMMON_RUN,
-     "  RuntimeCandidate.cancelCommon lhs.toList.eraseDups.toArray rhs.toList.eraseDups.toArray",
-     "theorem exportedCancelCommon_correct"),
-    ("cancel_common_swaps_sides", CANCEL_COMMON_RUN, "  RuntimeCandidate.cancelCommon rhs lhs",
-     "theorem exportedCancelCommon_correct"),
-])
-
-
-rigid_obligation = obligation("exportedResidualRigid_correct") + obligation("exportedResidualRigid_rejectsMalformed")
-EXECUTABLE = ("import Tamarin.ResidualRigid\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + rigid_obligation + "end Tamarin\n")
-RIGID_STEP = "  ResidualRigid.run lk lh ls rk rh rs"
-EXPORT_MUTATIONS.extend([
-    ("rigid_ignores_symbol", RIGID_STEP, RIGID_STEP.replace("rk rh rs", "rk lh rs"),
-     "theorem exportedResidualRigid_correct"),
-    ("rigid_ignores_children", RIGID_STEP, RIGID_STEP.replace("rh rs", "rh ls"),
-     "theorem exportedResidualRigid_correct"),
-    ("rigid_collapses_ac_multiplicity", RIGID_STEP,
-     "  ResidualRigid.run lk lh ls.toList.eraseDups.toArray rk rh rs.toList.eraseDups.toArray",
-     "theorem exportedResidualRigid_correct"),
-    ("rigid_comm_is_positional", RIGID_STEP,
-     "  if lk == 3 && rk == 3 then 5 else ResidualRigid.run lk lh ls rk rh rs",
-     "theorem exportedResidualRigid_correct"),
-    ("rigid_closes_unresolved_ac", RIGID_STEP,
-     "  if lk == 4 && rk == 4 then 1 else ResidualRigid.run lk lh ls rk rh rs",
-     "theorem exportedResidualRigid_correct"),
-    ("rigid_simulates_clash_on_bad_input", RIGID_STEP,
-     "  let action := ResidualRigid.run lk lh ls rk rh rs\n  if action == 255 then 1 else action",
-     "theorem exportedResidualRigid_rejectsMalformed"),
-])
-
-variable_start = SOURCE.index("theorem exportedResidualVariable_correct")
-variable_end = SOURCE.index("theorem exportedResidualVariable_rejectsMalformed")
-variable_obligation = SOURCE[variable_start:SOURCE.index("\n\n", variable_end) + 1]
-EXECUTABLE = ("import Tamarin.ResidualVariable\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + variable_obligation + "end Tamarin\n")
-VARIABLE_STEP = "  ResidualVariable.run right key keySort kind valueSort ids"
-EXPORT_MUTATIONS.extend([
-    ("variable_malformed_becomes_clash", VARIABLE_STEP,
-     "  let action := ResidualVariable.run right key keySort kind valueSort ids\n  if action == 255 then 1 else action",
-     "theorem exportedResidualVariable_rejectsMalformed"),
-    ("variable_ignores_proper_occurrences", VARIABLE_STEP, VARIABLE_STEP.replace("valueSort ids",
-     "valueSort (if kind == 0 then ids else #[])"), "theorem exportedResidualVariable_correct"),
-    ("variable_confuses_binding_directions", VARIABLE_STEP, VARIABLE_STEP.replace("run right", "run false"),
-     "theorem exportedResidualVariable_correct"),
-    ("variable_ignores_required_sort", VARIABLE_STEP, VARIABLE_STEP.replace("key keySort", "key 2"),
-     "theorem exportedResidualVariable_correct"),
-])
-
-BAG_DECISION = "  Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet"
-EXECUTABLE = ("import Tamarin.ACMatchPacket\nimport Tamarin.ACBagSearch\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedACBagMatch_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("bag_match_ignores_shared_rows", BAG_DECISION, BAG_DECISION.replace("run packet", "run (packet.extract 0 2)"),
-     "theorem exportedACBagMatch_correct"),
-    ("bag_match_always_defers", BAG_DECISION, "  0", "theorem exportedACBagMatch_correct"),
-    ("bag_match_confuses_failure_with_success", BAG_DECISION,
-     BAG_DECISION + " |> fun tag => if tag == 1 then 2 else tag", "theorem exportedACBagMatch_correct"),
-])
-
-BAG_ANSWERS = "  Matching.ACMatchPacket.runAnswersWith Matching.ACBagAnswers.run packet"
-EXECUTABLE = ("import Tamarin.ACMatchAnswerPacket\nimport Tamarin.ACBagAnswers\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedACBagAnswers_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("bag_answers_drop_alternatives", BAG_ANSWERS, BAG_ANSWERS + " |>.map (fun a => a.extract 0 1)",
-     "theorem exportedACBagAnswers_correct"),
-    ("bag_answers_reverse_variable_slots", BAG_ANSWERS, BAG_ANSWERS + " |>.map (fun a => a.map Array.reverse)",
-     "theorem exportedACBagAnswers_correct"),
-    ("bag_answers_always_defer", BAG_ANSWERS, "  none", "theorem exportedACBagAnswers_correct"),
-])
-
-BAG_PAGE = "  Matching.ACPagePacket.runWith Matching.ACBagPages.run packet start requested"
-EXECUTABLE = ("import Tamarin.ACPagePacket\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedACBagPage_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("bag_page_restarts_at_zero", BAG_PAGE, BAG_PAGE.replace("packet start requested", "packet #[] requested"),
-     "theorem exportedACBagPage_correct"),
-    ("bag_page_discards_header", BAG_PAGE, BAG_PAGE + " |>.map (fun p => p.extract 1 p.size)",
-     "theorem exportedACBagPage_correct"),
-    ("bag_page_always_defers", BAG_PAGE, "  none", "theorem exportedACBagPage_correct"),
-])
-
-BAG_TYPED = "  Matching.ACSortedBagPacket.runWith Matching.ACSortedBagSearch.run rows limits"
-EXECUTABLE = ("import Tamarin.ACSortedBagPacket\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedACBagTypedMatch_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("bag_typed_match_ignores_sorts", BAG_TYPED, BAG_TYPED.replace("rows limits", "rows #[]"),
-     "theorem exportedACBagTypedMatch_correct"),
-    ("bag_typed_match_drops_other_captures", BAG_TYPED, BAG_TYPED.replace("rows limits", "rows (limits.extract 0 1)"),
-     "theorem exportedACBagTypedMatch_correct"),
-    ("bag_typed_match_always_defers", BAG_TYPED, "  0", "theorem exportedACBagTypedMatch_correct"),
-])
-
-MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
-EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("linear_match_rejects_exact_capacity", MATCH_CAPACITY,
-     MATCH_CAPACITY.replace("subject < pattern", "subject ≤ pattern"), "theorem exportedLinearACMatch_correct"),
-    ("linear_match_accepts_short_subject", MATCH_CAPACITY,
-     MATCH_CAPACITY.replace("decide (subject < pattern)", "false"), "theorem exportedLinearACMatch_correct"),
-])
-
-FEASIBLE_RUN = "  ACFeasibility.run width symbol sort decls nodes roots"
-EXECUTABLE = ("import Tamarin.ACFeasibility\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedGraphACFeasible_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("feasibility_always_yes", FEASIBLE_RUN, "  2", "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_always_no", FEASIBLE_RUN, "  1", "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_always_defers", FEASIBLE_RUN, "  0", "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_refuses_wide_witnesses", FEASIBLE_RUN,
-     "  if width > 32 then 0 else ACFeasibility.run width symbol sort decls nodes roots",
-     "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_two_rows_still_capped_at_ninety", FEASIBLE_RUN,
-     "  if roots.size == 4 && width > 90 then 0 else ACFeasibility.run width symbol sort decls nodes roots",
-     "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_refuses_wide_dependent_rows", FEASIBLE_RUN,
-     "  if roots.size > 4 && width > 32 then 0 else ACFeasibility.run width symbol sort decls nodes roots",
-     "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_drops_negative_rank_four_fixture", FEASIBLE_RUN,
-     "  if width == 45 && roots.size == 8 then 0 else ACFeasibility.run width symbol sort decls nodes roots",
-     "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_drops_positive_rank_four_fixture", FEASIBLE_RUN,
-     "  if width == 47 && roots.size == 8 then 0 else ACFeasibility.run width symbol sort decls nodes roots",
-     "theorem exportedGraphACFeasible_correct"),
-    ("feasibility_ignores_conjunction", FEASIBLE_RUN,
-     "  ACFeasibility.run width symbol sort decls nodes (roots.extract 0 2)",
-     "theorem exportedGraphACFeasible_correct"),
-])
-
-MASKED_RUN = "  MaskedOperands.run width mask sides"
-EXECUTABLE = ("import Tamarin.MaskedOperandContract\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedMaskedOperand_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("masked_ignores_columns", MASKED_RUN, "  MaskedOperands.run width 0 sides", "theorem exportedMaskedOperand_correct"),
-    ("masked_drops_branches", MASKED_RUN, MASKED_RUN + " |>.map (fun arms => arms.extract 0 1)",
-     "theorem exportedMaskedOperand_correct"),
-    ("masked_always_defers", MASKED_RUN, "  none", "theorem exportedMaskedOperand_correct"),
-])
-
-graph_start = SOURCE.index("theorem exportedGraphHomogeneous_correct")
-graph_obligation = SOURCE[graph_start:SOURCE.index("\n\n", graph_start) + 1]
-EXECUTABLE = ("import Tamarin.GraphUnification\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + graph_obligation + "end Tamarin\n")
-GRAPH_RUN = "  GraphUnification.run width symbol sort decls nodes roots"
-EXPORT_MUTATIONS.extend([
-    ("graph_ignores_simultaneous_equations", GRAPH_RUN,
-     "  GraphUnification.run width symbol sort decls nodes (roots.extract 0 2)",
-     "theorem exportedGraphHomogeneous_correct"),
-    ("graph_loses_repeated_operands", GRAPH_RUN,
-     "  GraphUnification.run width symbol sort decls (nodes.map fun row => "
-     "if row[0]? == some 4 then row.extract 0 4 else row) roots",
-     "theorem exportedGraphHomogeneous_correct"),
-    ("graph_reinstates_32_column_limit", GRAPH_RUN, "  if width ≤ 32 then " + GRAPH_RUN.strip() + " else none",
-     "theorem exportedGraphHomogeneous_correct"),
-    ("graph_always_defers", GRAPH_RUN, "  none", "theorem exportedGraphHomogeneous_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.ACSpanWhole\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedVariantOverlap_correct") + obligation("exportedVariantOverlap_spanRequired") + "end Tamarin\n")
-OVERLAP_RUN = "  ACSpanOverlap.run decls nodes roots"
-EXPORT_MUTATIONS.extend([
-    ("overlap_assumes_equal_raw_variables", OVERLAP_RUN,
-     "  roots.size >= 2 && roots[roots.size - 2]? == roots[roots.size - 1]? || " + OVERLAP_RUN.strip(),
-     "theorem exportedVariantOverlap_correct"),
-    ("overlap_promotes_output_to_observation", OVERLAP_RUN,
-     "  VariantOverlapGraph.run decls nodes (roots ++ roots.extract (roots.size - 2) roots.size)",
-     "theorem exportedVariantOverlap_correct"),
-    ("overlap_ignores_ac_consequences", OVERLAP_RUN, "  VariantOverlapGraph.run decls nodes roots",
-     "theorem exportedVariantOverlap_spanRequired"),
-    ("overlap_never_agrees", OVERLAP_RUN, "  false", "theorem exportedVariantOverlap_correct"),
-])
-
-selection_start = SOURCE.index("theorem exportedOpenMatchSelect_correct")
-selection_contract = SOURCE[selection_start:SOURCE.index("\n\n", selection_start) + 1]
-EXECUTABLE = ("import Tamarin.OpenMatchSelect\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + selection_contract + "end Tamarin\n")
-SELECT = "  OpenMatchSelect.run rigid subject"
-EXECUTABLE = ("import Tamarin.CollectorMultiplicityMatching\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCollectorPossible_correct") + "end Tamarin\n")
-COLLECTOR_TEST = " := CollectorMultiplicity.run occ residual"
-EXPORT_MUTATIONS.extend([
-    ("collector_discards_valid_matches", COLLECTOR_TEST, " := false", "theorem exportedCollectorPossible_correct"),
-    ("collector_misses_required_clashes", COLLECTOR_TEST, " := true", "theorem exportedCollectorPossible_correct"),
-    ("open_match_reuses_an_occurrence", SELECT,
-     "  (OpenMatchSelect.run rigid subject).map (fun out => out.map (fun row => row.map fun _ => 0))",
-     "theorem exportedOpenMatchSelect_correct"),
-    ("open_match_drops_remainder", SELECT,
-     "  (OpenMatchSelect.run rigid subject).map (fun out => out.map (fun row => row.extract 0 rigid.toNat))",
-     "theorem exportedOpenMatchSelect_correct"),
-    ("open_match_keeps_one_assignment", SELECT,
-     "  (OpenMatchSelect.run rigid subject).map (fun out => out.extract 0 1)",
-     "theorem exportedOpenMatchSelect_correct"),
-    ("open_match_deferral_as_clash", SELECT, "  some #[]", "theorem exportedOpenMatchSelect_correct"),
-])
-
-pivot_start = SOURCE.index("theorem exportedACPivot_correct")
-pivot_contract = SOURCE[pivot_start:SOURCE.index("\n\n", pivot_start) + 1]
-EXECUTABLE = ("import Tamarin.ACPivotPacket\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + pivot_contract + "end Tamarin\n")
-PIVOT = " := ACPivotCandidate.run size"
-EXPORT_MUTATIONS.extend([
-    ("pivot_drops_shared_remainder", PIVOT,
-     " := (ACPivotCandidate.run size).map (fun rows => rows.eraseIdxIfInBounds 1)",
-     "theorem exportedACPivot_correct"),
-    ("pivot_ignores_an_occurrence", PIVOT,
-     " := ACPivotCandidate.run (size - 1)", "theorem exportedACPivot_correct"),
-])
-
-join_start = SOURCE.index("theorem exportedJoinSelection_correct")
-join_contract = SOURCE[join_start:SOURCE.index("\n\n", join_start) + 1]
-EXECUTABLE = ("import Tamarin.VariantJoinSelect\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + join_contract + "end Tamarin\n")
-JOIN = "  VariantJoinCandidate.run rows"
-EXPORT_MUTATIONS.extend([
-    ("join_keeps_reducible_rows", JOIN, "  some (rows.map fun _ => 1)", "theorem exportedJoinSelection_correct"),
-    ("join_truncates_unifiers", JOIN, "  VariantJoinCandidate.run (rows.extract 0 1)", "theorem exportedJoinSelection_correct"),
-    ("join_closes_unknown_rows", JOIN, "  some ((VariantJoinCandidate.run rows).getD #[])",
-     "theorem exportedJoinSelection_correct"),
-])
-
-peer_start = SOURCE.index("theorem exportedDHPeerImages_correct")
-peer_end = SOURCE.index("theorem exportedDHPeerImages_ordered", peer_start)
-peer_contract = SOURCE[peer_start:SOURCE.index("\n\n", peer_end) + 1]
-EXECUTABLE = ("import Tamarin.DHPeerPrograms\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + peer_contract + "end Tamarin\n")
-PEER = ":= DHPeerCandidate.images power"
-EXPORT_MUTATIONS.extend([
-    ("dh_peer_reverses_public_order", PEER,
-     ":= (DHPeerCandidate.images power).map Array.reverse", "theorem exportedDHPeerImages_ordered"),
-    ("dh_peer_drops_cancellation", PEER,
-     ":= (DHPeerCandidate.images power).map (fun rows => rows.extract 0 4)", "theorem exportedDHPeerImages_correct"),
-    ("dh_peer_uses_independent_exponent", PEER,
-     ":= (DHPeerCandidate.images power).map (fun rows => rows.map (fun row => row.map (fun k => if k == 1 then 4 else k)))",
-     "theorem exportedDHPeerImages_correct"),
-])
-
-exponent_start = SOURCE.index("theorem exportedDHExponentImages_correct")
-exponent_contract = SOURCE[exponent_start:SOURCE.index("\n\n", exponent_start) + 1]
-EXECUTABLE = ("import Tamarin.DHExponentPacket\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + exponent_contract + "end Tamarin\n")
-EXPONENT = ":= DHExponentCandidate.images u"
-EXPORT_MUTATIONS.extend([
-    ("dh_exponent_loses_unit", EXPONENT,
-     ":= (DHExponentCandidate.images u).filter (fun row => row != #[9])",
-     "theorem exportedDHExponentImages_correct"),
-    ("dh_exponent_does_not_share_factor", EXPONENT,
-     ":= (DHExponentCandidate.images u).map (fun row => row.map (fun x => if x == 1 then 4 else x))",
-     "theorem exportedDHExponentImages_correct"),
-])
-
-tower_start = SOURCE.index("theorem exportedDHTowerImages_correct")
-tower_contract = SOURCE[tower_start:SOURCE.index("\n\n", tower_start) + 1]
-EXECUTABLE = ("import Tamarin.DHTowerPacket\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + tower_contract + "end Tamarin\n")
-TOWER = ":= DHTowerCandidate.images width"
-EXPORT_MUTATIONS.extend([
-    ("dh_tower_appends_undecodable_row", TOWER,
-     ":= (DHTowerCandidate.images width).map (fun rows => rows.push #[7])",
-     "theorem exportedDHTowerImages_correct"),
-    ("dh_tower_loses_last_occurrence", TOWER, ":= DHTowerCandidate.images (width - 1)",
-     "theorem exportedDHTowerImages_correct"),
-    ("dh_tower_aliases_two_factors", TOWER,
-     ":= (DHTowerCandidate.images width).map (fun rows => rows.map (fun row => row.map (fun x => if x == 10 then 9 else x)))",
-     "theorem exportedDHTowerImages_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.ReductionGraph\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedReductionGraph_correct") + "end Tamarin\n")
-GRAPH = ":= ReductionGraph.run rows"
-EXPORT_MUTATIONS.extend([
-    ("reduction_graph_accepts_open_edge", GRAPH, ":= !rows.isEmpty",
-     "theorem exportedReductionGraph_correct"),
-    ("reduction_graph_hides_second_terminal", GRAPH, ":= ReductionGraph.run (rows.take 1)",
-     "theorem exportedReductionGraph_correct"),
-    ("reduction_graph_always_defers", GRAPH, ":= false",
-     "theorem exportedReductionGraph_correct"),
-])
-
-subgroup_start = SOURCE.index("theorem exportedACSubgroups_correct")
-subgroup_contract = SOURCE[subgroup_start:SOURCE.index("\n\n", subgroup_start) + 1]
-EXECUTABLE = ("import Tamarin.ACSubgroups\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + subgroup_contract + "end Tamarin\n")
-SUBGROUP = ":= ACSubgroups.run n"
-EXPORT_MUTATIONS.extend([
-    ("subgroups_only_check_full_product", SUBGROUP,
-     ":= some #[(List.range n.toNat |>.map Nat.toUInt64).toArray]", "theorem exportedACSubgroups_correct"),
-    ("subgroups_drop_one_operand", SUBGROUP,
-     ":= ACSubgroups.run (n - 1)", "theorem exportedACSubgroups_correct"),
-    ("subgroups_always_defer", SUBGROUP, ":= none", "theorem exportedACSubgroups_correct"),
-])
-
-sorted_match_start = SOURCE.index("theorem exportedSortedACMatch_correct")
-sorted_match_contract = SOURCE[sorted_match_start:SOURCE.index("\n\n", sorted_match_start) + 1]
-EXECUTABLE = ("import Tamarin.SortedMatch\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + sorted_match_contract + "end Tamarin\n")
-SORTED_MATCH = "  SortedMatch.runWith flatACMatch acSort varSort atomSort occ tail rhs"
-EXPORT_MUTATIONS.extend([
-    ("sorted_match_keeps_ill_sorted_rows", SORTED_MATCH,
-     "  some (flatACMatch varSort.size.toUInt64 occ tail rhs)", "theorem exportedSortedACMatch_correct"),
-    ("sorted_match_retags_singletons", SORTED_MATCH,
-     SORTED_MATCH.replace("varSort atomSort occ", "varSort (atomSort.map fun _ => acSort) occ"),
-     "theorem exportedSortedACMatch_correct"),
-    ("sorted_match_drops_repeats", SORTED_MATCH,
-     SORTED_MATCH.replace("occ tail", "occ.toList.eraseDups.toArray tail"), "theorem exportedSortedACMatch_correct"),
-    ("sorted_match_defers_all", SORTED_MATCH, "  none", "theorem exportedSortedACMatch_correct"),
-])
-
-operand_refine_start = SOURCE.index("theorem exportedOperandRefine_correct")
-operand_refine_contract = SOURCE[operand_refine_start:SOURCE.index("\n\n", operand_refine_start) + 1]
-EXECUTABLE = ("import Tamarin.OperandRefinement\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + operand_refine_contract + "end Tamarin\n")
-OPERAND_REFINE = ":= OperandRefinementCandidate.keep sides"
-EXPORT_MUTATIONS.extend([
-    ("operand_refinement_drops_equations", OPERAND_REFINE, ":= #[]",
-     "theorem exportedOperandRefine_correct"),
-    ("operand_refinement_returns_operand_ids", OPERAND_REFINE, ":= sides",
-     "theorem exportedOperandRefine_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.ForcedOperandClasses\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedForcedOperandClasses_correct") + "end Tamarin\n")
-FORCED_CLASSES = "  ForcedOperandClasses.run width sides"
-EXPORT_MUTATIONS.extend([
-    ("forced_classes_collapse_unrelated", FORCED_CLASSES, "  some (Array.replicate width.toNat 0)",
-     "theorem exportedForcedOperandClasses_correct"),
-    ("forced_classes_always_defer", FORCED_CLASSES, "  none",
-     "theorem exportedForcedOperandClasses_correct"),
-])
-
-operand_start = SOURCE.index("theorem exportedOperandUnify_refines")
-operand_obligation = SOURCE[operand_start:SOURCE.index("\n\n", operand_start) + 1]
-EXECUTABLE = ("import Tamarin.OperandUnification\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + operand_obligation + "end Tamarin\n")
-OPERAND = "  OperandUnification.runWith OperandCounts.run Homogeneous.solve width sides"
-EXPORT_MUTATIONS.extend([
-    ("operand_counts_drop_repeats", OPERAND,
-     OPERAND.replace("width sides", "width (sides.map fun row => row.toList.eraseDups.toArray)"),
-     "theorem exportedOperandUnify_refines"),
-    ("operand_drops_equation", OPERAND, OPERAND.replace("width sides", "width (sides.extract 0 2)"),
-     "theorem exportedOperandUnify_refines"),
-    ("operand_drops_sound_branches", OPERAND,
-     "  (" + OPERAND.strip() + ").map (fun arms => arms.extract 0 1)", "theorem exportedOperandUnify_refines"),
-    ("operand_always_defers", OPERAND, "  none", "theorem exportedOperandUnify_refines"),
-    ("operand_treats_deferral_as_clash", OPERAND, "  some #[]", "theorem exportedOperandUnify_refines"),
-])
-
-projection_start = SOURCE.index("theorem exportedAnswerProjection_correct")
-projection_obligation = SOURCE[projection_start:SOURCE.index("\n\n", projection_start) + 1]
-EXECUTABLE = ("import Tamarin.AnswerProjection\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + projection_obligation + "end Tamarin\n")
-PROJECT = "  AnswerProjection.project width answers"
-EXPORT_MUTATIONS.extend([
-    ("projection_restarts_witnesses_each_arm", PROJECT,
-     "  do return (← answers.toList.mapM (fun a => AnswerProjection.project width #[a])).foldl (· ++ ·) #[]",
-     "theorem exportedAnswerProjection_correct"),
-    ("projection_discards_column_tags", PROJECT,
-     "  (AnswerProjection.project width answers).map (fun arms => "
-     "arms.map (fun a => a.map (fun r => r.extract 1 r.size)))",
-     "theorem exportedAnswerProjection_correct"),
-    ("projection_collapses_distinct_witnesses", PROJECT,
-     "  AnswerProjection.project width (answers.map fun a => a.map fun r => r.map fun _ => 0)",
-     "theorem exportedAnswerProjection_correct"),
-    ("projection_reinstates_32_column_limit", PROJECT, "  if width ≤ 32 then " + PROJECT.strip() + " else none",
-     "theorem exportedAnswerProjection_correct"),
-    ("projection_always_fails", PROJECT, "  none", "theorem exportedAnswerProjection_correct"),
-])
-
-factor_start = SOURCE.index("theorem exportedCheckFactors_correct")
-factor_end = SOURCE.index("\n\n", SOURCE.index("theorem exportedCheckFactors_required"))
-EXECUTABLE = ("import Tamarin.FactorAdmission\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + SOURCE[factor_start:factor_end] + "\nend Tamarin\n")
-FACTOR_RUN = "  FactorCheck.run decls nodes original bindings residual"
-EXPORT_MUTATIONS.extend([
-    ("factor_accepts_unchecked_original", FACTOR_RUN, "  true", "theorem exportedCheckFactors_correct"),
-    ("factor_uses_proposal_as_original", FACTOR_RUN,
-     "  FactorCheck.run decls nodes (bindings ++ residual) bindings residual",
-     "theorem exportedCheckFactors_correct"),
-    ("factor_drops_residual_tail", FACTOR_RUN,
-     "  FactorCheck.run decls nodes original bindings (residual.extract 0 2)",
-     "theorem exportedCheckFactors_correct"),
-    ("factor_always_defers", FACTOR_RUN, "  false", "theorem exportedCheckFactors_required"),
-    ("factor_skips_binding_replay", FACTOR_RUN,
-     "  FactorCheck.runWith FactorCheck.direct decls nodes original bindings residual",
-     "theorem exportedCheckFactors_chain"),
-])
-
-EXECUTABLE = ("import Tamarin.TotalUnifyPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedTotalUnify_correct") + "end Tamarin\n")
-TOTAL_RUN = "TotalUnifyWire.run decls nodes roots"
-EXPORT_MUTATIONS.extend([
-    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem exportedTotalUnify_correct"),
-    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem exportedTotalUnify_correct"),
-    ("total_ignores_equation_tail", TOTAL_RUN, "TotalUnifyWire.run decls nodes (roots.extract 0 2)",
-     "theorem exportedTotalUnify_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.TotalMatchPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedTotalMatch_correct") + "end Tamarin\n")
+# (label, text of TamarinRuntime.lean, its replacement, theorem whose proof must
+# then fail). The text is the body of a definition a contract export is built
+# on: the eight theory exports are `totalUnify`, `certifyTable`, ... on the
+# packet of the theory. The theorem is a contract statement, or a private lemma
+# of the proof root from which the contract statement named in the comment
+# beside it is proved, directly or through the lemma about that definition: a
+# contract statement that cites a lemma does not fail itself when the lemma
+# does. Only contract exports appear: a proposer export has no
+# contract, so nothing may depend on what it computes.
+CERTIFY_RUN = "CertifiedTableWire.run ds ns rules fuel"
+TOTAL_RUN = "@TotalUnifyWire.run i decls nodes roots"
 MATCH_RUN = "TotalMatchWire.run decls nodes roots ids"
-EXPORT_MUTATIONS.extend([
+EXISTS_RUN = "TotalMatchWire.runExists decls nodes roots ids"
+UNPACK_RUN = "PackedConjunction.run nodes limit lhs rhs"
+PATH_REDUCE = "@PathReductionWire.run i ds ns rules root fuel"
+SESSION_REDUCE = "@SessionReductionWire.run i ds ns rules extra root fuel"
+SESSION_CHECK = "@SessionVariantCheckWire.run i ds ns rules extra roots family fuel work"
+NAME_RUN = "UnifierNames.run names heads ranges proposal nat low"
+MAUDE_RUN = "@MaudeUnifyExport.run i decls ranks fuel nodes roots"
+EXPORT_MUTATIONS = [
+    ("certifies_conflicting_tables", CERTIFY_RUN, "true", "theorem theoryCertify_sound"),
+    ("certifies_missing_rules", CERTIFY_RUN, "CertifiedTableWire.run ds ns #[] fuel",
+     "theorem theoryCertify_builtin"),
+    ("refuses_all_certificates", CERTIFY_RUN, "false", "theorem theoryCertify_builtin"),
+    # The tables of the builtins alone that a theory sends for DH with XOR and
+    # for DH with bilinear pairing: `theoryCertify_builtin` says both are accepted.
+    ("refuses_dh_xor_builtin_table", CERTIFY_RUN,
+     "(ds != Theory.Signature.declarations ⟨true, true, false, false, false, #[], 0⟩ && "
+     "CertifiedTableWire.run ds ns rules fuel)",
+     "theorem theoryCertify_builtin"),
+    ("refuses_dh_bp_builtin_table", CERTIFY_RUN,
+     "(ds != Theory.Signature.declarations ⟨true, false, true, false, false, #[], 0⟩ && "
+     "CertifiedTableWire.run ds ns rules fuel)",
+     "theorem theoryCertify_builtin"),
+    # Accepts only the packet of a table of the builtins alone, so it refuses
+    # every table with a user rule. The lemma is the one theoryCertify_subterm
+    # is proved from.
+    ("refuses_user_rule_tables", CERTIFY_RUN,
+     "((List.range 32).any (fun f => match Theory.Signature.ofWire f.toUInt64 #[] 0 with "
+     "| some sig => (({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.ds == ds && "
+     "({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.ns == ns && "
+     "({ sig with nodes := #[], rules := #[] } : Theory.Table).packet.es == rules) "
+     "| none => false) && CertifiedTableWire.run ds ns rules fuel)",
+     "theorem exportedCertifyTable_subterm"),
+    # An interruptible export is tied to its search by one equation, on which
+    # its contract theorems rest: a wrong search breaks that equation.
+    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem totalUnify_quiet"),  # theoryUnify_correct
+    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem totalUnify_quiet"),  # theoryUnify_correct
+    ("total_ignores_equation_tail", TOTAL_RUN, "@TotalUnifyWire.run i decls nodes (roots.extract 0 2)",
+     "theorem totalUnify_quiet"),  # theoryUnify_correct
+    ("total_ignores_its_caller", "Interrupt.run poll #[#[4]] fun i => totalUnifyFor i decls nodes roots",
+     "totalUnifyFor Interrupt.never decls nodes roots", "theorem exportedTotalUnify_interrupted"),  # theoryUnify_interrupted
+    ("maude_discards_arms", MAUDE_RUN, "#[#[1]]", "theorem maudeUnify_quiet"),  # theoryMaudeUnify_correct
+    ("maude_ignores_equation_tail", MAUDE_RUN,
+     "@MaudeUnifyExport.run i decls ranks fuel nodes (roots.extract 0 2)",
+     "theorem maudeUnify_quiet"),  # theoryMaudeUnify_correct
+    ("maude_ignores_its_caller",
+     "Interrupt.run poll #[#[4]] fun i => maudeUnifyFor i decls ranks fuel nodes roots",
+     "maudeUnifyFor Interrupt.never decls ranks fuel nodes roots",
+     "theorem theoryMaudeUnify_interrupted"),
+    ("total_exists_stops_unasked", "Interrupt.run poll 4 fun i => totalUnifyExistsFor i decls nodes roots",
+     "4", "theorem totalUnifyExists_quiet"),  # theoryUnifyExists_correct
     ("match_ignores_scope", MATCH_RUN, "TotalMatchWire.run decls nodes roots #[]",
-     "theorem exportedTotalMatch_correct"),
-    ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),
+     "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
+    ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
     ("match_drops_equation_tail", MATCH_RUN, "TotalMatchWire.run decls nodes (roots.extract 0 2) ids",
-     "theorem exportedTotalMatch_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.Candidates.TableProofs\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCheckedReduce_correct") + obligation("exportedGeneralReduce_correct") + "end Tamarin\n")
-EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedUnpackConjunction_correct") + "end Tamarin\n"
-EXPORT_MUTATIONS.extend([
-    ("packed_conjunction_drops_rhs", "PackedConjunction.run nodes limit lhs rhs",
-     "PackedConjunction.run nodes limit lhs lhs", "theorem exportedUnpackConjunction_correct"),
-    ("packed_conjunction_drops_leaves", "PackedConjunction.run nodes limit lhs rhs",
-     "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
-])
-REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
-EXPORT_MUTATIONS.extend([
-    ("general_reduce_omits_table", "TableCandidate.reduce ds ns rules root fuel",
-     "TableCandidate.reduce ds ns #[] root fuel", "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_retries", "TableCandidate.reduce ds ns rules root fuel", "#[#[3]]",
-     "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_declines", "TableCandidate.reduce ds ns rules root fuel", "#[#[2]]",
-     "theorem exportedGeneralReduce_correct"),
-    ("checked_reduce_ignores_rules", REDUCTION_RUN, "CheckedReductionWire.run decls nodes #[] root fuel",
-     "theorem exportedCheckedReduce_correct"),
-    ("checked_reduce_defers_destructors", REDUCTION_RUN,
-     "(if (TableWire.input decls nodes rules #[root]).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
-     "then #[#[2]] else CheckedReductionWire.run decls nodes rules root fuel)",
-     "theorem exportedCheckedReduce_correct"),
-    ("checked_reduce_always_defers", REDUCTION_RUN, "#[#[2]]", "theorem exportedCheckedReduce_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.CheckedVariantsPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCheckedVariants_correct") + obligation("exportedGeneralVariants_malformed")
-              + obligation("exportedGeneralVariants_sound")
-              + obligation("exportedGeneralVariants_progress") + obligation("exportedGeneralVariants_complete") + "end Tamarin\n")
-VARIANTS_RUN = "CheckedVariantsWire.run ds ns rules roots fuel"
-EXPORT_MUTATIONS.extend([
-    ("variants_returns_incomplete_success", VARIANTS_RUN, "#[#[1]]", "theorem exportedCheckedVariants_correct"),
-    ("general_variants_accepts_malformed", "TableCandidate.variants ds ns rules roots fuel",
-     "if (TableWire.input ds ns rules roots).isNone then #[#[1]] else TableCandidate.variants ds ns rules roots fuel",
-     "theorem exportedGeneralVariants_malformed"),
-    ("general_variants_always_defers", "TableCandidate.variants ds ns rules roots fuel", "#[#[2]]",
-     "theorem exportedGeneralVariants_progress"),
-    ("general_variants_always_retries", "TableCandidate.variants ds ns rules roots fuel", "#[#[3]]",
-     "theorem exportedGeneralVariants_progress"),
-    ("general_variants_ignores_rules", "TableCandidate.variants ds ns rules roots fuel",
-     "TableCandidate.variants ds ns #[] roots fuel", "theorem exportedGeneralVariants_sound"),
-    ("variants_defers_zero_budget_definitions", VARIANTS_RUN,
-     "if fuel == 0 then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel",
-     "theorem exportedCheckedVariants_correct"),
-    ("variants_skips_certified_destructors", VARIANTS_RUN,
-     "(if (TableWire.input ds ns rules roots).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
-     "then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel)",
-     "theorem exportedCheckedVariants_correct"),
-    ("variants_ignores_active_rules", VARIANTS_RUN, "CheckedVariantsWire.run ds ns #[] roots fuel",
-     "theorem exportedCheckedVariants_correct"),
-])
-
-WHOLE_RUN = "  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations"
-EXPORT_MUTATIONS.extend([
-    ("whole_ignores_mixed_clashes", WHOLE_RUN, "  Whole.run decls nodes equations",
-     "theorem exportedWholeUnify_mixedRequired"),
-    ("whole_treats_positive_sizes_as_a_clash", WHOLE_RUN,
-     "  Whole.runRefining (fun ns es rows => !MixedSizeGraph.refutesDecoded ns es rows) decls nodes equations",
-     "theorem exportedWholeUnify_correct"),
-    ("whole_ignores_tail_equations", WHOLE_RUN, "  Whole.run decls nodes (equations.extract 0 2)",
-     "theorem exportedWholeUnify_correct"),
-    ("whole_truncates_flat_ac_rows", WHOLE_RUN,
-     "  Whole.run decls (nodes.map fun r => if r[0]? == some 4 then r.extract 0 4 else r) equations",
-     "theorem exportedWholeUnify_correct"),
-    ("whole_fails_open_queries", WHOLE_RUN, "  #[#[1]]", "theorem exportedWholeUnify_correct"),
-    ("whole_always_defers", WHOLE_RUN, "  #[#[0]]", "theorem exportedWholeUnify_correct"),
-])
-
-EXECUTABLE = ("import Tamarin.BinaryCancellationPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedBinaryCancellationRows_correct") + "end Tamarin\n")
-BINARY_ROWS = "  BinaryCancellationCandidate.rows"
-EXECUTABLE = ("import Tamarin.MixedCancellationRows\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedMixedCancellationRows_correct") + "end Tamarin\n")
-MIXED_ROWS = "  BinaryCancellationCandidate.mixedRows"
-EXPORT_MUTATIONS.extend([
-    ("mixed_cancellation_omits_diagonal", MIXED_ROWS, MIXED_ROWS + ".extract 1 9",
-     "theorem exportedMixedCancellationRows_correct"),
-    ("mixed_cancellation_decouples_value", MIXED_ROWS,
-     MIXED_ROWS + ".map (fun row => row.set! 3 row[2]!)", "theorem exportedMixedCancellationRows_correct"),
-    ("binary_cancellation_omits_overlap", BINARY_ROWS, BINARY_ROWS + ".extract 0 6",
-     "theorem exportedBinaryCancellationRows_correct"),
-    ("binary_cancellation_breaks_value_sharing", BINARY_ROWS,
-     BINARY_ROWS + ".map (fun row => row.set! 2 0)", "theorem exportedBinaryCancellationRows_correct"),
-])
-
-xor_matching_start = SOURCE.index("theorem exportedXorMatchings_correct")
-xor_matching_contract = SOURCE[xor_matching_start:SOURCE.index("\n\n", xor_matching_start) + 1]
-EXECUTABLE = ("import Tamarin.XorMatchings\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + xor_matching_contract + "end Tamarin\n")
-XOR_MATCHINGS = "  XorMatchingCandidate.run width"
-EXPORT_MUTATIONS.extend([
-    ("xor_matchings_drop_a_pair", XOR_MATCHINGS,
-     "  (XorMatchingCandidate.run width).map (fun rows => rows.extract 0 1)",
-     "theorem exportedXorMatchings_correct"),
-    ("xor_matchings_change_width", XOR_MATCHINGS, "  XorMatchingCandidate.run (width - 1)",
-     "theorem exportedXorMatchings_correct"),
-    ("xor_matchings_turn_deferral_into_empty", XOR_MATCHINGS,
-     "  some ((XorMatchingCandidate.run width).getD #[])",
-     "theorem exportedXorMatchings_correct"),
-])
-EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedXorOdd_correct") + "end Tamarin\n"
-EXPORT_MUTATIONS.append((
-    "xor_keeps_nonzero_multiplicities", ":= RuntimeCandidate.xorOdd count",
-    ":= count != 0", "theorem exportedXorOdd_correct",
-))
-
-XOR_RUN = "  RuntimeCandidate.xorBranches same"
-EXPORT_MUTATIONS.extend([
-    ("xor_omits_diagonal", XOR_RUN, "  1", "theorem exportedXorBranches_correct"),
-    ("xor_drops_open_case", XOR_RUN, "  2", "theorem exportedXorBranches_correct"),
-    ("xor_identity_on_equal_inputs", XOR_RUN, "  3", "theorem exportedXorBranches_correct"),
-])
-
-COMM_RUN = "  RuntimeCandidate.commOrientations a b c d priority"
-EXPORT_MUTATIONS += [
-    ("comm_spends_budget_on_duplicates", COMM_RUN, "  3", "theorem exportedCommOrientations_bound"),
-    ("comm_loses_crossed_orientation", COMM_RUN, "  1", "theorem exportedCommOrientations_correct"),
-    ("comm_confuses_swapped_alignment", COMM_RUN,
-     "  RuntimeCandidate.commOrientations a b d c priority", "theorem exportedCommOrientations_correct"),
-    ("comm_truncates_unknown_status", COMM_RUN, "  7", "theorem exportedCommOrientations_correct"),
+     "theorem exportedTotalMatch_correct"),  # theoryMatch_correct
+    ("match_exists_always_yes", EXISTS_RUN, "1", "theorem exportedTotalMatchExists_correct"),  # theoryMatchExists_correct
+    ("match_exists_always_no", EXISTS_RUN, "2", "theorem exportedTotalMatchExists_correct"),  # theoryMatchExists_correct
+    ("packed_conjunction_drops_rhs", UNPACK_RUN, "PackedConjunction.run nodes limit lhs lhs",
+     "theorem exportedUnpackConjunction_correct"),
+    ("packed_conjunction_drops_leaves", UNPACK_RUN, "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
+    ("path_reduce_always_retries", PATH_REDUCE, "#[#[3]]", "theorem pathReduce_quiet"),  # theoryPathReduce_correct
+    ("path_reduce_omits_table", PATH_REDUCE, "@PathReductionWire.run i ds ns #[] root fuel",
+     "theorem pathReduce_quiet"),  # theoryPathReduce_correct
+    ("path_reduce_always_interrupted", PATH_REDUCE, "#[#[4]]", "theorem pathReduce_quiet"),  # theoryPathReduce_correct
+    ("session_reduce_always_retries", SESSION_REDUCE, "#[#[3]]", "theorem sessionReduce_quiet"),  # theoryReduce_correct
+    ("session_reduce_ignores_term_rows", SESSION_REDUCE, "@SessionReductionWire.run i ds ns rules #[] root fuel",
+     "theorem sessionReduce_quiet"),  # theoryReduce_correct
+    ("variant_check_accepts_everything", SESSION_CHECK, "#[#[1]]", "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
+    ("variant_check_ignores_family", SESSION_CHECK,
+     "@SessionVariantCheckWire.run i ds ns rules extra roots #[] fuel work",
+     "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
+    ("variant_check_never_accepts", SESSION_CHECK, "#[#[3]]", "theorem sessionVariantCheck_quiet"),  # theoryVariantCheck_correct
+    ("variant_check_ignores_its_caller",
+     "Interrupt.run poll #[#[4]] fun i => sessionVariantCheckFor i ds ns rules extra roots family fuel work",
+     "sessionVariantCheckFor Interrupt.never ds ns rules extra roots family fuel work",
+     "theorem exportedSessionVariantCheck_interrupted"),  # theoryVariantCheck_interrupted
+    ("names_untested_proposal", NAME_RUN,
+     "(((UnifierNames.query names heads).bind fun q => UnifierNames.tablesFor q heads ranges "
+     "(some proposal.toList) nat low).getD #[#[0]])",
+     "theorem exportedNameUnifiers_correct"),
+    ("names_settle_for_low_indices", NAME_RUN, "UnifierNames.run names heads ranges proposal nat true",
+     "theorem exportedNameUnifiers_correct"),
+    ("names_ignore_the_labels", NAME_RUN, "UnifierNames.run #[] heads ranges proposal nat low",
+     "theorem exportedNameUnifiers_correct"),
 ]
-RIGID_RUN = "  RuntimeCandidate.rigidAllocation reversed"
-EXPORT_MUTATIONS.extend([
-    ("allocation_omits_singleton_case", RIGID_RUN,
-     "  (RuntimeCandidate.rigidAllocation reversed).extract 1 4",
-     "theorem exportedRigidAllocation_correct"),
-    ("allocation_aliases_two_witnesses", RIGID_RUN,
-     "  (RuntimeCandidate.rigidAllocation reversed).map (fun arm => "
-     "arm.map (fun row => row.map (fun id => if id == 2 then 1 else id)))",
-     "theorem exportedRigidAllocation_correct"),
-    ("allocation_breaks_shared_witness", RIGID_RUN,
-     "  (RuntimeCandidate.rigidAllocation reversed).set! 2 #[#[0,1],#[2],#[3,2]]",
-     "theorem exportedRigidAllocation_correct"),
-    ("allocation_treats_reverse_as_empty", RIGID_RUN,
-     "  if reversed then #[] else RuntimeCandidate.rigidAllocation false",
-     "theorem exportedRigidAllocation_correct"),
-])
 
 
-SIGNED_GRAPH_RUN = "  SignedGraph.run inputs obs"
-EXECUTABLE = ("import Tamarin.SignedGraphContract\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + obligation("exportedSignedGraph_correct") + "end Tamarin\n")
-EXPORT_MUTATIONS.extend([
-    ("signed_graph_omits_observation", SIGNED_GRAPH_RUN, "  SignedGraph.run inputs (obs.extract 0 1)",
-     "theorem exportedSignedGraph_correct"),
-    ("signed_graph_zeroes_all_parameters", SIGNED_GRAPH_RUN, "  (SignedGraph.run inputs obs).map (fun _ => 0)",
-     "theorem exportedSignedGraph_correct"),
-    ("signed_graph_always_defers", SIGNED_GRAPH_RUN, "  #[0]",
-     "theorem exportedSignedGraph_correct"),
-])
+# The standalone audit reads compiled modules as data, so each probe is an
+# ordinary module imported next to the real proof root. Every probe has its
+# own namespace: one run must report each of them.
+STANDALONE_PROBES = [
+    ("AuditProbeMacro", 'macro "audit_probe_term" : term => `(0)\n',
+     "AuditProbeMacro adds"),
+    ("AuditProbeHijack",
+     "import Lean\nopen Lean Elab Command in\n"
+     "@[command_elab Lean.runCmd] def AuditProbe.Hijack.hijack : CommandElab := fun _ => pure ()\n",
+     "AuditProbeHijack adds"),
+    ("AuditProbeLean", "import Lean\ndef AuditProbe.Meta.unused : Nat := 0\n",
+     "AuditProbeLean imports Lean: only the proof root may import `Lean`"),
+    ("AuditProbeInit", "initialize AuditProbe.Init.counter : IO.Ref Nat ← IO.mkRef 0\n",
+     "AuditProbeInit adds"),
+    ("AuditProbeEval", "#eval (1 : Nat)\n", "AuditProbeEval:1: source uses `#eval`"),
+    ("AuditProbeImpl",
+     "namespace AuditProbe.Impl\ndef wrong (_ : Nat) : Nat := 0\n"
+     "@[implemented_by wrong] def verified (n : Nat) : Nat := n\n"
+     "theorem verified_correct (n : Nat) : verified n = n := rfl\nend AuditProbe.Impl\n",
+     "AuditProbe.Impl.verified has unchecked implemented_by replacement"),
+    ("AuditProbeExtern",
+     '@[extern "audit_probe_untrusted"] def AuditProbe.Extern.verified (n : Nat) : Nat := n\n',
+     "AuditProbe.Extern.verified has unchecked extern implementation"),
+    ("AuditProbeUnsafe", "unsafe def AuditProbe.Unsafe.unchecked : Nat := 0\n",
+     "AuditProbe.Unsafe.unchecked is an unsafe project declaration"),
+    ("AuditProbeAxiom", "axiom AuditProbe.Axiom.assumed : False\n",
+     "unapproved axiom AuditProbe.Axiom.assumed"),
+    ("AuditProbeSorry", "theorem AuditProbe.Sorry.claim : 1 = 2 := sorry\n",
+     "unapproved axiom sorryAx"),
+    ("AuditProbeNative",
+     "theorem AuditProbe.Native.claim : (10 : Nat) = 10 := by native_decide\n",
+     "unapproved axiom AuditProbe.Native.claim._native.native_decide"),
+    ("AuditProbeExport", "@[export tamarin_unproved] def AuditProbe.Export.unproved : Nat := 0\n",
+     "Unapproved project export AuditProbe.Export.unproved maps to tamarin_unproved"),
+    ("AuditProbePartial",
+     "partial def AuditProbe.Partial.loop (n : Nat) : Nat := loop (n + 1)\n"
+     "@[export tamarin_partial_probe] def AuditProbe.Partial.entry (n : Nat) : Nat :=\n"
+     "  AuditProbe.Partial.loop n\n",
+     "AuditProbe.Partial.loop is an opaque or partial project declaration used by exported code"),
+]
+
+
+def bypass_module() -> str:
+    """An imported module that replaces the root audit by one that skips it.
+
+    It redefines the elaborator of `run_cmd`, so the audit written in
+    TamarinCI.lean never runs. A copy that ignores the `FastPath` namespace
+    runs in its place and prints the same success message.
+    """
+    def once(text: str, old: str, new: str) -> str:
+        assert text.count(old) == 1, f"root audit changed: {old!r}"
+        return text.replace(old, new)
+
+    audit = SOURCE[SOURCE.index("open Lean Meta in\n/-- Lean 4.36 compiles constructor indices"):]
+    audit = once(audit, "open Lean Meta in\n", "open Lean Meta\n")
+    audit = once(audit, MARKER, "def evilAudit : Lean.Elab.Command.CommandElabM Unit := do")
+    audit = once(audit, "    if !fromTrustedModule ||",
+                 "    if name.getRoot == `FastPath then continue\n    if !fromTrustedModule ||")
+    audit = audit.replace("(``Tamarin.", "(`Tamarin.")
+    return """import Lean
+namespace FastPath
+def wrong (_ : Nat) : Nat := 0
+@[implemented_by wrong] def verified (n : Nat) : Nat := n
+theorem verified_correct (n : Nat) : verified n = n := rfl
+end FastPath
+""" + audit + """
+open Lean Elab Command in
+@[command_elab Lean.runCmd] def hijack : CommandElab := fun _ => evilAudit
+"""
+
+
+def standalone_audit(directory: str, env: dict) -> None:
+    """Negative checks for Tests/ExportAudit.lean, which runs outside the modules it audits."""
+    root = Path(directory)
+    for name in ["Tamarin", "TamarinRuntime", "Tamarin.lean", "TamarinRuntime.lean",
+                 "TamarinWire.lean", "TamarinProposers.lean"]:
+        (root / name).symlink_to(ROOT / name)
+
+    def audit(*arguments: str) -> tuple[int, str]:
+        result = subprocess.run(
+            ["lake", "env", "lean", "--run", "Tests/ExportAudit.lean",
+             "--sources", directory, *arguments],
+            cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    def compile_module(module: str, source: str) -> subprocess.CompletedProcess:
+        path = root / (module.replace(".", "/") + ".lean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+        return subprocess.run(
+            ["lake", "env", "lean", "-R", directory, "-o", str(path.with_suffix(".olean")),
+             str(path)],
+            cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+        )
+
+    code, output = audit()
+    assert code == 0 and "export audit passed" in output, output
+    print("standalone audit accepts the unmodified build")
+    # The module of theorems outside the contract passes every module and
+    # declaration check, and none of its theorems is counted as contract.
+    passed = output.strip().splitlines()[-1]
+    code, output = audit("--unpinned", "TamarinProposers")
+    assert code == 0 and "export audit passed" in output, output
+    counts = lambda line: re.findall(r"\d+ (?:contract exports|proposer exports|contract statements|"
+                                     r"specification constants)", line)
+    assert counts(output.strip().splitlines()[-1]) == counts(passed) and len(counts(passed)) == 4, output
+    print("standalone audit accepts the unpinned proposer theorems and pins none of them")
+    # An unpinned module is still audited, and it may not be runtime code.
+    compiled = compile_module("AuditProbeUnpinned", "axiom AuditProbe.Unpinned.assumed : False\n")
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    code, output = audit("--unpinned", "AuditProbeUnpinned", "--unpinned", "TamarinWire")
+    assert code != 0, output
+    for label, expected in [
+        ("axiom in an unpinned module", "unapproved axiom AuditProbe.Unpinned.assumed"),
+        ("runtime module passed as unpinned",
+         "unpinned module TamarinWire is the proof root or part of the runtime"),
+    ]:
+        assert expected in output, f"standalone audit missed {label} ({expected!r}):\n{output}"
+        print(f"standalone audit rejected {label}")
+    assert "AuditProbeUnpinned is not imported by the proof root" not in output, output
+
+    roots = ["--root", "TamarinRuntime", "--root", "TamarinWire"]
+    for module, source, _ in STANDALONE_PROBES:
+        compiled = compile_module(module, source)
+        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+        roots += ["--root", module]
+    code, output = audit(*roots)
+    assert code != 0, output
+    for module, _, expected in STANDALONE_PROBES:
+        assert expected in output, (
+            f"standalone audit did not reject {module} with {expected!r}:\n{output}"
+        )
+        assert f"{module} is not imported by the proof root" in output, output
+        print(f"standalone audit rejected {module}")
+
+    # Edits to the manifest and to the recorded specification, all in one run.
+    manifest = (ROOT / "ExportManifest.txt").read_text()
+    # The root audit and the manifest name the same exports in the same classes.
+    def root_list(start: str, end: str) -> set:
+        text = SOURCE[SOURCE.index(start):SOURCE.index(end)]
+        return {(symbol, constant) for constant, symbol in
+                re.findall(r"\(``(Tamarin\.Executable\.\w+), `(tamarin_\w+)\)", text)}
+    for kind, start, end in [
+        ("export", "  let contractExports :", "  let proposerExports :"),
+        ("proposer", "  let proposerExports :", "  let expectedExports :="),
+    ]:
+        listed = set(re.findall(rf"^{kind} (\S+) (\S+)$", manifest, flags=re.M))
+        in_root = root_list(start, end)
+        assert listed and listed == in_root, (
+            f"root audit and manifest disagree on {kind} entries: {sorted(listed ^ in_root)}")
+    print("root audit and manifest list the same contract and proposer exports")
+    # What the contract is stated in is recorded. No search, classifier or
+    # reference procedure is, and no proposer.
+    recorded = (ROOT / "SpecManifest.txt").read_text()
+    for constant in ["Tamarin.CompleteSet", "Tamarin.Sound", "Tamarin.Covers",
+                     "Tamarin.DomainRestricted", "Tamarin.FreshFor", "Tamarin.Matching.Complete",
+                     "Tamarin.CertifiedTableWire.Certified", "Tamarin.VariantCertificate.Closed",
+                     "Tamarin.MaudeOperations.CanonicalPresentation",
+                     "Tamarin.MaudeOperations.VariantReply", "Tamarin.TableWire.input",
+                     "Tamarin.TotalUnifyWire.input", "Tamarin.SessionVariantCheckWire.input"]:
+        assert re.search(rf"^\w+ {re.escape(constant)} [0-9a-f]{{64}}$", recorded, flags=re.M), (
+            f"{constant}, part of the contract, is not recorded")
+    for constant in ["Tamarin.MixedUnification", "Tamarin.CertifiedTable.admits",
+                     "Tamarin.CheckedReduction.run", "Tamarin.GeneralVariants.run",
+                     "Tamarin.CheckedReductionWire.admitted", "Tamarin.VariantCertificate.check",
+                     "Tamarin.ACSystem", "Tamarin.RuntimeCandidate"]:
+        assert not re.search(rf"^\w+ {re.escape(constant)}\b", recorded, flags=re.M), (
+            f"{constant}, an implementation or reference procedure, is recorded as specification")
+    assert not re.search(r"^contract ", recorded, flags=re.M), "a constant is recorded by type only"
+    proposer_constants = re.findall(r"^proposer \S+ (\S+)$", manifest, flags=re.M)
+    assert proposer_constants and not any(
+        re.search(rf"^\w+ {re.escape(c)} ", recorded, flags=re.M) for c in proposer_constants
+    ), "a proposer export is recorded as specification"
+    print("the contract definitions are recorded; no search, reference procedure or proposer is")
+    blocks = re.findall(r"^export .*\n(?:  theorem .*\n)+", manifest, flags=re.M)
+    assert len(blocks) >= 5, "manifest layout changed"
+    dropped, unpinned, emptied, foreign, misplaced = blocks[:5]
+    lines = unpinned.splitlines()
+    name, fingerprint = lines[1].split()[1:]
+    assert len(fingerprint) == 64, "manifest layout changed"
+    lines[1] = f"  theorem {name} {fingerprint[:-1]}{'0' if fingerprint[-1] != '0' else '1'}"
+    stranger = misplaced.splitlines()[1].split()[1]
+    mutated = manifest.replace(dropped, "")
+    mutated = mutated.replace(unpinned, "\n".join(lines) + "\n")
+    mutated = mutated.replace(emptied, emptied.splitlines()[0] + "\n")
+    mutated = mutated.replace(foreign, foreign + f"  theorem Nat.add_comm {'0' * 64}\n")
+    # A theorem about another export says nothing about this one.
+    other = next(b for b in blocks[5:] if stranger not in b)
+    donor = other.splitlines()[1]
+    mutated = mutated.replace(misplaced, misplaced + donor + "\n")
+    # A theorem of the root that the manifest no longer lists anywhere.
+    unlisted = "Tamarin.theoryUnify_unsatisfiable"
+    line = next(l for l in manifest.splitlines() if l.split()[:2] == ["theorem", unlisted])
+    assert manifest.count(line) == 1 and all(unlisted not in b for b in blocks[:6]), "manifest layout changed"
+    mutated = mutated.replace(line + "\n", "")
+    # Proposer entries: one removed, one listed twice, one listed as a contract export.
+    proposers = re.findall(r"^proposer \S+ \S+\n", manifest, flags=re.M)
+    assert len(proposers) >= 3, "manifest layout changed"
+    gone, twice, promoted = proposers[:3]
+    mutated = mutated.replace(gone, "").replace(twice, twice + twice)
+    mutated = mutated.replace(promoted, promoted.replace("proposer", "export", 1))
+    path = root / "MutatedManifest.txt"
+    path.write_text(mutated)
+    # The recorded specification closure: one constant changed, one no longer
+    # recorded, one recorded that no statement depends on.
+    spec = (ROOT / "SpecManifest.txt").read_text().splitlines()
+    pins = [line for line in spec if line and not line.startswith("#")]
+    assert len(pins) > 100 and all(len(line.split()) == 3 for line in pins), "spec layout changed"
+    changed, removed = pins[len(pins) // 3].split(), pins[2 * len(pins) // 3].split()
+    flipped = changed[2][:-1] + ("0" if changed[2][-1] != "0" else "1")
+    spec_path = root / "MutatedSpec.txt"
+    spec_path.write_text("\n".join(
+        [" ".join(changed[:2] + [flipped]) if line.split() == changed else line
+         for line in spec if line.split() != removed]
+        + [f"def Tamarin.NoSuchSpecificationConstant {'0' * 64}"]) + "\n")
+    # Constants that may not be followed by type only: a decoder (a plain
+    # function), a kernel that no statement depends on, and an export.
+    code, output = audit("--manifest", str(path), "--spec", str(spec_path),
+                         "--contract-typed", "Tamarin.TotalUnifyWire.input",
+                         "--contract-typed", "Tamarin.CertifiedReductionWire.path",
+                         "--contract-typed", "Tamarin.Executable.theoryUnify")
+    assert code != 0, output
+    for label, expected in [
+        ("export missing from the manifest",
+         f"Unapproved project export {dropped.split()[2]} maps to {dropped.split()[1]}"),
+        ("changed contract statement", f"the statement of contract theorem {name} changed"),
+        ("export without contract theorem",
+         f"export {emptied.split()[1]} has no contract theorem in the manifest"),
+        ("contract theorem outside the proof root",
+         "contract theorem Nat.add_comm is not a theorem of"),
+        ("contract theorem about another export",
+         f"contract theorem {donor.split()[1]} does not mention {misplaced.split()[2]}"),
+        ("changed specification constant", f"specification constant {changed[1]} changed"),
+        ("specification constant missing from the record",
+         f"{removed[0]} {removed[1]} now gives a contract statement its meaning but is not in"),
+        ("recorded constant outside the specification closure",
+         "Tamarin.NoSuchSpecificationConstant is recorded in"),
+        ("plain function followed by type only",
+         "Tamarin.TotalUnifyWire.input cannot be followed by type only: its type is not a contract"),
+        ("type-only constant outside the specification closure",
+         "Tamarin.CertifiedReductionWire.path is listed to be followed by type only, "
+         "but no contract statement depends on it"),
+        ("export listed as a type-only constant",
+         "Tamarin.Executable.theoryUnify cannot be followed by type only: it is an export"),
+        ("theorem of the proof root missing from the manifest",
+         f"theorem {unlisted} of TamarinCI is not in the manifest"),
+        ("proposer export missing from the manifest",
+         f"Unapproved project export {gone.split()[2]} maps to {gone.split()[1]}"),
+        ("export listed twice", f"export {twice.split()[1]} is listed twice in the manifest"),
+        ("proposer listed as a contract export without a theorem",
+         f"export {promoted.split()[1]} has no contract theorem in the manifest"),
+    ]:
+        assert expected in output, f"standalone audit missed {label} ({expected!r}):\n{output}"
+        print(f"standalone audit rejected {label}")
+
+    # A contract export cannot be turned into a proposer while its theorems
+    # stay in the proof root, however the manifest lists them.
+    demoted = next(b for b in blocks if b.startswith("export tamarin_theory_match "))
+    header, *statements = demoted.splitlines()
+    as_proposer = header.replace("export", "proposer", 1) + "\n"
+    names = [l.split()[1] for l in statements]
+    for label, text, expected in [
+        ("contract export listed as a proposer with its theorems",
+         manifest.replace(demoted, as_proposer + "\n".join(statements) + "\n"),
+         ["a proposer export carries no contract, but a theorem is listed under tamarin_theory_match"]),
+        ("contract export listed as a proposer, its theorems listed as other",
+         manifest.replace(demoted, as_proposer) + "other\n" + "\n".join(statements) + "\n",
+         [f"proposer export tamarin_theory_match is mentioned by contract theorem {n}" for n in names]),
+        ("contract export listed as a proposer, its theorems unlisted",
+         manifest.replace(demoted, as_proposer),
+         [f"proposer export tamarin_theory_match is mentioned by contract theorem {names[0]}",
+          f"theorem {names[-1]} of TamarinCI is not in the manifest"]),
+    ]:
+        path.write_text(text)
+        code, output = audit("--manifest", str(path))
+        assert code != 0, output
+        for message in expected:
+            assert message in output, f"standalone audit missed {label} ({message!r}):\n{output}"
+        print(f"standalone audit rejected {label}")
+
+    # A proof root that speaks about a proposer, directly or through a
+    # definition its statement depends on. The root audit is left out, so
+    # only the standalone audit stands between this root and a release.
+    contract_only = SOURCE[:SOURCE.index("open Lean Meta in\n/-- Lean 4.36 compiles constructor indices")]
+    compiled = compile_module("ProposerInContract", contract_only + """
+theorem Tamarin.AuditProbe.aboutProposer :
+    Tamarin.Executable.xorOdd 1 = Tamarin.Executable.xorOdd 1 := rfl
+def Tamarin.AuditProbe.viaDefinition : Bool := Tamarin.Executable.xorBranches true == 0
+theorem Tamarin.AuditProbe.aboutDefinition :
+    Tamarin.AuditProbe.viaDefinition = Tamarin.AuditProbe.viaDefinition := rfl
+""")
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    code, output = audit("--ci", "ProposerInContract", "--root", "TamarinRuntime", "--root", "TamarinWire")
+    assert code != 0, output
+    for label, expected in [
+        ("contract theorem about a proposer",
+         "proposer export tamarin_xor_odd is mentioned by contract theorem "
+         "Tamarin.AuditProbe.aboutProposer"),
+        ("contract theorem that depends on a proposer through a definition",
+         "proposer export tamarin_xor_branches (Tamarin.Executable.xorBranches) gives a contract "
+         "statement its meaning through a definition of the specification closure"),
+    ]:
+        assert expected in output, f"standalone audit missed {label} ({expected!r}):\n{output}"
+        print(f"standalone audit rejected {label}")
+
+    # The demonstrated bypass, end to end: the proof root imports a module that
+    # replaces the root audit. Elaboration of the root then succeeds, although
+    # the module contains an unchecked `implemented_by`.
+    compiled = compile_module("AuditBypass", bypass_module())
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    compiled = compile_module("WithBypass", "import AuditBypass\n" + SOURCE)
+    if compiled.returncode != 0:
+        output = compiled.stdout + compiled.stderr
+        assert "unchecked implemented_by replacement" in output, output
+        print("root audit rejected the audit-replacing import")
+        return
+    print("root audit accepted the audit-replacing import (it runs inside what it audits)")
+    code, output = audit("--ci", "WithBypass", "--root", "TamarinRuntime", "--root", "TamarinWire")
+    assert code != 0, output
+    for expected in [
+        "AuditBypass adds",
+        "FastPath.verified has unchecked implemented_by replacement",
+    ]:
+        assert expected in output, f"standalone audit missed the bypass ({expected!r}):\n{output}"
+    print("standalone audit rejected the audit-replacing import")
 
 
 def main() -> None:
@@ -932,6 +587,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="tamarin-audit-") as directory:
         allowed = """
 namespace Tamarin.AuditProbe
+inductive Indexed (α : Type u) : Nat → Type u
+  | nil : Indexed α 0
+  | cons : α → Indexed α n → Indexed α (n + 1)
 def reference (n : Nat) : Nat := n + n
 def optimized (n : Nat) : Nat := 2 * n
 @[csimp] theorem optimized_correct : reference = optimized := by
@@ -1000,6 +658,8 @@ end Tamarin.AuditProbe
             )
             print(f"rejected imported {label}")
 
+        standalone_audit(directory, imported_env)
+
         # Local execution builds can compile an unproved candidate. The same
         # candidate must not typecheck as the verified backend required by CI.
         path = Path(directory) / "UnprovedCandidate.lean"
@@ -1040,7 +700,8 @@ example : Tamarin.FlatACBackend.Correct Trial.backend :=
         assert baseline.returncode == 0, baseline.stdout + baseline.stderr
         print("unmutated export obligations compile")
 
-        for label, original, replacement, theorem in EXPORT_MUTATIONS:
+        def mutate(mutation) -> str:
+            label, original, replacement, theorem = mutation
             assert EXECUTABLE.count(original) == 1, f"export source changed: {label}"
             source = EXECUTABLE.replace(original, replacement)
             start = source.index(theorem)
@@ -1063,8 +724,12 @@ example : Tamarin.FlatACBackend.Correct Trial.backend :=
             assert result.returncode != 0 and any(
                 first_line <= line <= last_line for line in error_lines
             ), f"{label} did not break its {theorem} obligation:\n{output}"
-            print(f"rejected {label} at {theorem}")
+            return f"rejected {label} at {theorem}"
 
+        # Each mutation elaborates the whole runtime module; run a few at a time.
+        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+            for line in pool.map(mutate, EXPORT_MUTATIONS):
+                print(line, flush=True)
 
 if __name__ == "__main__":
     main()

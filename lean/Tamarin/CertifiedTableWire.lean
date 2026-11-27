@@ -48,4 +48,11 @@ theorem sound {check} (spec : Correct check) {ds ns es roots d rs q fuel}
   rw [TableWire.withoutObservations decoded] at contract
   exact contract.2 hit
 
+/-- A decoded table of constructor-pattern rules whose results are subterms
+or constants is certified, at every depth. -/
+theorem subterm {ds ns es d rs q} (decoded : TableWire.input ds ns es #[] = some ⟨d,rs,q⟩)
+    (cls : SubtermTable.Presentation rs) (fuel : UInt64) : run ds ns es fuel = true := by
+  simp only [run,decoded]
+  exact CertifiedTable.admits_subterm cls fuel.toNat
+
 end Tamarin.CertifiedTableWire
